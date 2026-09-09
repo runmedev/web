@@ -5,7 +5,7 @@ import {
   buildReviewRounds,
   captureReviewRevision,
   normalizeAttribution,
-} from './reviews'
+} from './legacyReviews'
 import type { JsonValue, RunmeOperation } from './types'
 
 /** A real journal fixture: each appended operation observes the preceding one. */

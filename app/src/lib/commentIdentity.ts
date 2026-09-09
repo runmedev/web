@@ -1,4 +1,4 @@
-import type { Attribution } from './operationLog/reviews'
+import type { Attribution } from './operationLog/records'
 
 /** Read the active Drive identity for a human UI submission, never for API labels. */
 export async function resolveCommentIdentity(

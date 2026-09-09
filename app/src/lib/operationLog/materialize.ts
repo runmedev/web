@@ -1,5 +1,6 @@
 import { committedOperationIds, orderOperationSet } from './order'
 import { comparePositionIds, validatePositionId } from './positions'
+import { type CommentRecord, serializedRecord } from './records'
 import type {
   CellCreatePayload,
   CellIdentityPayload,
@@ -19,6 +20,7 @@ import type {
   SuggestionReviewPayload,
   ThreadSetStatusPayload,
 } from './types'
+import { anchorSource } from './versions'
 
 interface Register<T> {
   value: T
@@ -103,6 +105,9 @@ const knownKinds = new Set([
   'review.link_thread',
   'review.cell_decision',
   'revision.label',
+  'revision.checkpoint',
+  'comment.record',
+  'migration.v2',
 ])
 
 export function materializeOperationLog(
@@ -120,6 +125,11 @@ export function materializeOperationLog(
     { payload: ExecutionFinishPayload; operationId: string }
   >()
   const comments: MaterializedComment[] = []
+  const migratedComments = new Set(
+    operations
+      .filter((op) => op.kind === 'migration.v2')
+      .flatMap((op) => Object.keys((op.payload as any).comment_ids ?? {}))
+  )
   const threadStatus = new Map<string, Register<'open' | 'resolved'>>()
   const unknownOperationIds: string[] = []
   const suggestionReviews = new Map<
@@ -320,6 +330,7 @@ export function materializeOperationLog(
       }
       case 'comment.add': {
         const payload = operation.payload as unknown as CommentAddPayload
+        if (migratedComments.has(payload.comment_id)) break
         comments.push({
           comment_id: payload.comment_id,
           thread_id: payload.thread_id,
@@ -330,12 +341,97 @@ export function materializeOperationLog(
       }
       case 'comment.reply': {
         const payload = operation.payload as unknown as CommentReplyPayload
+        if (migratedComments.has(payload.comment_id)) break
         comments.push({
           comment_id: payload.comment_id,
           thread_id: payload.thread_id,
           parent_comment_id: payload.parent_comment_id,
           payload,
           operation_id: operation.op_id,
+        })
+        break
+      }
+      case 'comment.record': {
+        const record = serializedRecord(operation) as CommentRecord
+        // Quotes exist only in this UI projection. They are never serialized.
+        const anchor = record.anchors?.find((a) => a.kind === 'cell')
+        const quote = anchor ? anchorSource(operations, anchor) : undefined
+        const source = anchor
+          ? anchorSource(operations, { ...anchor, range: undefined })
+          : undefined
+        const diffTarget =
+          anchor?.kind === 'cell' && (record.comparison || anchor.range)
+            ? {
+                cellId: anchor.cell_id,
+                side:
+                  record.comparison &&
+                  JSON.stringify(anchor.version) ===
+                    JSON.stringify(record.comparison.start)
+                    ? 'base'
+                    : 'head',
+                quote,
+                ...(anchor.range
+                  ? {
+                      sourceRange: {
+                        start: Array.from(source!)
+                          .slice(0, anchor.range.start_index)
+                          .join('').length,
+                        end: Array.from(source!)
+                          .slice(0, anchor.range.end_index)
+                          .join('').length,
+                        unit: 'utf-16',
+                      },
+                    }
+                  : {}),
+              }
+            : undefined
+        const targets = [
+          {
+            anchor: JSON.stringify({
+              runme: {
+                version: 1,
+                type: 'cell',
+                ...(anchor?.kind === 'cell'
+                  ? { cellId: anchor.cell_id, quote }
+                  : {}),
+                ...(diffTarget ? { diffTarget } : {}),
+                anchors: record.anchors,
+                comparison: record.comparison,
+              },
+            }),
+          },
+        ]
+        const payload = {
+          comment_id: record.op_id,
+          thread_id: record.thread_id,
+          ...(record.parent_comment_id
+            ? { parent_comment_id: record.parent_comment_id }
+            : {}),
+          author: {
+            principal_id: record.actor_id,
+            display_name: record.author.displayName,
+            kind: record.author.kind,
+            ...(record.author.source
+              ? {
+                  source: record.author.source,
+                  authenticated_principal: record.author.authenticatedPrincipal,
+                }
+              : {}),
+          },
+          body: record.body,
+          annotation: {
+            motivation: record.assessment
+              ? ('assessing' as const)
+              : ('commenting' as const),
+            targets,
+          },
+        }
+        comments.push({
+          comment_id: record.op_id,
+          thread_id: record.thread_id,
+          parent_comment_id: record.parent_comment_id,
+          payload,
+          operation_id: record.op_id,
         })
         break
       }

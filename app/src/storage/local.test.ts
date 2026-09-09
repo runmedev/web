@@ -11,6 +11,7 @@ import {
 } from '../lib/googleDriveRuntime'
 import { IPYNB_MIME_TYPE } from '../lib/ipynb'
 import { appLogger } from '../lib/logging/runtime'
+import { createCellCommentAnchor } from '../lib/notebookComments'
 import {
   RUNME_OPERATION_LOG_MIME_TYPE,
   convertLegacyNotebookFileToRunme,
@@ -28,10 +29,9 @@ import {
 import * as actorIdentity from '../lib/operationLog/actorIdentity'
 import { cellDecisionFor } from '../lib/operationLog/cellReview'
 import { decideComparisonCell } from '../lib/operationLog/comparisonFeedback'
-import {
-  buildReviewRounds,
-  createReviewAnchor,
-} from '../lib/operationLog/reviews'
+import { buildComparisons } from '../lib/operationLog/comparisons'
+import '../lib/operationLog/legacyReviews'
+import { ancestorClosure } from '../lib/operationLog/versions'
 import { createNotebookCommentsRuntimeApi } from '../lib/runtime/notebookCommentsRuntime'
 import { MimeType, RunmeMetadataKey, parser_pb } from '../runme/client'
 import { MemoryConflictDocStorage } from './conflictDocs'
@@ -978,14 +978,18 @@ describe('LocalNotebooks operation-log storage', () => {
       ],
     })
 
+    const actor = vi
+      .spyOn(actorIdentity, 'getNotebookActorId')
+      .mockResolvedValue('actor_same_session')
+    const version = await store.checkpointNotebookRevision(created.uri)
     await Promise.all([
       saveStore.save(created.uri, edited),
-      store.addOperationLogComment(created.uri, {
+      store.addAnchoredComment(created.uri, {
         content: 'Concurrent comment',
-        anchor: '{}',
-        actorId: 'actor_same_session',
+        anchors: [{ kind: 'notebook', version }],
       }),
     ])
+    actor.mockRestore()
 
     const operations = parseOperationLog(
       await store.loadContent(created.uri)
@@ -993,10 +997,14 @@ describe('LocalNotebooks operation-log storage', () => {
     expect(operations.map((operation) => operation.op_id).sort()).toEqual([
       'actor_same_session:1',
       'actor_same_session:2',
+      'actor_same_session:3',
     ])
   })
 
   it('stores comment threads and replies as append-only operations', async () => {
+    const actor = vi
+      .spyOn(actorIdentity, 'getNotebookActorId')
+      .mockResolvedValue('actor_comments')
     const operationLogStorage = new MemoryOperationLogStorage()
     const store = createTestStore({}, { operationLogStorage })
     await store.folders.put({
@@ -1007,6 +1015,19 @@ describe('LocalNotebooks operation-log storage', () => {
       lastSynced: '',
     })
     const created = await store.create(LOCAL_FOLDER_URI, 'comments.runme')
+    const save = await store.createOperationLogSaveStore(created.uri)
+    await save.save(
+      created.uri,
+      create(parser_pb.NotebookSchema, {
+        cells: [
+          create(parser_pb.CellSchema, {
+            refId: 'cell_one',
+            kind: parser_pb.CellKind.MARKUP,
+            value: 'Original',
+          }),
+        ],
+      })
+    )
     const anchor = JSON.stringify({
       runme: { version: 2, type: 'cell', cellId: 'cell_one' },
     })
@@ -1030,7 +1051,7 @@ describe('LocalNotebooks operation-log storage', () => {
       expect.objectContaining({
         id: comment.id,
         content: 'Please clarify this.',
-        anchor,
+        anchor: expect.stringContaining('"cell_id":"cell_one"'),
         resolved: true,
         replies: [expect.objectContaining({ content: 'Clarified.' })],
       }),
@@ -1039,7 +1060,79 @@ describe('LocalNotebooks operation-log storage', () => {
       parseOperationLog(await store.loadContent(created.uri)).operations.map(
         (operation) => operation.kind
       )
-    ).toEqual(['comment.add', 'comment.reply', 'thread.set_status'])
+    ).toEqual([
+      'cell.create',
+      'revision.checkpoint',
+      'comment.record',
+      'comment.record',
+      'thread.set_status',
+    ])
+    actor.mockRestore()
+  })
+
+  it('anchors editor comments to the view that was actually loaded in that tab', async () => {
+    const actor = vi
+      .spyOn(actorIdentity, 'getNotebookActorId')
+      .mockResolvedValue('comment-writer')
+    const store = createTestStore({})
+    await store.folders.put({
+      id: LOCAL_FOLDER_URI,
+      name: 'Local',
+      remoteId: '',
+      children: [],
+      lastSynced: '',
+    })
+    const { uri } = await store.create(LOCAL_FOLDER_URI, 'snapshot.runme')
+    const first = await store.createOperationLogSaveStore(uri)
+    const notebook = create(parser_pb.NotebookSchema, {
+      cells: [
+        create(parser_pb.CellSchema, {
+          refId: 'c',
+          kind: parser_pb.CellKind.MARKUP,
+          value: 'Seen in A',
+        }),
+      ],
+    })
+    await first.save(uri, notebook)
+    const second = await store.createOperationLogSaveStore(uri)
+    notebook.cells[0].value = 'Unseen change in B'
+    await second.save(uri, notebook)
+    const comment = await store.addOperationLogComment(uri, {
+      content: 'Regarding A',
+      anchor: createCellCommentAnchor('c'),
+      snapshot_heads: first.getObservedOperationHeads(),
+    })
+    expect(JSON.parse(comment.anchor!).runme.quote).toBe('Seen in A')
+    expect((await store.load(uri)).cells[0].value).toBe('Unseen change in B')
+    notebook.cells[0].value = 'Another edit from A'
+    await first.save(uri, notebook)
+    const operations = parseOperationLog(
+      await store.loadContent(uri)
+    ).operations
+    expect(new Set(operations.map((op) => op.actor_id)).size).toBe(3)
+    for (const op of operations) {
+      const previous = operations.find(
+        (candidate) =>
+          candidate.actor_id === op.actor_id &&
+          candidate.actor_seq === op.actor_seq - 1
+      )
+      if (previous)
+        expect(
+          ancestorClosure(operations, op.deps).map(
+            (candidate) => candidate.op_id
+          )
+        ).toContain(previous.op_id)
+    }
+    const visible = ancestorClosure(
+      operations,
+      first.getObservedOperationHeads()
+    )
+    expect(
+      visible.some(
+        (op) => (op.payload as any).cell?.value === 'Unseen change in B'
+      )
+    ).toBe(false)
+    actor.mockRestore()
   })
 
   it('persists scoped review triples and validates noncontiguous, inserted and deleted cell IDs through the API', async () => {
@@ -1095,7 +1188,7 @@ describe('LocalNotebooks operation-log storage', () => {
     })
     const pair = { target: { uri }, startRevisionId, endRevisionId }
     const beforePreview = await store.loadContent(uri)
-    const preview = await api.reviews.preview({
+    const preview = await api.comparisons.preview({
       ...pair,
       cellIds: ['gone', 'new'],
     })
@@ -1104,65 +1197,78 @@ describe('LocalNotebooks operation-log storage', () => {
       'deleted',
       'inserted',
     ])
-    const whole = await api.reviews.create(pair)
-    const scoped = await api.reviews.create({
+    const whole = await api.comparisons.comment({
+      ...pair,
+      content: 'Whole discussion',
+    })
+    const scoped = await api.comparisons.comment({
       ...pair,
       cellIds: ['gone', 'new'],
+      content: 'Scoped discussion',
     })
-    const other = await api.reviews.create({ ...pair, cellIds: ['kept'] })
+    const other = await api.comparisons.comment({
+      ...pair,
+      cellIds: ['kept'],
+      content: 'Other discussion',
+    })
     expect(new Set([whole.id, scoped.id, other.id]).size).toBe(3)
-    const saved = await store.loadContent(uri)
-    expect(
-      (await api.reviews.create({ ...pair, cellIds: ['new', 'gone', 'new'] }))
-        .id
-    ).toBe(scoped.id)
-    expect(await store.loadContent(uri)).toBe(saved)
-    expect(
-      (await api.reviews.preview({ ...pair, cellIds: ['new', 'gone'] }))
-        .existingReviewId
-    ).toBe(scoped.id)
+    await api.comparisons.comment({
+      ...pair,
+      cellIds: ['new', 'gone', 'new'],
+      content: 'Same canonical scope',
+    })
+    expect(await store.listNotebookComparisons(uri)).toHaveLength(3)
     for (const cellIds of [[], ['absent']]) {
-      await expect(api.reviews.create({ ...pair, cellIds })).rejects.toThrow()
-      await expect(api.reviews.preview({ ...pair, cellIds })).rejects.toThrow()
+      await expect(
+        api.comparisons.comment({ ...pair, cellIds, content: 'Invalid' })
+      ).rejects.toThrow()
+      await expect(
+        api.comparisons.preview({ ...pair, cellIds })
+      ).rejects.toThrow()
     }
-    const comment = await api.add({
-      target: pair.target,
-      reviewId: scoped.id,
+    const comment = await api.comparisons.comment({
+      ...pair,
+      cellIds: ['gone', 'new'],
       cellId: 'gone',
       content: 'Deletion is intentional',
       side: 'base',
     })
     expect(comment).toBeTruthy()
     await expect(
-      api.add({
-        target: pair.target,
-        reviewId: scoped.id,
+      api.comparisons.comment({
+        ...pair,
+        cellIds: ['gone', 'new'],
         cellId: 'unrelated',
         content: 'Outside',
       })
     ).rejects.toThrow()
-    await api.reviews.submit({
-      target: pair.target,
-      reviewId: scoped.id,
+    await api.comparisons.assess({
+      ...pair,
+      cellIds: ['gone', 'new'],
       outcome: 'good_enough',
     })
-    await api.reviews.submit({
-      target: pair.target,
-      reviewId: other.id,
+    await api.comparisons.assess({
+      ...pair,
+      cellIds: ['kept'],
       outcome: 'needs_more_work',
     })
     const reopened = createTestStore({}, { operationLogStorage })
     reopened.files = store.files
     reopened.folders = store.folders
-    const rounds = await reopened.listNotebookReviews(uri)
-    expect(rounds.find((r) => r.id === scoped.id)).toMatchObject({
+    const rounds = await reopened.listNotebookComparisons(uri)
+    expect(rounds.find((r) => r.threadIds.includes(scoped.id!))).toMatchObject({
       cellIds: ['gone', 'new'],
       outcome: 'good_enough',
       diff: preview.diff,
     })
-    expect(rounds.find((r) => r.id === other.id)?.outcome).toBe(
+    expect(rounds.find((r) => r.threadIds.includes(other.id!))?.outcome).toBe(
       'needs_more_work'
     )
+    expect(
+      parseOperationLog(await store.loadContent(uri)).operations.some((op) =>
+        op.kind.startsWith('review.')
+      )
+    ).toBe(false)
     expect((await reopened.load(uri)).cells.map((c) => c.refId)).toEqual([
       'new',
       'unrelated',
@@ -1242,9 +1348,13 @@ describe('LocalNotebooks operation-log storage', () => {
           decision: 'accept',
         })
         expect(await store.load(uri)).toEqual(beforeAccept)
-        expect(await store.listNotebookRevisions(uri)).toHaveLength(
-          versionCount
-        )
+        expect(
+          new Set(
+            (await store.listNotebookRevisions(uri)).map((r) =>
+              JSON.stringify(r.changeIds)
+            )
+          ).size
+        ).toBe(versionCount)
         const acceptedLog = await store.loadContent(uri)
         await decideComparisonCell(store, uri, {
           ...selection,
@@ -1256,7 +1366,7 @@ describe('LocalNotebooks operation-log storage', () => {
           'Unrelated later edit'
         await save.save(uri, notebook)
         const laterEnd = (await store.listNotebookRevisions(uri)).at(-1)!.id
-        const preview = await store.previewNotebookReview(uri, {
+        const preview = await store.previewNotebookComparison(uri, {
           startRevisionId,
           endRevisionId: laterEnd,
         })
@@ -1264,7 +1374,7 @@ describe('LocalNotebooks operation-log storage', () => {
           (r) => (r.compareCell ?? r.baseCell)?.refId === 'one'
         )!
         expect(
-          cellDecisionFor(reviewed, await store.listNotebookReviews(uri))
+          cellDecisionFor(reviewed, await store.listNotebookComparisons(uri))
             ?.decision
         ).toBe('accept')
         const beforeUndo = parseOperationLog(
@@ -1301,8 +1411,8 @@ describe('LocalNotebooks operation-log storage', () => {
           materializedLogToNotebook(materializeOperationLog(ops.slice(0, -1)))
             .cells
         ).toEqual(preUndoNotebook.cells)
-        expect(buildReviewRounds([...ops].reverse())).toEqual(
-          buildReviewRounds(ops)
+        expect(buildComparisons([...ops].reverse())).toEqual(
+          buildComparisons(ops)
         )
         await decideComparisonCell(store, uri, {
           ...selection,
@@ -1319,7 +1429,7 @@ describe('LocalNotebooks operation-log storage', () => {
         )
         expect(await reopened.load(uri)).toEqual(after)
         expect(
-          cellDecisionFor(reviewed, await reopened.listNotebookReviews(uri))
+          cellDecisionFor(reviewed, await reopened.listNotebookComparisons(uri))
             ?.decision
         ).toBe('undo')
       } finally {
@@ -1364,7 +1474,7 @@ describe('LocalNotebooks operation-log storage', () => {
       const selection = { startRevisionId, endRevisionId, cellId: 'one' }
       const comment = await store.addOperationLogComment(uri, {
         content: 'Explain',
-        anchor: createReviewAnchor('unused', 'one'),
+        anchor: createCellCommentAnchor('one'),
       })
       await decideComparisonCell(store, uri, {
         ...selection,
@@ -1372,14 +1482,14 @@ describe('LocalNotebooks operation-log storage', () => {
       })
       notebook.cells[0].value = 'c2'
       await save.save(uri, notebook)
-      const preview = await store.previewNotebookReview(uri, {
+      const preview = await store.previewNotebookComparison(uri, {
         startRevisionId,
         endRevisionId: (await store.listNotebookRevisions(uri)).at(-1)!.id,
       })
       expect(
         cellDecisionFor(
           preview.diff.cells[0],
-          await store.listNotebookReviews(uri)
+          await store.listNotebookComparisons(uri)
         )
       ).toBeUndefined()
       const before = await store.loadContent(uri)
@@ -1444,32 +1554,20 @@ describe('LocalNotebooks operation-log storage', () => {
       resolveLocalNotebooks: () => store,
       resolveDriveNotebookStore: () => null,
     })
-    const first = await api.reviews.create({ target, title: 'Round 1' })
-    const beforeInvalidSubmission = await store.loadContent(uri)
-    await expect(
-      api.reviews.submit({
-        target,
-        reviewId: first.id,
-        outcome: 'approve',
-        summary: 42 as never,
-      })
-    ).rejects.toThrow('summary must be text')
-    expect(await store.loadContent(uri)).toBe(beforeInvalidSubmission)
-    const human = await store.addOperationLogComment(uri, {
-      content: 'Clarify this',
-      anchor: createReviewAnchor(first.id, 'one', 'Original'),
-      author: {
-        displayName: 'Ada',
-        kind: 'human',
-        source: 'google-drive',
-        authenticatedPrincipal: 'google:ada',
-      },
-    })
-    await api.reviews.submit({
+    const initial = (await api.revisions.list({ target })).at(-1)!
+    const first = {
       target,
-      reviewId: first.id,
-      outcome: 'request_changes',
+      startRevisionId: 'revision:empty',
+      endRevisionId: initial.id,
+    }
+    first.startRevisionId = (await api.revisions.list({ target }))[0].id
+    const human = await api.comparisons.comment({
+      ...first,
+      cellId: 'one',
+      content: 'Clarify this',
+      author: { displayName: 'Ada', kind: 'human' },
     })
+    await api.comparisons.assess({ ...first, outcome: 'needs_more_work' })
     notebook.cells[0].value = 'Clarified'
     await save.save(uri, notebook)
     await api.reply({
@@ -1478,112 +1576,66 @@ describe('LocalNotebooks operation-log storage', () => {
       content: 'Updated',
       author: { displayName: 'Codex', kind: 'agent' },
     })
-    const second = await api.reviews.create({
+    const latest = (await api.revisions.list({ target })).at(-1)!
+    const second = {
       target,
-      title: 'Round 2',
-      baseReviewId: first.id,
-    })
-    const versions = await api.revisions.list({ target })
-    expect(versions).toHaveLength(3)
-    const oldDate = versions[1].lastChangedAt
-    await api.revisions.label({
+      startRevisionId: initial.id,
+      endRevisionId: latest.id,
+    }
+    const named = await api.revisions.label({
       target,
-      revisionId: versions[1].id,
+      revisionId: initial.id,
       name: 'Initial',
       description: 'Before fixes',
       author: { displayName: 'Codex', kind: 'agent' },
     })
-    expect((await api.revisions.list({ target }))[1]).toMatchObject({
+    expect(named).toMatchObject({
       name: 'Initial',
       description: 'Before fixes',
-      lastChangedAt: oldDate,
+      lastChangedAt: initial.lastChangedAt,
     })
-    const preview = await api.reviews.preview({
-      target,
-      startRevisionId: versions[1].id,
-      endRevisionId: versions[2].id,
-    })
-    expect(preview.existingReviewId).toBe(second.id)
+    const beforePreview = await store.loadContent(uri)
+    const preview = await api.comparisons.preview(second)
     expect(preview.before.cells[0].value).toBe('Original')
-    const logBeforeContinue = await store.loadContent(uri)
-    expect(
-      (
-        await api.reviews.create({
-          target,
-          startRevisionId: versions[1].id,
-          endRevisionId: versions[2].id,
-        })
-      ).id
-    ).toBe(second.id)
-    expect(await store.loadContent(uri)).toBe(logBeforeContinue)
+    expect(preview.after.cells[0].value).toBe('Clarified')
+    expect(await store.loadContent(uri)).toBe(beforePreview)
     await expect(
-      api.reviews.preview({
-        target,
-        startRevisionId: versions[2].id,
-        endRevisionId: versions[1].id,
+      api.comparisons.preview({
+        ...second,
+        startRevisionId: latest.id,
+        endRevisionId: initial.id,
       })
     ).rejects.toThrow('after start')
-    await api.reviews.linkThread({
-      target,
-      reviewId: second.id,
-      commentId: human.id!,
-    })
-    await api.reviews.submit({
-      target,
-      reviewId: second.id,
-      outcome: 'approve',
-      author: { displayName: 'Ada', kind: 'human' },
-    })
-    expect(second.before.cells[0].value).toBe('Original')
-    expect(second.after.cells[0].value).toBe('Clarified')
-    const suggestions = await api.suggestions.list({ target })
-    const suggestion = suggestions.at(-1)!
-    const selectionThreads: Array<string | undefined> = []
-    for (const input of [
-      { reviewId: second.id, side: 'base' as const },
-      { reviewId: second.id, side: 'head' as const },
-      { suggestionId: suggestion.id, side: 'base' as const },
-    ]) {
-      const comment = await api.add({
-        target,
-        ...input,
+    const selectionThreads: string[] = []
+    for (const side of ['base', 'head'] as const) {
+      const comment = await api.comparisons.comment({
+        ...second,
         cellId: 'one',
         content: 'Selected source',
+        side,
         sourceRange: { start: 1, end: 4, unit: 'utf-16' },
       })
-      selectionThreads.push(comment.id)
-      expect(JSON.parse(comment.anchor!).runme.diffTarget).toEqual({
+      selectionThreads.push(comment.id!)
+      expect(JSON.parse(comment.anchor!).runme.diffTarget).toMatchObject({
         cellId: 'one',
-        side: input.side,
+        side,
+        quote: side === 'base' ? 'rig' : 'lar',
         sourceRange: { start: 1, end: 4, unit: 'utf-16' },
-        quote: input.side === 'base' ? 'rig' : 'lar',
       })
     }
-    const beforeInvalidRange = await store.loadContent(uri)
+    const beforeInvalid = await store.loadContent(uri)
     await expect(
-      api.add({
-        target,
-        reviewId: second.id,
+      api.comparisons.comment({
+        ...second,
         cellId: 'one',
         content: 'bad',
         sourceRange: { start: 0, end: 999, unit: 'utf-16' },
       })
     ).rejects.toThrow('Invalid diff source range')
-    await expect(
-      api.add({ target, reviewId: second.id, content: 'bad', side: 'base' })
-    ).rejects.toThrow('requires')
-    await expect(
-      api.add({
-        target,
-        suggestionId: suggestion.id,
-        cellId: 'missing',
-        content: 'bad',
-      })
-    ).rejects.toThrow('Cell not found')
-    expect(await store.loadContent(uri)).toBe(beforeInvalidRange)
-    const explanation = await api.add({
-      target,
-      suggestionId: suggestion.id,
+    expect(await store.loadContent(uri)).toBe(beforeInvalid)
+    await api.comparisons.assess({ ...second, outcome: 'good_enough' })
+    const explanation = await api.comparisons.comment({
+      ...second,
       content: 'Rationale',
       author: {
         displayName: 'Codex',
@@ -1597,7 +1649,6 @@ describe('LocalNotebooks operation-log storage', () => {
       commentId: explanation.id!,
       content: 'More context',
     })
-    expect(await api.suggestions.list({ target })).toEqual(suggestions)
     const blank = await api.add({
       target,
       cellId: 'one',
@@ -1606,14 +1657,10 @@ describe('LocalNotebooks operation-log storage', () => {
     })
     expect(blank.author?.displayName).toBe('unknown')
     await expect(
-      api.add({ target, suggestionId: 'another-notebooks-id', content: 'bad' })
-    ).rejects.toThrow('Suggestion not found')
-    await expect(
       api.add({ target: undefined, cellId: 'one', content: 'bad' })
     ).rejects.toThrow('explicit notebook')
     const readback = await api.list({ target, status: 'all' })
     const root = readback.find((c) => c.id === explanation.id)!
-    expect(root.rawAnchor).toContain(suggestion.id)
     expect(root.author).toMatchObject({
       displayName: 'Codex',
       runmeAuthorKind: 'agent',
@@ -1622,34 +1669,29 @@ describe('LocalNotebooks operation-log storage', () => {
     expect(root.replies[0]).toMatchObject({
       author: { displayName: 'unknown', runmeAuthorKind: 'unknown' },
     })
-    const reviewer = readback.find((c) => c.id === human.id)!
-    expect(reviewer.author).toMatchObject({
-      displayName: 'Ada',
-      runmeAuthenticatedPrincipal: 'google:ada',
-      runmeAuthorSource: 'google-drive',
-    })
-    expect(reviewer.replies[0]).toMatchObject({
+    expect(readback.find((c) => c.id === human.id)!.replies[0]).toMatchObject({
       author: { displayName: 'Codex', runmeAuthorKind: 'agent' },
     })
-    // Fresh store facade, same persisted journal: no in-memory review objects reused.
     const reopened = createTestStore({}, { operationLogStorage })
     reopened.files = store.files
     reopened.folders = store.folders
-    const rounds = await reopened.listNotebookReviews(uri)
-    expect(rounds[0].diff).toEqual(first.diff)
-    expect(rounds[1]).toMatchObject({
-      outcome: 'approve',
-      threadIds: [human.id],
-    })
+    const rounds = await reopened.listNotebookComparisons(uri)
+    expect(rounds).toHaveLength(2)
+    expect(rounds[1]).toMatchObject({ outcome: 'good_enough' })
     expect(await reopened.listOperationLogComments(uri)).toEqual(
       await store.listOperationLogComments(uri)
     )
     expect(
       (await reopened.listOperationLogComments(uri))
-        .filter((c) => selectionThreads.includes(c.id))
+        .filter((c) => selectionThreads.includes(c.id!))
         .map((c) => JSON.parse(c.anchor!).runme.diffTarget.quote)
-    ).toEqual(['rig', 'lar', 'rig'])
+    ).toEqual(['rig', 'lar'])
     expect((await reopened.load(uri)).cells[0].value).toBe('Clarified')
+    expect(
+      parseOperationLog(await store.loadContent(uri)).operations.some((op) =>
+        op.kind.startsWith('review.')
+      )
+    ).toBe(false)
     // Exercise the actual upstream reconciliation path, then a separate local
     // replica. The Drive transport is mocked; journal merging is production code.
     let remoteDocument = ''
@@ -1689,7 +1731,7 @@ describe('LocalNotebooks operation-log storage', () => {
     await writer.reconcileDriveNotebook(uri)
     expect(drive.saveContentIfVersion).toHaveBeenCalledOnce()
     expect(
-      buildReviewRounds(parseOperationLog(remoteDocument).operations)
+      buildComparisons(parseOperationLog(remoteDocument).operations)
     ).toEqual(rounds)
     const replicaStorage = new MemoryOperationLogStorage()
     const empty = await replicaStorage.initialize(
@@ -1707,7 +1749,7 @@ describe('LocalNotebooks operation-log storage', () => {
       lastSynced: '',
     })
     await replica.reconcileDriveNotebook(uri)
-    expect(await replica.listNotebookReviews(uri)).toEqual(rounds)
+    expect(await replica.listNotebookComparisons(uri)).toEqual(rounds)
     expect(await replica.listOperationLogComments(uri)).toEqual(
       await writer.listOperationLogComments(uri)
     )

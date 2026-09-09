@@ -628,6 +628,8 @@ describe('Actions tabs', () => {
     contextMocks.getNotebookData.mockReturnValue({
       getCell: (refId: string) => cellData.get(refId),
       appendCell: vi.fn(),
+      flushPendingPersist: vi.fn(async () => undefined),
+      getObservedOperationHeads: () => [],
     })
     contextMocks.notebookStore = store
     commentsPanelMocks.commentsPanelOpen = true

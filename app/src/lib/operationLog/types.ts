@@ -1,4 +1,5 @@
-export const RUNME_OPERATION_LOG_FORMAT_VERSION = 1 as const
+export const RUNME_OPERATION_LOG_FORMAT_VERSION = 2 as const
+export type OperationLogFormatVersion = 1 | 2
 
 export type JsonPrimitive = string | number | boolean | null
 export type JsonValue =
@@ -8,7 +9,7 @@ export type JsonValue =
 
 export interface NotebookLogHeader {
   record_type: 'runme.notebook'
-  format_version: typeof RUNME_OPERATION_LOG_FORMAT_VERSION
+  format_version: OperationLogFormatVersion
   notebook_id: string
   created_by: string
   created_at: string
@@ -169,7 +170,7 @@ export interface RunmeOperation<
   Payload = JsonValue,
 > {
   record_type: 'runme.operation'
-  format_version: typeof RUNME_OPERATION_LOG_FORMAT_VERSION
+  format_version: OperationLogFormatVersion
   op_id: string
   actor_id: string
   actor_seq: number

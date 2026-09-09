@@ -10,18 +10,71 @@ import {
 import type { NotebookDataLike } from './runmeConsole'
 
 describe('notebook comments runtime', () => {
+  it('accepts the documented version and comment reference fields', async () => {
+    const store = {
+      isOperationLogNotebook: vi.fn(async () => true),
+      previewNotebookComparison: vi.fn(async () => ({})),
+      labelNotebookRevision: vi.fn(async () => ({})),
+      replyToOperationLogComment: vi.fn(async () => ({})),
+      setOperationLogCommentResolved: vi.fn(async () => ({})),
+    }
+    const uri = 'local://file/canonical'
+    const target = { uri }
+    const api = createNotebookCommentsRuntimeApi({
+      resolveNotebook: () => ({ getUri: () => uri }) as NotebookDataLike,
+      resolveLocalNotebooks: () => store as never,
+      resolveDriveNotebookStore: () => null,
+    })
+    const start = { kind: 'revision' as const, revision_id: 'r:1' }
+    const end = { kind: 'operation' as const, op_id: 'a:2' }
+    await api.comparisons.preview({ target, start, end, cell_ids: ['cell'] })
+    expect(store.previewNotebookComparison).toHaveBeenCalledWith(uri, {
+      target,
+      start,
+      end,
+      cell_ids: ['cell'],
+    })
+    await api.revisions.label({ target, revision: end, name: 'Response' })
+    expect(store.labelNotebookRevision).toHaveBeenCalledWith(
+      uri,
+      expect.objectContaining({ revision: end, name: 'Response' })
+    )
+    await api.reply({ target, parent_comment_id: 'c:1', content: 'Reply' })
+    expect(store.replyToOperationLogComment).toHaveBeenCalledWith(
+      uri,
+      'c:1',
+      'Reply',
+      expect.any(Object)
+    )
+    await api.resolve({ target, thread_id: 'c:1' })
+    expect(store.setOperationLogCommentResolved).toHaveBeenLastCalledWith(
+      uri,
+      'c:1',
+      true
+    )
+    await api.reopen({ target, thread_id: 'c:1' })
+    expect(store.setOperationLogCommentResolved).toHaveBeenLastCalledWith(
+      uri,
+      'c:1',
+      false
+    )
+  })
   it('exposes direct comparison feedback with attribution and editor flushing', async () => {
     const flushPendingPersist = vi.fn(async () => undefined)
     const localNotebooks = {
       isOperationLogNotebook: vi.fn(async () => true),
-      previewNotebookReview: vi.fn(async () => ({ diff: { cells: [] } })),
-      createNotebookReview: vi.fn(async () => ({ id: 'comparison' })),
-      addOperationLogComment: vi.fn(async (_uri, input) => ({
+      previewNotebookComparison: vi.fn(async () => ({
+        diff: { cells: [] },
+        before: { cells: [] },
+        after: { cells: [] },
+        start: { version: { kind: 'revision', revision_id: 'start' } },
+        end: { version: { kind: 'revision', revision_id: 'end' } },
+      })),
+      addAnchoredComment: vi.fn(async (_uri, input) => ({
         id: 'thread',
         ...input,
       })),
-      submitNotebookReview: vi.fn(async () => undefined),
-      decideNotebookReviewCell: vi.fn(async () => undefined),
+      decideNotebookComparisonCell: vi.fn(async () => undefined),
     }
     const api = createNotebookCommentsRuntimeApi({
       resolveNotebook: () =>
@@ -37,7 +90,7 @@ describe('notebook comments runtime', () => {
       startRevisionId: 'empty',
       endRevisionId: 'v1',
     }
-    const comment = await api.reviews.comment({
+    const comment = await api.comparisons.comment({
       ...input,
       content: 'Suggestion feedback',
       author: { displayName: 'Codex', kind: 'agent' },
@@ -46,36 +99,41 @@ describe('notebook comments runtime', () => {
       displayName: 'Codex',
       kind: 'agent',
     })
-    expect(JSON.parse(comment.anchor!).runme.reviewId).toBe('comparison')
-    expect(
-      await api.reviews.assess({ ...input, outcome: 'good_enough' })
-    ).toEqual({ comparisonId: 'comparison', outcome: 'good_enough' })
+    expect(comment).toMatchObject({
+      comparison: {
+        start: { kind: 'revision', revision_id: 'start' },
+        end: { kind: 'revision', revision_id: 'end' },
+      },
+    })
+    await api.comparisons.assess({ ...input, outcome: 'good_enough' })
     expect(flushPendingPersist).toHaveBeenCalledTimes(2)
-    expect(localNotebooks.submitNotebookReview).toHaveBeenCalledWith(
+    expect(localNotebooks.addAnchoredComment).toHaveBeenLastCalledWith(
       'local://file/test',
       expect.objectContaining({
+        assessment: { kind: 'scope', outcome: 'good_enough' },
         author: { displayName: 'unknown', kind: 'unknown' },
       })
     )
-    expect(api.reviews.help()).toContain('reviews.comment')
-    expect(api.reviews.help()).toContain('reviews.assess')
-    localNotebooks.previewNotebookReview.mockResolvedValueOnce({
+    expect(api).not.toHaveProperty('reviews')
+    expect(api.comparisons.help()).toContain('comparisons.comment')
+    expect(api.comparisons.help()).toContain('comparisons.assess')
+    localNotebooks.previewNotebookComparison.mockResolvedValueOnce({
       diff: { cells: [{ kind: 'modified', compareCell: { refId: 'one' } }] },
     } as never)
     expect(
-      await api.reviews.decideCell({
+      await api.comparisons.decideCell({
         ...input,
         cellId: 'one',
         decision: 'accept',
       })
     ).toMatchObject({ cellId: 'one', decision: 'accept' })
-    expect(localNotebooks.decideNotebookReviewCell).toHaveBeenCalledWith(
+    expect(localNotebooks.decideNotebookComparisonCell).toHaveBeenCalledWith(
       'local://file/test',
       expect.objectContaining({
         author: { displayName: 'unknown', kind: 'unknown' },
       })
     )
-    expect(api.reviews.help()).toContain('reviews.decideCell')
+    expect(api.comparisons.help()).toContain('comparisons.decideCell')
   })
   it.each(['readonly', 'release-pending'])(
     'blocks all discussion mutations when %s',
@@ -105,7 +163,7 @@ describe('notebook comments runtime', () => {
       await expect(api.resolve(input)).rejects.toThrow('read-only or busy')
       await expect(api.reopen(input)).rejects.toThrow('read-only or busy')
       await expect(
-        api.reviews.decideCell({
+        api.comparisons.decideCell({
           ...input,
           startRevisionId: 'empty',
           endRevisionId: 'v1',
@@ -114,7 +172,7 @@ describe('notebook comments runtime', () => {
         })
       ).rejects.toThrow('read-only or busy')
       await expect(
-        api.reviews.comment({
+        api.comparisons.comment({
           ...input,
           startRevisionId: 'empty',
           endRevisionId: 'v1',
@@ -122,7 +180,7 @@ describe('notebook comments runtime', () => {
         })
       ).rejects.toThrow('read-only or busy')
       await expect(
-        api.reviews.assess({
+        api.comparisons.assess({
           ...input,
           startRevisionId: 'empty',
           endRevisionId: 'v1',
@@ -136,7 +194,7 @@ describe('notebook comments runtime', () => {
       expect(
         localNotebooks.setOperationLogCommentResolved
       ).not.toHaveBeenCalled()
-      expect(api.reviews.help()).toContain('reviews.linkThread')
+      expect(api.comparisons).not.toHaveProperty('linkThread')
     }
   )
   it('returns the reviewed target and editable source for agents', async () => {

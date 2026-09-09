@@ -3,7 +3,7 @@ import { toJson } from '@bufbuild/protobuf'
 import { parser_pb } from '../../runme/client'
 import type { CellDiff } from '../notebookDiff/model'
 import { canonicalJson } from './canonicalJson'
-import type { NotebookReviewRound } from './reviews'
+import type { NotebookComparison } from './comparisons'
 import type { JsonValue } from './types'
 
 /** Full cell snapshots, not document revision IDs: unrelated document edits do
@@ -20,7 +20,7 @@ export function cellChangeKey(row: CellDiff): string {
 }
 
 /** Journal order, never wall-clock timestamps, resolves decisions across pairs. */
-export function cellDecisionFor(row: CellDiff, rounds: NotebookReviewRound[]) {
+export function cellDecisionFor(row: CellDiff, rounds: NotebookComparison[]) {
   const id = (row.compareCell ?? row.baseCell)?.refId
   const key = cellChangeKey(row)
   return rounds

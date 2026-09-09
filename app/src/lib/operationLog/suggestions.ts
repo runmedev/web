@@ -33,12 +33,8 @@ export interface OperationLogSuggestion {
   changedCells: CellDiff[]
 }
 
-export type InlineDiffKind = 'equal' | 'inserted' | 'deleted'
-
-export interface InlineDiffSegment {
-  kind: InlineDiffKind
-  value: string
-}
+export { diffInlineText } from './inlineDiff'
+export type { InlineDiffKind, InlineDiffSegment } from './inlineDiff'
 
 interface SuggestionAnchor {
   runme: {
@@ -157,70 +153,6 @@ export function buildOperationLogSuggestions(
         (operation) => operation.kind === 'cell.update'
       )
   )
-}
-
-function tokens(value: string): string[] {
-  return value.match(/\s+|[A-Za-z0-9_]+|[^\sA-Za-z0-9_]/g) ?? []
-}
-
-function appendSegment(
-  segments: InlineDiffSegment[],
-  kind: InlineDiffKind,
-  value: string
-): void {
-  if (!value) return
-  const previous = segments.at(-1)
-  if (previous?.kind === kind) {
-    previous.value += value
-    return
-  }
-  segments.push({ kind, value })
-}
-
-/** Compute a whitespace-preserving word diff suitable for inline cell review. */
-export function diffInlineText(
-  before: string,
-  after: string
-): InlineDiffSegment[] {
-  if (before === after) return before ? [{ kind: 'equal', value: before }] : []
-  const left = tokens(before)
-  const right = tokens(after)
-  if (left.length > 400 || right.length > 400) {
-    return [
-      ...(before ? [{ kind: 'deleted' as const, value: before }] : []),
-      ...(after ? [{ kind: 'inserted' as const, value: after }] : []),
-    ]
-  }
-  const table = Array.from({ length: left.length + 1 }, () =>
-    Array.from({ length: right.length + 1 }, () => 0)
-  )
-  for (let i = left.length - 1; i >= 0; i -= 1) {
-    for (let j = right.length - 1; j >= 0; j -= 1) {
-      table[i][j] =
-        left[i] === right[j]
-          ? table[i + 1][j + 1] + 1
-          : Math.max(table[i + 1][j], table[i][j + 1])
-    }
-  }
-  const segments: InlineDiffSegment[] = []
-  let i = 0
-  let j = 0
-  while (i < left.length && j < right.length) {
-    if (left[i] === right[j]) {
-      appendSegment(segments, 'equal', left[i])
-      i += 1
-      j += 1
-    } else if (table[i + 1][j] >= table[i][j + 1]) {
-      appendSegment(segments, 'deleted', left[i])
-      i += 1
-    } else {
-      appendSegment(segments, 'inserted', right[j])
-      j += 1
-    }
-  }
-  while (i < left.length) appendSegment(segments, 'deleted', left[i++])
-  while (j < right.length) appendSegment(segments, 'inserted', right[j++])
-  return segments
 }
 
 /** Encode a comment target owned by one operation-log suggestion. */

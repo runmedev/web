@@ -22,16 +22,20 @@ function fixture() {
     ],
   })
   const methods = {
-    previewNotebookReview: vi.fn(async () => ({
+    previewNotebookComparison: vi.fn(async () => ({
       diff: computeReviewDiff(before, after),
+      before,
+      after,
+      start: { version: { kind: 'revision', revision_id: 'start' } },
+      end: { version: { kind: 'revision', revision_id: 'end' } },
+      cellIds: ['c'],
     })),
-    createNotebookReview: vi.fn(async () => ({ id: 'stable' })),
-    addOperationLogComment: vi.fn(async (_uri, input) => ({
+    checkpointNotebookRevision: vi.fn(async () => ({ id: 'stable' })),
+    addAnchoredComment: vi.fn(async (_uri, input) => ({
       id: 'thread',
       ...input,
     })),
-    submitNotebookReview: vi.fn(async () => undefined),
-    decideNotebookReviewCell: vi.fn(async () => undefined),
+    decideNotebookComparisonCell: vi.fn(async () => undefined),
     loadContent: vi.fn(async (): Promise<string> => {
       throw new Error('Reload failed')
     }),
@@ -59,7 +63,7 @@ describe('direct comparison feedback', () => {
       )
     ).rejects.toThrow('running cells')
     expect(notebook.cancelActiveExecutions).not.toHaveBeenCalled()
-    expect(methods.createNotebookReview).not.toHaveBeenCalled()
+    expect(methods.checkpointNotebookRevision).not.toHaveBeenCalled()
   })
   it('keeps the neighboring editor locked after a committed undo cannot reload', async () => {
     const { store, methods } = fixture()
@@ -78,13 +82,13 @@ describe('direct comparison feedback', () => {
         notebook
       )
     ).rejects.toThrow('Reload failed')
-    expect(methods.decideNotebookReviewCell).toHaveBeenCalled()
+    expect(methods.decideNotebookComparisonCell).toHaveBeenCalled()
     expect(notebook.setReviewPending.mock.calls).toEqual([[true]])
     expect(notebook.setReviewReloadRequired).toHaveBeenCalledWith(true)
   })
   it('unlocks the editor when a guarded undo is rejected before commit', async () => {
     const { store, methods } = fixture()
-    methods.decideNotebookReviewCell.mockRejectedValueOnce(
+    methods.decideNotebookComparisonCell.mockRejectedValueOnce(
       new Error('Cell changed since revision')
     )
     const notebook = {
@@ -115,19 +119,18 @@ describe('direct comparison feedback', () => {
       side: 'head',
       sourceRange: { start: 6, end: 11, unit: 'utf-16' },
     })
-    expect(JSON.parse(comment.anchor!).runme).toMatchObject({
-      reviewId: 'stable',
-      cellId: 'c',
-      quote: 'world',
-      diffTarget: {
-        side: 'head',
-        sourceRange: { start: 6, end: 11, unit: 'utf-16' },
-      },
+    expect(comment).toMatchObject({
+      anchors: [
+        {
+          kind: 'cell',
+          cell_id: 'c',
+          version: { kind: 'revision', revision_id: 'end' },
+          range: { start_index: 6, end_index: 11, unit: 'unicode-code-point' },
+        },
+      ],
+      comparison: { cell_ids: ['c'] },
     })
-    expect(methods.createNotebookReview).toHaveBeenCalledWith(
-      'local://file/test',
-      expect.objectContaining(selection)
-    )
+    expect(methods.checkpointNotebookRevision).not.toHaveBeenCalled()
   })
   it('rejects invalid comments or targets before creating a record', async () => {
     const { store, methods } = fixture()
@@ -148,21 +151,25 @@ describe('direct comparison feedback', () => {
         })
       ).rejects.toThrow()
     }
-    expect(methods.createNotebookReview).not.toHaveBeenCalled()
-    expect(methods.addOperationLogComment).not.toHaveBeenCalled()
+    expect(methods.checkpointNotebookRevision).not.toHaveBeenCalled()
+    expect(methods.addAnchoredComment).not.toHaveBeenCalled()
   })
   it('records only an assessment using the same canonical selection', async () => {
     const { store, methods } = fixture()
-    expect(
-      await assessComparison(store, 'local://file/test', {
-        ...selection,
-        outcome: 'good_enough',
-      })
-    ).toEqual({ comparisonId: 'stable', outcome: 'good_enough' })
-    expect(methods.submitNotebookReview).toHaveBeenCalledWith(
+    await assessComparison(store, 'local://file/test', {
+      ...selection,
+      outcome: 'good_enough',
+    })
+    expect(methods.addAnchoredComment).toHaveBeenCalledWith(
       'local://file/test',
-      { reviewId: 'stable', outcome: 'good_enough', author: undefined }
+      expect.objectContaining({
+        assessment: { kind: 'scope', outcome: 'good_enough' },
+        comparison: {
+          start: { kind: 'revision', revision_id: 'start' },
+          end: { kind: 'revision', revision_id: 'end' },
+          cell_ids: ['c'],
+        },
+      })
     )
-    expect(methods.addOperationLogComment).not.toHaveBeenCalled()
   })
 })

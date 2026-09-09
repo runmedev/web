@@ -17,7 +17,6 @@ import {
 } from '../notebookComments'
 import {
   buildOperationLogSuggestions,
-  createSuggestionCommentAnchor,
   parseOperationLog,
 } from '../operationLog'
 import {
@@ -28,16 +27,13 @@ import {
   commentOnComparison,
   decideComparisonCell,
 } from '../operationLog/comparisonFeedback'
-import {
-  type DiffCommentTarget,
-  createDiffCommentTarget,
-} from '../operationLog/diffCommentAnchor'
-import {
-  type Attribution,
-  type ReviewOutcome,
-  createReviewAnchor,
-  normalizeAttribution,
-} from '../operationLog/reviews'
+import type { ComparisonSelection } from '../operationLog/comparisons'
+import { type Attribution, normalizeAttribution } from '../operationLog/records'
+import type {
+  Anchor,
+  ComparisonContext,
+  VersionRef,
+} from '../operationLog/records'
 import type { NotebookDataLike } from './runmeConsole'
 
 type CommentStatusFilter = 'open' | 'resolved' | 'all'
@@ -49,16 +45,20 @@ export type ListNotebookCommentsInput = {
 
 export type CommentMutationInput = {
   target?: unknown
-  commentId: string
+  commentId?: string
+  thread_id?: string
 }
 
 export type CommentReplyInput = CommentMutationInput & {
+  parent_comment_id?: string
   content: string
   author?: Attribution
 }
 
 export type AgentAnnotation = {
   id: string | null
+  anchors?: Anchor[]
+  comparison?: ComparisonContext
   rawAnchor?: string
   author?: unknown
   content: string
@@ -210,6 +210,17 @@ export async function listNotebookComments(
     })
     .map((thread) => {
       const anchor = parseCommentAnchor(thread.comment.anchor)
+      let native: { anchors?: Anchor[]; comparison?: ComparisonContext } = {}
+      try {
+        const projected = JSON.parse(thread.comment.anchor ?? '{}').runme
+        if (Array.isArray(projected?.anchors))
+          native = {
+            anchors: projected.anchors,
+            comparison: projected.comparison,
+          }
+      } catch {
+        /* Legacy or non-Runme anchors need no native projection. */
+      }
       const cell = findCell(notebook, thread.cellId)
       const sourceRanges =
         cell &&
@@ -226,6 +237,7 @@ export async function listNotebookComments(
           : []
       return {
         id: thread.comment.id ?? null,
+        ...native,
         rawAnchor: thread.comment.anchor,
         author: thread.comment.author,
         content: thread.comment.content ?? '',
@@ -327,7 +339,7 @@ export function createNotebookCommentsRuntimeApi(
     if (!target) throw new Error('An explicit notebook target is required')
     const context = await resolveCommentsContext(dependencies, target)
     if (!context.operationLog)
-      throw new Error('Review APIs require a .runme notebook')
+      throw new Error('Comparison APIs require a .runme notebook')
     if (write) assertWritable(context.notebookData)
     return { ...context, store: dependencies.resolveLocalNotebooks()! }
   }
@@ -340,24 +352,18 @@ export function createNotebookCommentsRuntimeApi(
       )
     },
   }
-  const reviews = {
+  const comparisons = {
     help: () =>
       [
-        'await reviews.list({ target: { uri } })',
-        'await revisions.list({ target: { uri } })',
-        'await revisions.label({ target: { uri }, revisionId, name, description?, author? })',
-        'await reviews.preview({ target: { uri }, startRevisionId, endRevisionId, cellIds? })',
-        'await reviews.comment({ target: { uri }, startRevisionId, endRevisionId, cellIds?, content, cellId?, side?, sourceRange?, author? }) — comment directly; no create step',
-        'await reviews.assess({ target: { uri }, startRevisionId, endRevisionId, cellIds?, outcome, author? }) — Good Enough/Needs More Work without a submit workflow',
-        'await reviews.decideCell({ target: { uri }, startRevisionId, endRevisionId, cellIds?, cellId, decision: "accept" | "undo", author? }) — accept suppresses the identical cell transition across document revisions; undo restores this cell only and refuses stale content. Request changes by commenting.',
-        'await reviews.create({ target: { uri }, title?, startRevisionId, endRevisionId, cellIds?, author? }) — returns the existing review for that pair and cell-ID set',
-        'await reviews.submit({ target: { uri }, reviewId, outcome, summary?, author? })',
-        'await reviews.linkThread({ target: { uri }, reviewId, commentId })',
-        'outcome: good_enough|needs_more_work; legacy comment|approve|request_changes remain readable/accepted. Endpoints and scope stay fixed; submission does not change notebook content or resolve threads. Omit cellIds for the whole document; otherwise supply a nonempty set of IDs present in either endpoint. Noncontiguous sets are supported.',
+        'comparisons.preview({target,start,end,cell_ids?}) accepts VersionRefs and is read-only; picker wrappers may use startRevisionId/endRevisionId/cellIds.',
+        'comparisons.comment({...selection,content,cellId?,side?,sourceRange?,author?})',
+        'comparisons.assess({...selection,outcome:good_enough|needs_more_work,author?})',
+        'comparisons.decideCell({...selection,cellId,decision:accept|undo,author?})',
+        'comparisons.list({target}) derives conversations from comments; no Review records.',
       ].join('\n'),
     list: async (input: { target: unknown }) => {
       const c = await operationContext(input.target)
-      return c.store.listNotebookReviews(c.notebookUri)
+      return c.store.listNotebookComparisons(c.notebookUri)
     },
     comment: async (input: ComparisonComment & { target: unknown }) => {
       const c = await operationContext(input.target, true)
@@ -384,68 +390,42 @@ export function createNotebookCommentsRuntimeApi(
         c.notebookData
       )
     },
-    create: async (input: {
-      target: unknown
-      title?: string
-      baseReviewId?: string
-      startRevisionId?: string
-      endRevisionId?: string
-      cellIds?: string[]
-      author?: Attribution
-    }) => {
-      const c = await operationContext(input.target, true)
-      await c.notebookData.flushPendingPersist?.()
-      return c.store.createNotebookReview(c.notebookUri, {
-        ...input,
-        author: normalizeAttribution(input.author),
-      })
-    },
-    preview: async (input: {
-      target: unknown
-      startRevisionId: string
-      endRevisionId: string
-      cellIds?: string[]
-    }) => {
+    preview: async (input: ComparisonSelection & { target: unknown }) => {
       const c = await operationContext(input.target)
-      return c.store.previewNotebookReview(c.notebookUri, input)
-    },
-    submit: async (input: {
-      target: unknown
-      reviewId: string
-      outcome: ReviewOutcome
-      summary?: string
-      author?: Attribution
-    }) => {
-      const c = await operationContext(input.target, true)
-      return c.store.submitNotebookReview(c.notebookUri, {
-        ...input,
-        author: normalizeAttribution(input.author),
-      })
-    },
-    linkThread: async (input: {
-      target: unknown
-      reviewId: string
-      commentId: string
-    }) => {
-      const c = await operationContext(input.target, true)
-      return c.store.linkNotebookReviewThread(
-        c.notebookUri,
-        input.reviewId,
-        input.commentId
-      )
+      return c.store.previewNotebookComparison(c.notebookUri, input)
     },
   }
   const revisions = {
     help: () =>
-      'revisions.list({target:{uri}}); revisions.label({target:{uri},revisionId,name,description?,author?}); lastChangedAt is the last notebook change, not the label date.',
+      'revisions.list({target:{uri}}); revisions.checkpoint({target,snapshot_heads?,name?,description?,author?}) freezes current committed head by default; revisions.label({target,revision,name,description?,author?}) takes a VersionRef (revisionId is a picker adapter); revisions.migrate({target,name?}) explicitly exports a separate V2 local copy or returns migration warnings. lastChangedAt is the last content change, not label time.',
     list: async (input: { target: unknown }) => {
       const c = await operationContext(input.target)
       await c.notebookData.flushPendingPersist?.()
       return c.store.listNotebookRevisions(c.notebookUri)
     },
+    checkpoint: async (input: {
+      target: unknown
+      snapshot_heads?: string[]
+      name?: string
+      description?: string
+      author?: Attribution
+    }) => {
+      const c = await operationContext(input.target, true)
+      await c.notebookData.flushPendingPersist?.()
+      return c.store.checkpointNotebookRevision(c.notebookUri, {
+        ...input,
+        author: normalizeAttribution(input.author),
+      })
+    },
+    migrate: async (input: { target: unknown; name?: string }) => {
+      const c = await operationContext(input.target, true)
+      await c.notebookData.flushPendingPersist?.()
+      return c.store.migrateNotebookToV2(c.notebookUri, input)
+    },
     label: async (input: {
       target: unknown
-      revisionId: string
+      revisionId?: string
+      revision?: VersionRef
       name: string
       description?: string
       author?: Attribution
@@ -458,82 +438,33 @@ export function createNotebookCommentsRuntimeApi(
     },
   }
   return {
-    reviews,
+    comparisons,
     revisions,
     suggestions,
     add: async (input: {
       target: unknown
       content: string
-      reviewId?: string
-      suggestionId?: string
+      anchors?: Anchor[]
+      comparison?: ComparisonContext
       cellId?: string
-      side?: DiffCommentTarget['side']
-      sourceRange?: DiffCommentTarget['sourceRange']
       author?: Attribution
     }) => {
       const c = await operationContext(input.target, true)
       if (!input.content.trim()) throw new Error('Comment content is required')
-      if (input.reviewId && input.suggestionId)
-        throw new Error('Choose a review or a suggestion target')
-      if (
-        (input.side || input.sourceRange) &&
-        (!input.cellId || (!input.reviewId && !input.suggestionId))
-      )
-        throw new Error(
-          'Diff side/range requires a review or suggestion and cellId'
-        )
-      let anchor: string
-      if (input.suggestionId) {
-        const suggestion = (await suggestions.list(input)).find(
-          (s) => s.id === input.suggestionId
-        )
-        if (!suggestion)
-          throw new Error('Suggestion not found in target notebook')
-        anchor = createSuggestionCommentAnchor(
-          input.suggestionId,
-          input.cellId
-            ? createDiffCommentTarget(
-                suggestion.diff.cells,
-                input.cellId,
-                input.side,
-                input.sourceRange
-              )
-            : undefined
-        )
-      } else if (input.reviewId) {
-        const round = (await reviews.list(input)).find(
-          (r) => r.id === input.reviewId
-        )
-        if (!round) throw new Error('Review not found in target notebook')
-        const target = input.cellId
-          ? createDiffCommentTarget(
-              round.diff.cells,
-              input.cellId,
-              input.side,
-              input.sourceRange
-            )
-          : undefined
-        anchor = createReviewAnchor(
-          input.reviewId,
-          input.cellId,
-          target?.quote,
-          target
-        )
-      } else if (input.cellId) {
-        if (
-          !c.notebookData
-            .getNotebook()
-            .cells.some((cell) => cell.refId === input.cellId)
-        )
-          throw new Error('Cell not found')
-        anchor = createCellCommentAnchor(input.cellId)
-      } else
-        throw new Error(
-          'An explicit review, suggestion, or cell target is required'
-        )
+      await c.notebookData.flushPendingPersist?.()
+      if (input.anchors)
+        return c.store.addAnchoredComment(c.notebookUri, {
+          anchors: input.anchors,
+          comparison: input.comparison,
+          content: input.content,
+          author: normalizeAttribution(input.author),
+        })
+      if (!input.cellId)
+        throw new Error('Supply explicit version-bound anchors or a cell ID')
       return c.store.addOperationLogComment(c.notebookUri, {
         content: input.content,
-        anchor,
+        anchor: createCellCommentAnchor(input.cellId),
+        snapshot_heads: c.notebookData.getObservedOperationHeads?.(),
         author: normalizeAttribution(input.author),
       })
     },
@@ -543,6 +474,8 @@ export function createNotebookCommentsRuntimeApi(
     resolveAnchor: (args: { anchor: string; source: string }) =>
       resolveCommentAnchor(args),
     reply: async (input: CommentReplyInput) => {
+      const commentId = input.parent_comment_id ?? input.commentId
+      if (!commentId) throw new Error('parent_comment_id is required')
       const {
         notebookData,
         driveNotebookStore,
@@ -555,12 +488,9 @@ export function createNotebookCommentsRuntimeApi(
       if (operationLog) {
         return dependencies
           .resolveLocalNotebooks()!
-          .replyToOperationLogComment(
-            notebookUri,
-            input.commentId,
-            input.content,
-            { author: normalizeAttribution(input.author) }
-          )
+          .replyToOperationLogComment(notebookUri, commentId, input.content, {
+            author: normalizeAttribution(input.author),
+          })
       }
       if (input.author !== undefined)
         throw new Error(
@@ -570,7 +500,7 @@ export function createNotebookCommentsRuntimeApi(
         const operation = await localComments.saveDesiredReply({
           notebookUri,
           remoteUri: remoteUri!,
-          commentId: input.commentId,
+          commentId,
           content: input.content,
         })
         void localComments.reconcile(remoteUri!)
@@ -578,11 +508,13 @@ export function createNotebookCommentsRuntimeApi(
       }
       return driveNotebookStore!.replyToComment(
         remoteUri!,
-        input.commentId,
+        commentId,
         input.content
       )
     },
     resolve: async (input: CommentMutationInput) => {
+      const commentId = input.thread_id ?? input.commentId
+      if (!commentId) throw new Error('thread_id is required')
       const {
         notebookData,
         driveNotebookStore,
@@ -595,23 +527,25 @@ export function createNotebookCommentsRuntimeApi(
       if (operationLog) {
         return dependencies
           .resolveLocalNotebooks()!
-          .setOperationLogCommentResolved(notebookUri, input.commentId, true)
+          .setOperationLogCommentResolved(notebookUri, commentId, true)
       }
       if (localComments) {
         const operation = await localComments.setThreadIntent(
           {
             notebookUri,
             remoteUri: remoteUri!,
-            commentId: input.commentId,
+            commentId,
           },
           true
         )
         void localComments.reconcile(remoteUri!)
         return operation
       }
-      return driveNotebookStore!.resolveComment(remoteUri!, input.commentId)
+      return driveNotebookStore!.resolveComment(remoteUri!, commentId)
     },
     reopen: async (input: CommentMutationInput) => {
+      const commentId = input.thread_id ?? input.commentId
+      if (!commentId) throw new Error('thread_id is required')
       const {
         notebookData,
         driveNotebookStore,
@@ -624,32 +558,32 @@ export function createNotebookCommentsRuntimeApi(
       if (operationLog) {
         return dependencies
           .resolveLocalNotebooks()!
-          .setOperationLogCommentResolved(notebookUri, input.commentId, false)
+          .setOperationLogCommentResolved(notebookUri, commentId, false)
       }
       if (localComments) {
         const operation = await localComments.setThreadIntent(
           {
             notebookUri,
             remoteUri: remoteUri!,
-            commentId: input.commentId,
+            commentId,
           },
           false
         )
         void localComments.reconcile(remoteUri!)
         return operation
       }
-      return driveNotebookStore!.reopenComment(remoteUri!, input.commentId)
+      return driveNotebookStore!.reopenComment(remoteUri!, commentId)
     },
     help: () =>
       [
         'await comments.list({ target?, status? })',
-        'await comments.add({ target, content, reviewId?, suggestionId?, cellId?, side?: "base" | "head", sourceRange?: { start, end, unit: "utf-16" }, author? })',
+        'await comments.add({ target, content, anchors?, comparison?, cellId?, author? }); anchors bind cell IDs and Unicode-code-point source ranges to operation/revision VersionRefs; no stored quote.',
         'author: { displayName, kind: human|agent|service-account|unknown }; omitted/blank API author is unknown, never the signed-in human',
         'comments.parseAnchor(anchor)',
         'comments.resolveAnchor({ anchor, source })',
-        'await comments.reply({ target?, commentId, content, author? })',
-        'await comments.resolve({ target?, commentId })',
-        'await comments.reopen({ target?, commentId })',
+        'await comments.reply({ target?, parent_comment_id, content, author? }); commentId remains a UI adapter',
+        'await comments.resolve({ target?, thread_id })',
+        'await comments.reopen({ target?, thread_id })',
         'comments.list includes sync.status; .runme mutations append to the operation log, while Drive mutations persist locally and reconcile asynchronously',
       ].join('\n'),
   }

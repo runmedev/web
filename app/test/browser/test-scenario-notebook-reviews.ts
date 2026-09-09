@@ -239,7 +239,7 @@ try {
       .count(),
     0
   )
-  assert.equal((await api('reviews.list', { target })).length, 0)
+  assert.equal((await api('comparisons.list', { target })).length, 0)
   await checkpoint('02-commentable-diff-with-original-thread')
   await page.getByRole('checkbox', { name: 'Named revisions only' }).check()
   await canvas
@@ -381,7 +381,7 @@ try {
   await gutter.getByLabel('New cell comment').waitFor()
   await gutter.getByRole('button', { name: 'Cancel', exact: true }).click()
   const scoped = { ...pair, cellIds: ids.slice(1, 3) }
-  const selected = await api('reviews.comment', {
+  const selected = await api('comparisons.comment', {
     ...scoped,
     cellId: ids[2],
     side: 'head',
@@ -393,7 +393,7 @@ try {
   await canvas
     .getByText('Which verification command?', { exact: true })
     .waitFor()
-  const whole = await api('reviews.comment', {
+  const whole = await api('comparisons.comment', {
     ...scoped,
     content: 'Setup is almost ready.',
   })
@@ -418,7 +418,7 @@ try {
     1
   )
   await checkpoint('05-inline-source-and-suggestion-conversation')
-  const assessment = await api('reviews.assess', {
+  const assessment = await api('comparisons.assess', {
     ...scoped,
     outcome: 'good_enough',
   })
@@ -457,17 +457,20 @@ try {
     .selectOption(ids[3] + ':1')
   await canvas.getByText('Retired credential flow', { exact: true }).waitFor()
   const deletedScope = { ...pair, cellIds: ids.slice(3, 5) }
-  const deletedComment = await api('reviews.comment', {
+  const deletedComment = await api('comparisons.comment', {
     ...deletedScope,
     cellId: ids[4],
     side: 'base',
     content: 'Why remove this section?',
   })
-  const deletedAssessment = await api('reviews.assess', {
+  const deletedAssessment = await api('comparisons.assess', {
     ...deletedScope,
     outcome: 'needs_more_work',
   })
-  assert.notEqual(deletedAssessment.comparisonId, assessment.comparisonId)
+  assert.notDeepEqual(
+    JSON.parse(deletedAssessment.anchor).runme.comparison,
+    JSON.parse(assessment.anchor).runme.comparison
+  )
   await canvas.getByText('Why remove this section?', { exact: true }).waitFor()
   assert.equal(
     await canvas
@@ -476,14 +479,17 @@ try {
     0
   )
   await checkpoint('08-deleted-section-independent-feedback')
-  const duplicate = await api('reviews.assess', {
+  const duplicate = await api('comparisons.assess', {
     ...deletedScope,
     cellIds: [ids[4], ids[3], ids[4]],
     outcome: 'needs_more_work',
   })
-  assert.equal(duplicate.comparisonId, deletedAssessment.comparisonId)
+  assert.deepEqual(
+    JSON.parse(duplicate.anchor).runme.comparison,
+    JSON.parse(deletedAssessment.anchor).runme.comparison
+  )
   const snapshot = {
-    records: await api('reviews.list', { target }),
+    records: await api('comparisons.list', { target }),
     comments: await api('comments.list', { target, status: 'all' }),
     doc: await api('notebooks.get', target),
   }
@@ -495,7 +501,7 @@ try {
   assert.ok(snapshot.comments.every((c) => !c.resolved))
   await page.reload()
   await comparison.getByRole('heading', { name: 'Compare changes' }).waitFor()
-  assert.deepEqual(await api('reviews.list', { target }), snapshot.records)
+  assert.deepEqual(await api('comparisons.list', { target }), snapshot.records)
   assert.deepEqual(
     await api('comments.list', { target, status: 'all' }),
     snapshot.comments
@@ -530,7 +536,7 @@ try {
     .getByText(/Outdated context/)
     .first()
     .waitFor()
-  const original = await api('reviews.preview', pair)
+  const original = await api('comparisons.preview', pair)
   assert.equal(original.after.cells[2].value, 'Verify the new setup checklist')
   await checkpoint('10-second-iteration-preserves-history')
   await page.getByLabel('Whole document', { exact: true }).check()
@@ -553,15 +559,15 @@ try {
     .getByRole('button', { name: 'Accept changes to cell 3', exact: true })
     .click()
   await cellRow.getByText('Changes accepted', { exact: true }).waitFor()
-  const acceptedRecords = await api('reviews.list', { target })
-  await api('reviews.decideCell', {
+  const acceptedRecords = await api('comparisons.list', { target })
+  await api('comparisons.decideCell', {
     target,
     startRevisionId: end.id,
     endRevisionId: final.id,
     cellId: ids[2],
     decision: 'accept',
   })
-  assert.deepEqual(await api('reviews.list', { target }), acceptedRecords)
+  assert.deepEqual(await api('comparisons.list', { target }), acceptedRecords)
   assert.equal(
     await cellRow.locator('[id^="suggestion-cell-unchanged-"]').count(),
     1
@@ -623,6 +629,92 @@ try {
     (await api('notebooks.get', target)).notebook.cells[2].value,
     'Verify the new setup checklist'
   )
+  // Regression: a cell longer than the old 400-token limit must retain shared
+  // headings/paragraphs and only color the edited words, in the real renderer.
+  const longDoc = await api(
+    'notebooks.createLocal',
+    'long-inline-diff-cuj.runme'
+  )
+  const longTarget = { uri: longDoc.handle.uri }
+  const longBefore = [
+    '## Critical user journey\n\n',
+    'Review the old wording.\n\n',
+    '### Codex addresses comments\n\n',
+    'Read the comments and preserve their original context.\n'.repeat(35),
+    '\nDiscuss the old conclusion.\n',
+  ].join('')
+  const longAfter = longBefore.replaceAll('old', 'revised')
+  const longInserted = await api('notebooks.update', {
+    target: longTarget,
+    expectedRevision: longDoc.handle.revision,
+    operations: [
+      {
+        op: 'insert',
+        at: { index: 0 },
+        cells: [{ kind: 'markup', value: longBefore }],
+      },
+    ],
+  })
+  const longCellId = longInserted.notebook.cells[0].refId
+  const longStart = (await api('revisions.list', { target: longTarget })).at(-1)
+  await api('revisions.label', {
+    target: longTarget,
+    revisionId: longStart.id,
+    name: 'Long-cell baseline',
+  })
+  await api('notebooks.update', {
+    target: longTarget,
+    expectedRevision: longInserted.handle.revision,
+    operations: [
+      { op: 'update', refId: longCellId, patch: { value: longAfter } },
+    ],
+  })
+  await api('notebooks.show', longTarget.uri)
+  await page
+    .getByRole('button', { name: 'Review suggestions', exact: true })
+    .click()
+  const longDiff = page.locator(`#suggestion-cell-modified-${longCellId}`)
+  await longDiff.waitFor()
+  const runs = await longDiff
+    .locator('[data-diff-run]')
+    .evaluateAll((elements) =>
+      elements.map((el) => ({
+        value: el.textContent ?? '',
+        base: el.getAttribute('data-base-offset'),
+        head: el.getAttribute('data-head-offset'),
+        classes: el.className,
+      }))
+    )
+  assert.deepEqual(
+    runs.filter((run) => run.head === null).map((run) => run.value),
+    ['old', 'old']
+  )
+  assert.deepEqual(
+    runs.filter((run) => run.base === null).map((run) => run.value),
+    ['revised', 'revised']
+  )
+  assert.equal(
+    runs
+      .filter((run) => run.base !== null)
+      .map((run) => run.value)
+      .join(''),
+    longBefore
+  )
+  assert.equal(
+    runs
+      .filter((run) => run.head !== null)
+      .map((run) => run.value)
+      .join(''),
+    longAfter
+  )
+  assert.ok(
+    runs.some(
+      (run) =>
+        run.value.includes('### Codex addresses comments') &&
+        run.classes.includes('text-nb-text')
+    )
+  )
+  await checkpoint('14-long-cell-inline-diff')
   evidence.status = 'passed'
   evidence.uri = uri
   evidence.threadIds = [thread.id, selected.id, whole.id, deletedComment.id]

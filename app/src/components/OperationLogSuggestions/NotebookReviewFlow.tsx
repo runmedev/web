@@ -19,10 +19,7 @@ import {
   revisionLabel,
   type NotebookRevision,
 } from '../../lib/operationLog/revisions'
-import {
-  parseReviewAnchor,
-  type NotebookReviewRound,
-} from '../../lib/operationLog/reviews'
+import { type NotebookComparison } from '../../lib/operationLog/comparisons'
 import type { DiffCommentTarget } from '../../lib/operationLog/diffCommentAnchor'
 import {
   assessComparison,
@@ -53,9 +50,8 @@ type Props = {
 const button =
   'rounded border border-nb-border px-2 py-1 text-sm disabled:opacity-40'
 
-/** A comparison is immediately commentable. Legacy review records remain the
- * journal representation, created lazily when feedback needs durable endpoints.
- * Browsing the diff never creates a record or a draft review.
+/** The comparison and its feedback are projections of revision-bound comments.
+ * Browsing never creates a persisted Review entity.
  */
 export function NotebookReviewFlow({
   docUri,
@@ -64,7 +60,7 @@ export function NotebookReviewFlow({
   onClose,
 }: Props) {
   const [revisions, setRevisions] = useState<NotebookRevision[]>([])
-  const [records, setRecords] = useState<NotebookReviewRound[]>([])
+  const [records, setRecords] = useState<NotebookComparison[]>([])
   const [comments, setComments] = useState<DriveComment[]>([])
   const [preview, setPreview] = useState<ReviewPreview>()
   const [diffTarget, setDiffTarget] = useState<DiffCommentTarget>()
@@ -92,7 +88,7 @@ export function NotebookReviewFlow({
     const [versions, threads, rounds] = await Promise.all([
       store.listNotebookRevisions(docUri),
       store.listOperationLogComments(docUri),
-      store.listNotebookReviews(docUri),
+      store.listNotebookComparisons(docUri),
     ])
     if (id !== sequence.current) return
     // Comment-only writes must not reset the selected diff or its composer.
@@ -166,12 +162,7 @@ export function NotebookReviewFlow({
   )
   const discussion = comments.filter(
     (c) =>
-      !c.deleted &&
-      !cellId(c) &&
-      record &&
-      (parseReviewAnchor(c.anchor)?.reviewId === record.id ||
-        record.aliases?.includes(parseReviewAnchor(c.anchor)?.reviewId ?? '') ||
-        record.threadIds.includes(c.id!))
+      !c.deleted && !cellId(c) && record && record.threadIds.includes(c.id!)
   )
   const reply = (id: string, content: string) =>
     run(async () => {

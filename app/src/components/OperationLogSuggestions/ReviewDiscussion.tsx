@@ -4,7 +4,6 @@ import {
   parseDiffCommentTarget,
   type DiffCommentTarget,
 } from '../../lib/operationLog/diffCommentAnchor'
-import { parseReviewAnchor } from '../../lib/operationLog/reviews'
 import { parseCommentAnchor } from '../../lib/notebookComments'
 import type { DriveComment, DriveUser } from '../../storage/drive'
 
@@ -154,13 +153,11 @@ export function CellDiscussion({
     disabled,
     (text) => onReply(thread.id!, text)
   )
-  const anchor = parseReviewAnchor(thread.anchor)
   const cellAnchor = parseCommentAnchor(thread.anchor)
   const quote =
-    anchor?.quote ??
-    (cellAnchor?.type === 'cell-text'
+    cellAnchor?.type === 'cell-text'
       ? cellAnchor.selectors[1].exact
-      : cellAnchor?.quote)
+      : cellAnchor?.quote
   const target = parseDiffCommentTarget(thread.anchor)
   return (
     <article

@@ -10,7 +10,7 @@ import {
   resolveRenderedTextAnchor,
   toCellCommentThreads,
 } from './notebookComments'
-import { createReviewAnchor } from './operationLog/reviews'
+import { createReviewAnchor } from './operationLog/legacyReviews'
 
 describe('notebook comment anchors', () => {
   it('projects diff comments into editor threads without losing source context or raw anchors', () => {

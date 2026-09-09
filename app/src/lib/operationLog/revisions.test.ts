@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest'
 
+import { buildReviewRounds } from './legacyReviews'
 import { createRunmeOperation } from './mutations'
-import { buildReviewRounds } from './reviews'
 import {
   buildNotebookRevisions,
   materializeRevision,

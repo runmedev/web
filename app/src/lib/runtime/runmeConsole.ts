@@ -36,6 +36,7 @@ export type NotebookDataLike = {
   isReadOnly?: () => boolean
   isReleasePending?: () => boolean
   flushPendingPersist?: () => Promise<void>
+  getObservedOperationHeads?: () => string[] | undefined
   loadNotebook?: (
     notebook: parser_pb.Notebook,
     options?: { persist?: boolean }

@@ -3140,6 +3140,7 @@ function NotebookTabContent({
       if (operationLogComments && store) {
         setCommentsBusy(true)
         try {
+          await notebookData?.flushPendingPersist()
           const commentId = crypto.randomUUID()
           const anchor =
             target.type === 'cell'
@@ -3149,6 +3150,7 @@ function NotebookTabContent({
             content,
             anchor,
             commentId,
+            snapshot_heads: notebookData?.getObservedOperationHeads(),
             author: await getCommentAuthor(),
           })
           setDraftTarget(null)
@@ -3218,6 +3220,7 @@ function NotebookTabContent({
     [
       cellDatas,
       getCommentAuthor,
+      notebookData,
       commentsRemoteUri,
       docUri,
       loadLocalComments,

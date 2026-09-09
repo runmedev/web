@@ -105,9 +105,9 @@ To request further changes, comment in the cell thread rather than pressing X.
 
 ## Automation
 
-Discover live signatures with comments.help() and reviews.help(). Use explicit
-notebook targets. The historical reviews namespace remains for compatibility;
-the direct comment/assess methods do not require a create/submit workflow.
+Discover live signatures with comments.help() and comparisons.help(). Use explicit
+notebook targets. Comparisons are read-only projections; comments and assessments
+freeze their revision endpoints when written. There is no create/submit workflow.
 
 ```javascript
 const target = { uri: "local://file/<notebook-id>" };
@@ -117,27 +117,31 @@ const end = versions.at(-1);
 const selection = { target, startRevisionId: start.id, endRevisionId: end.id };
 await revisions.label({ target, revisionId: end.id, name: "Codex response",
   description: "Addressed setup comments", author: { displayName: "Codex", kind: "agent" } });
-const preview = await reviews.preview(selection);
-const thread = await reviews.comment({
+const preview = await comparisons.preview(selection);
+const thread = await comparisons.comment({
   ...selection, content: "The setup changes are clear.",
   author: { displayName: "Codex", kind: "agent" },
 });
-await comments.reply({ target, commentId: thread.id, content: "Thanks." });
-await reviews.assess({ ...selection, outcome: "good_enough" });
-await reviews.decideCell({ ...selection, cellId: "<cell-id>", decision: "accept" });
+await comments.reply({ target, parent_comment_id: thread.id, content: "Thanks." });
+await comparisons.assess({ ...selection, outcome: "good_enough" });
+await comparisons.decideCell({ ...selection, cellId: "<cell-id>", decision: "accept" });
 // Destructive: restores this cell to the start revision; guarded against later edits.
-// await reviews.decideCell({ ...selection, cellId: "<cell-id>", decision: "undo" });
+// await comparisons.decideCell({ ...selection, cellId: "<cell-id>", decision: "undo" });
 ```
 
 Supply cellIds in selection to scope feedback. Supply cellId and optionally
 side: "base" or "head" plus sourceRange: { start, end, unit: "utf-16" } to
-reviews.comment to discuss part of a cell. The exclusive-end range is validated
+comparisons.comment to discuss part of a cell. The exclusive-end range is validated
 against the frozen snapshot; the quote is derived from it.
 
 Use comments.add with cellId for ordinary editor comments. Read comments.list
-with status: "all" and inspect rawAnchor for the complete historical target.
+with status: "all" and inspect anchors and comparison for the complete historical target.
 An edit's reason is not a discussion message. comments.resolve/reopen acts on
-the root comment ID, not the comparison ID.
+thread_id (the root comment ID), not the comparison ID. The commentId spelling
+remains a UI adapter. Version-aware callers can use
+comparisons.preview({ target, start, end, cell_ids }) and
+revisions.label({ target, revision, name, description, author }) with VersionRefs;
+the picker-ID inputs above remain adapters, not stored revision arrays.
 
 API author labels are unverified attribution; missing/blank labels become
 unknown. UI submissions resolve the current Drive identity, preserving
@@ -145,6 +149,47 @@ service-account identity rather than inferring an impersonating human.
 Replies retain their own authors. All .runme feedback is stored in the notebook,
 not in Google Drive's separate comments service.
 
-Legacy reviews.create/submit/linkThread and old persisted review records remain
-readable. suggestions.list refers to the earlier per-operation accept/reject
-model, not the scoped comparison described here.
+## Persisted model and compatibility
+
+Format V2 stores `runme.revision` and `runme.comment` as first-class JSONL
+records alongside cell operations. A revision stores a causal frontier
+(`snapshot_heads`), not a copied list of every operation. Its own `deps`
+record the writer's causal past; its snapshot heads select the fixed version
+being named, which may be older. A late-arriving concurrent operation cannot
+change that snapshot.
+
+Comments contain one or more version-bound notebook/cell anchors. Source ranges
+use half-open Unicode-code-point offsets and cannot split graphemes; UI UTF-16
+offsets are converted at the boundary. Quoted text is reconstructed from the
+historical source, never stored in the anchor. Replies inherit the root's
+context. Comparison scope and acceptance/undo feedback live on comments,
+not on a separate Review record.
+
+```javascript
+const version = await revisions.checkpoint({ target, name: "Reviewed baseline" });
+await comments.add({
+  target, content: "Please clarify this cell.",
+  anchors: [{ kind: "cell", cell_id: "<cell-id>", version, surface: "source" }],
+});
+```
+
+The old `reviews` runtime namespace and Review writers are removed. A read-only
+V1 decoder remains so existing notebooks can still be opened. V1 files are not
+silently upgraded or rewritten. To opt in:
+
+```javascript
+const migration = await revisions.migrate({
+  target, name: "review-flow-v2.runme",
+});
+// Inspect migration.warnings; migration.uri exists only on successful conversion.
+```
+
+This creates a new local notebook with a new identity, preserves original
+operations, and maps labels, comments, replies, resolved states, and assessments.
+It validates legacy quotes and converts supported UTF-16/rendered selections.
+If any target cannot be converted reliably, it reports the comment IDs and
+does not create a lossy copy. The source and its Drive file are untouched.
+The new copy is not automatically uploaded.
+
+`suggestions.list` is the earlier per-operation suggestion projection, not a
+stored Review entity. Historical readers are isolated in `legacyReviews.ts`.

@@ -43,30 +43,35 @@ import {
   parseOperationLog,
   serializeOperationLog,
 } from '../lib/operationLog'
+import { sourceAnchorsFromLegacy } from '../lib/operationLog/anchorConversion'
 import { cellDecisionFor } from '../lib/operationLog/cellReview'
+import { cellStateKey } from '../lib/operationLog/cellReviewIdentity'
+import { encodeOperation } from '../lib/operationLog/codec'
 import {
-  cellStateKey,
-  withCellReviewKeys,
-} from '../lib/operationLog/cellReviewIdentity'
+  type ComparisonSelection,
+  buildComparisons,
+  previewComparison,
+} from '../lib/operationLog/comparisons'
+import { migrateOperationLogV2 } from '../lib/operationLog/migrateV2'
 import {
-  computeReviewDiff,
-  normalizeReviewCellIds,
-  reviewIdentityKey,
-} from '../lib/operationLog/reviewScope'
+  type Anchor,
+  type Assessment,
+  type CommentRecord,
+  type ComparisonContext,
+  type RevisionRecord,
+  type VersionRef,
+  projectRecord,
+} from '../lib/operationLog/records'
 import {
   type Attribution,
-  REVIEW_OUTCOMES,
-  type ReviewOutcome,
-  buildReviewRounds,
-  captureReviewRevision,
   normalizeAttribution,
-} from '../lib/operationLog/reviews'
+} from '../lib/operationLog/records'
 import {
   buildNotebookRevisions,
-  materializeRevision,
-  revisionFollows,
-  revisionKey,
+  notebookRevisionForVersion,
 } from '../lib/operationLog/revisions'
+import { ancestorClosure, snapshotHeads } from '../lib/operationLog/versions'
+import { captureCommittedRevision as captureReviewRevision } from '../lib/operationLog/versions'
 import { appState } from '../lib/runtime/AppState'
 import { RunmeMetadataKey, parser_pb } from '../runme/client'
 import {
@@ -1382,6 +1387,7 @@ export class LocalNotebooks extends Dexie {
     options: { actorId?: string; initialDocument?: string } = {}
   ): Promise<{
     save(saveUri: string, notebook: parser_pb.Notebook): Promise<void>
+    getObservedOperationHeads(): string[]
   }> {
     const record = await this.files.get(uri)
     if (!record || !record.operationLogRef) {
@@ -1398,10 +1404,16 @@ export class LocalNotebooks extends Dexie {
     let previous = materializedLogToNotebook(
       materializeOperationLog(view.operations)
     )
-    const actorId = options.actorId ?? (await getNotebookActorId(uri))
+    // This mounted view observes only its own captured history. Annotation and
+    // checkpoint writers observe the merged OPFS history, so sharing their actor
+    // would either break the prior-actor dependency chain or import unseen edits.
+    const actorId =
+      options.actorId ?? `${await getNotebookActorId(uri)}:view:${uuidv4()}`
     let queue = Promise.resolve()
 
     return {
+      getObservedOperationHeads: () =>
+        snapshotHeads(view.operations, captureReviewRevision(view.operations)),
       save: async (saveUri: string, notebook: parser_pb.Notebook) => {
         if (saveUri !== uri) {
           throw new Error(
@@ -1430,9 +1442,7 @@ export class LocalNotebooks extends Dexie {
               })
               return created.length === 0
                 ? ''
-                : `${created
-                    .map((item) => canonicalJson(item as unknown as JsonValue))
-                    .join('\n')}\n`
+                : `${created.map((item) => encodeOperation(item)).join('\n')}\n`
             },
             { validate: (document) => void parseOperationLog(document) }
           )
@@ -1545,8 +1555,38 @@ export class LocalNotebooks extends Dexie {
       actorId?: string
       commentId?: string
       author?: Attribution
+      snapshot_heads?: string[]
     }
   ): Promise<DriveComment> {
+    const { parsed } = await this.readMaterializedOperationLog(uri)
+    if (parsed.header.format_version === 2) {
+      const view = JSON.parse(input.anchor).runme
+      if (!view?.cellId || !['cell', 'cell-text'].includes(view.type))
+        throw new Error('Use version-bound anchors for this comment')
+      const visibleOperations = input.snapshot_heads
+        ? ancestorClosure(parsed.operations, input.snapshot_heads)
+        : parsed.operations
+      const current = materializeOperationLog(
+        visibleOperations
+      ).notebook.cells.find((c) => c.cell_id === view.cellId)
+      if (!current || (view.quote && view.quote !== current.value))
+        throw new Error('Comment source changed; select the text again')
+      const version = await this.checkpointNotebookRevision(uri, {
+        snapshot_heads: snapshotHeads(
+          visibleOperations,
+          captureReviewRevision(visibleOperations)
+        ),
+        author: input.author,
+      })
+      const updated = (await this.readMaterializedOperationLog(uri)).parsed
+        .operations
+      const anchors = await sourceAnchorsFromLegacy(updated, view, version)
+      return this.addAnchoredComment(uri, {
+        content: input.content,
+        author: input.author,
+        anchors,
+      })
+    }
     const actorId = input.actorId ?? (await getNotebookActorId(uri))
     const commentId = input.commentId ?? crypto.randomUUID()
     const author = normalizeAttribution(input.author, true)
@@ -1596,6 +1636,24 @@ export class LocalNotebooks extends Dexie {
     }
     const actorId = options.actorId ?? (await getNotebookActorId(uri))
     const author = normalizeAttribution(options.author, true)
+    const { parsed } = await this.readMaterializedOperationLog(uri)
+    if (parsed.header.format_version === 2) {
+      await this.appendFirstClassRecord(uri, (_operations, envelope) => {
+        const { kind: _kind, payload: _payload, ...causal } = envelope
+        return {
+          ...causal,
+          format_version: 2,
+          record_type: 'runme.comment',
+          thread_id: parent.thread_id,
+          parent_comment_id: parentCommentId,
+          author,
+          body: { format: 'text/markdown', value: content },
+        }
+      })
+      return (await this.listOperationLogComments(uri)).find(
+        (c) => c.id === parent.thread_id
+      )!
+    }
     const payload: CommentReplyPayload = {
       comment_id: crypto.randomUUID(),
       thread_id: parent.thread_id,
@@ -1677,81 +1735,9 @@ export class LocalNotebooks extends Dexie {
     )
   }
 
-  /** Capture a fixed pair after the caller flushes its mounted editor. */
-  async createNotebookReview(
-    uri: string,
-    input: {
-      title?: string
-      baseReviewId?: string
-      startRevisionId?: string
-      endRevisionId?: string
-      cellIds?: string[]
-      author?: Attribution
-    }
-  ) {
-    const { parsed } = await this.readMaterializedOperationLog(uri)
-    const rounds = buildReviewRounds(parsed.operations)
-    const base = input.baseReviewId
-      ? rounds.find((round) => round.id === input.baseReviewId)
-      : undefined
-    if (input.baseReviewId && !base) throw new Error('Base review not found')
-    if (input.baseReviewId && (input.startRevisionId || input.endRevisionId))
-      throw new Error('Choose explicit revisions or baseReviewId, not both')
-    if (Boolean(input.startRevisionId) !== Boolean(input.endRevisionId))
-      throw new Error('Choose both start and end revisions')
-    const revisions = buildNotebookRevisions(parsed.operations)
-    const start = input.startRevisionId
-      ? revisions.find((r) => r.id === input.startRevisionId)
-      : undefined
-    const end = input.endRevisionId
-      ? revisions.find((r) => r.id === input.endRevisionId)
-      : undefined
-    if (input.startRevisionId && (!start || !end))
-      throw new Error('Revision not found')
-    if (start && end && !revisionFollows(start, end))
-      throw new Error('End revision must be after start revision')
-    const baseOperationIds = start?.operationIds ?? base?.headOperationIds ?? []
-    const headOperationIds = end
-      ? [...new Set([...baseOperationIds, ...end.operationIds])]
-      : captureReviewRevision(parsed.operations)
-    const startKey = revisionKey(parsed.operations, baseOperationIds)
-    const endKey = revisionKey(parsed.operations, headOperationIds)
-    if (startKey === endKey)
-      throw new Error('End revision must be after start revision')
-    const cellIds = normalizeReviewCellIds(
-      input.cellIds,
-      materializeRevision(parsed.operations, baseOperationIds),
-      materializeRevision(parsed.operations, headOperationIds)
-    )
-    const identity = reviewIdentityKey(startKey, endKey, cellIds)
-    const existing = rounds.find(
-      (r) =>
-        reviewIdentityKey(
-          revisionKey(parsed.operations, r.baseOperationIds),
-          revisionKey(parsed.operations, r.headOperationIds),
-          r.cellIds
-        ) === identity
-    )
-    if (existing) return existing
-    // Same pair yields the same ID across tabs and offline replicas. Projection
-    // verifies full endpoints and coalesces concurrent create records.
-    const id = `review:${md5(identity)}`
-    await this.appendOperationLogMutation(uri, 'review.create', {
-      id,
-      title: input.title?.trim() || `Round ${rounds.length + 1}`,
-      baseOperationIds,
-      headOperationIds,
-      ...(cellIds ? { cellIds } : {}),
-      ...(base ? { previousReviewId: base.id } : {}),
-      author: normalizeAttribution(input.author, true),
-    } as unknown as JsonValue)
-    return (await this.listNotebookReviews(uri)).find(
-      (round) => round.id === id
-    )!
-  }
-
-  async listNotebookReviews(uri: string) {
-    return buildReviewRounds(
+  /** Comparison state is derived from comments, never persisted as a Review. */
+  async listNotebookComparisons(uri: string) {
+    return buildComparisons(
       (await this.readMaterializedOperationLog(uri)).parsed.operations
     )
   }
@@ -1763,10 +1749,198 @@ export class LocalNotebooks extends Dexie {
     )
   }
 
+  /** Append first-class entities under the same lock that allocates actor IDs.
+   * Existing V1 files are never silently rewritten; migration creates a copy.
+   */
+  private async appendFirstClassRecord(
+    uri: string,
+    build: (
+      operations: RunmeOperation[],
+      envelope: RunmeOperation
+    ) => RevisionRecord | CommentRecord
+  ): Promise<RunmeOperation> {
+    const file = await this.files.get(uri)
+    if (!file?.operationLogRef)
+      throw new Error('Operation-log reference missing')
+    const actorId = await getNotebookActorId(uri)
+    let written: RunmeOperation | undefined
+    try {
+      const stored = await this.operationLogStorage.appendTransaction(
+        file.operationLogRef,
+        (document) => {
+          const parsed = parseOperationLog(document)
+          if (parsed.header.format_version !== 2)
+            throw new Error(
+              'This notebook uses format V1. Create an explicit V2 migration copy before adding revision/comment records.'
+            )
+          if (
+            captureReviewRevision(parsed.operations).length !==
+            parsed.operations.length
+          )
+            throw new Error(
+              'Complete pending operations/transactions before writing revision or comment records'
+            )
+          const envelope = createRunmeOperation({
+            actorId,
+            actorSequence: highestActorSequence(parsed.operations, actorId) + 1,
+            dependencies: causalHeads(parsed.operations),
+            knownOperations: parsed.operations,
+            kind: 'entity',
+            payload: {},
+          })
+          const candidate = projectRecord(build(parsed.operations, envelope))
+          const line = encodeOperation(candidate) + '\n'
+          parseOperationLog(document + line)
+          written = candidate
+          return line
+        },
+        { validate: (document) => void parseOperationLog(document) }
+      )
+      await this.files.update(uri, {
+        doc: '',
+        md5Checksum: stored.checksum,
+        operationLogRef: stored.ref,
+      })
+      this.notifySync(uri)
+      if (!file.conflict) {
+        this.enqueueSync(uri)
+        this.enqueueMarkdownSync(uri)
+      }
+      return written!
+    } catch (error) {
+      if (written)
+        throw new OperationLogMutationCommitUncertainError(
+          uri,
+          written.kind,
+          error
+        )
+      throw error
+    }
+  }
+
+  /** Freeze supplied heads, or the current committed view, without copying content. */
+  async checkpointNotebookRevision(
+    uri: string,
+    input: {
+      snapshot_heads?: string[]
+      name?: string
+      description?: string
+      author?: Attribution
+    } = {}
+  ) {
+    if (
+      input.snapshot_heads &&
+      input.name === undefined &&
+      input.description === undefined
+    ) {
+      const { parsed } = await this.readMaterializedOperationLog(uri)
+      const key = JSON.stringify([...input.snapshot_heads].sort())
+      const existing = parsed.operations.find(
+        (op) =>
+          op.kind === 'revision.checkpoint' &&
+          JSON.stringify([...(op.payload as any).snapshot_heads].sort()) === key
+      )
+      if (existing)
+        return { kind: 'revision' as const, revision_id: existing.op_id }
+    }
+    const op = await this.appendFirstClassRecord(
+      uri,
+      (operations, envelope) => {
+        const committed = captureReviewRevision(operations)
+        const heads =
+          input.snapshot_heads ?? snapshotHeads(operations, committed)
+        const { kind: _kind, payload: _payload, ...causal } = envelope
+        return {
+          ...causal,
+          format_version: 2,
+          record_type: 'runme.revision',
+          snapshot_heads: [...heads].sort(),
+          ...(input.name ? { name: input.name } : {}),
+          ...(input.description !== undefined
+            ? { description: input.description }
+            : {}),
+          author: normalizeAttribution(input.author, true),
+        }
+      }
+    )
+    return { kind: 'revision' as const, revision_id: op.op_id }
+  }
+
+  /** Explicit conversion exports a local copy and never changes the source/Drive file. */
+  async migrateNotebookToV2(uri: string, input: { name?: string } = {}) {
+    const source = await this.files.get(uri)
+    if (!source) throw new Error('Notebook not found')
+    const result = await migrateOperationLogV2(
+      await this.loadContent(uri),
+      `notebook_${uuidv4()}`
+    )
+    if (!result.document) return { warnings: result.warnings }
+    const copy = await this.createContent(
+      LOCAL_FOLDER_URI,
+      input.name ?? source.name.replace(/\.runme$/i, '') + '-v2.runme',
+      result.document,
+      RUNME_OPERATION_LOG_MIME_TYPE,
+      { autoSync: false }
+    )
+    return {
+      uri: copy.uri,
+      warnings: result.warnings,
+      commentIds: result.commentIds,
+      revisionIds: result.revisionIds,
+    }
+  }
+
+  /** Store a root message with immutable version-bound anchors; no review record. */
+  async addAnchoredComment(
+    uri: string,
+    input: {
+      anchors: Anchor[]
+      comparison?: ComparisonContext
+      content: string
+      assessment?: Assessment
+      author?: Attribution
+    }
+  ) {
+    const op = await this.appendFirstClassRecord(
+      uri,
+      (_operations, envelope) => {
+        const { kind: _kind, payload: _payload, ...causal } = envelope
+        return {
+          ...causal,
+          format_version: 2,
+          record_type: 'runme.comment',
+          thread_id: envelope.op_id,
+          author: normalizeAttribution(input.author, true),
+          body: { format: 'text/markdown', value: input.content },
+          anchors: input.anchors,
+          ...(input.comparison
+            ? {
+                comparison: {
+                  ...input.comparison,
+                  ...(input.comparison.cell_ids
+                    ? {
+                        cell_ids: [
+                          ...new Set(input.comparison.cell_ids),
+                        ].sort(),
+                      }
+                    : {}),
+                },
+              }
+            : {}),
+          ...(input.assessment ? { assessment: input.assessment } : {}),
+        }
+      }
+    )
+    return (await this.listOperationLogComments(uri)).find(
+      (c) => c.id === op.op_id
+    )!
+  }
+
   async labelNotebookRevision(
     uri: string,
     input: {
-      revisionId: string
+      revisionId?: string
+      revision?: VersionRef
       name: string
       description?: string
       author?: Attribution
@@ -1783,13 +1957,29 @@ export class LocalNotebooks extends Dexie {
       throw new Error(
         'Provide a revision name (up to 200 characters) and description (up to 2000 characters)'
       )
-    const revision = (await this.listNotebookRevisions(uri)).find(
-      (r) => r.id === input.revisionId
-    )
+    const revision = input.revision
+      ? notebookRevisionForVersion(
+          (await this.readMaterializedOperationLog(uri)).parsed.operations,
+          input.revision
+        )
+      : (await this.listNotebookRevisions(uri)).find(
+          (r) => r.id === input.revisionId
+        )
     if (!revision) throw new Error('Revision not found')
+    if (revision.version?.kind !== 'revision') {
+      const { parsed } = await this.readMaterializedOperationLog(uri)
+      const ref = await this.checkpointNotebookRevision(uri, {
+        snapshot_heads: snapshotHeads(parsed.operations, revision.operationIds),
+        name: input.name.trim(),
+        description: input.description ?? '',
+        author: input.author,
+      })
+      return (await this.listNotebookRevisions(uri)).find(
+        (r) => r.id === ref.revision_id
+      )!
+    }
     await this.appendOperationLogMutation(uri, 'revision.label', {
-      revisionId: revision.id,
-      operationIds: revision.operationIds,
+      revision: revision.version,
       name: input.name.trim(),
       description: input.description ?? '',
       author: normalizeAttribution(input.author, true),
@@ -1800,60 +1990,22 @@ export class LocalNotebooks extends Dexie {
   }
 
   /** Read-only preview uses exactly the selected revisions, never the live head. */
-  async previewNotebookReview(
-    uri: string,
-    input: {
-      startRevisionId: string
-      endRevisionId: string
-      cellIds?: string[]
-    }
-  ) {
-    const { parsed } = await this.readMaterializedOperationLog(uri)
-    const revisions = buildNotebookRevisions(parsed.operations)
-    const start = revisions.find((r) => r.id === input.startRevisionId)
-    const end = revisions.find((r) => r.id === input.endRevisionId)
-    if (!start || !end) throw new Error('Revision not found')
-    if (!revisionFollows(start, end))
-      throw new Error('End revision must be after start revision')
-    const before = materializeRevision(parsed.operations, start.operationIds)
-    const after = materializeRevision(parsed.operations, end.operationIds)
-    const cellIds = normalizeReviewCellIds(input.cellIds, before, after)
-    const identity = reviewIdentityKey(
-      JSON.stringify(start.changeIds),
-      JSON.stringify(end.changeIds),
-      cellIds
+  async previewNotebookComparison(uri: string, input: ComparisonSelection) {
+    return previewComparison(
+      (await this.readMaterializedOperationLog(uri)).parsed.operations,
+      input
     )
-    const existing = buildReviewRounds(parsed.operations).find(
-      (r) =>
-        reviewIdentityKey(
-          revisionKey(parsed.operations, r.baseOperationIds),
-          revisionKey(parsed.operations, r.headOperationIds),
-          r.cellIds
-        ) === identity
-    )
-    return {
-      start,
-      end,
-      before,
-      after,
-      cellIds,
-      diff: withCellReviewKeys(
-        computeReviewDiff(before, after, cellIds),
-        parsed.operations,
-        start.operationIds,
-        end.operationIds
-      ),
-      existingReviewId: existing?.id,
-    }
   }
 
   /** Validate and undo under the same OPFS writer lock. Content operations and
    * the decision share a commit envelope so replicas never see a partial undo.
    */
-  async decideNotebookReviewCell(
+  async decideNotebookComparisonCell(
     uri: string,
     input: {
-      reviewId: string
+      startRevisionId: string
+      endRevisionId: string
+      cellIds?: string[]
       cellId: string
       decision: 'accept' | 'undo'
       author?: Attribution
@@ -1871,8 +2023,24 @@ export class LocalNotebooks extends Dexie {
         record.operationLogRef,
         async (document) => {
           const parsed = parseOperationLog(document)
-          const rounds = buildReviewRounds(parsed.operations)
-          const round = rounds.find((r) => r.id === input.reviewId)
+          if (parsed.header.format_version !== 2)
+            throw new Error(
+              'Create a V2 migration copy before recording decisions'
+            )
+          if (
+            captureReviewRevision(parsed.operations).length !==
+            parsed.operations.length
+          )
+            throw new Error(
+              'Complete pending operations/transactions before recording decisions'
+            )
+          const rounds = buildComparisons(parsed.operations)
+          const preview = previewComparison(parsed.operations, input)
+          const round = {
+            ...preview,
+            baseOperationIds: preview.start.operationIds,
+            headOperationIds: preview.end.operationIds,
+          }
           const row = round?.diff.cells.find(
             (r) => (r.compareCell ?? r.baseCell)?.refId === input.cellId
           )
@@ -1885,6 +2053,17 @@ export class LocalNotebooks extends Dexie {
               'These cell changes were already undone; select a new comparison'
             )
           const operations = [...parsed.operations]
+          const baseIdsForUndo = new Set(round.baseOperationIds)
+          const revertedIds = round.headOperationIds.filter(
+            (id) =>
+              !baseIdsForUndo.has(id) &&
+              parsed.operations.some(
+                (op) =>
+                  op.op_id === id &&
+                  op.kind.startsWith('cell.') &&
+                  (op.payload as any).cell_id === input.cellId
+              )
+          )
           const firstSequence = highestActorSequence(operations, actorId) + 1
           const transactionId = `${actorId}:cell-review:${firstSequence}`
           const created: RunmeOperation[] = []
@@ -1953,6 +2132,7 @@ export class LocalNotebooks extends Dexie {
               if (op.kind === 'cell.restore' && baseCell)
                 (op.payload as any).position = restoredPosition
               op.transaction_id = transactionId
+              op.reverts = revertedIds
               created.push(op)
             }
             operations.push(...created)
@@ -1975,22 +2155,74 @@ export class LocalNotebooks extends Dexie {
                   position: restoredPosition,
                 } as unknown as JsonValue,
                 transactionId,
+                reverts: revertedIds,
               })
               created.push(move)
               operations.push(move)
             }
           }
-          const decision = createRunmeOperation({
+          const comparison = {
+            start: {
+              kind: 'revision' as const,
+              revision_id: input.startRevisionId,
+            },
+            end: {
+              kind: 'revision' as const,
+              revision_id: input.endRevisionId,
+            },
+            ...(input.cellIds ? { cell_ids: input.cellIds } : {}),
+          }
+          const envelope = createRunmeOperation({
             actorId,
             actorSequence: highestActorSequence(operations, actorId) + 1,
             dependencies: causalHeads(operations),
             knownOperations: operations,
-            kind: 'review.cell_decision',
-            payload: {
-              ...input,
-              author: normalizeAttribution(input.author, true),
-            },
+            kind: 'entity',
+            payload: {},
             transactionId,
+          })
+          const { kind: _kind, payload: _payload, ...causal } = envelope
+          const decision = projectRecord({
+            ...causal,
+            format_version: 2,
+            record_type: 'runme.comment',
+            thread_id: envelope.op_id,
+            author: normalizeAttribution(input.author, true),
+            body: {
+              format: 'text/markdown',
+              value:
+                input.decision === 'accept'
+                  ? 'Accepted cell changes.'
+                  : 'Undid cell changes.',
+            },
+            comparison,
+            anchors: [
+              ...(row.baseCell
+                ? [
+                    {
+                      kind: 'cell' as const,
+                      cell_id: input.cellId,
+                      version: comparison.start,
+                      surface: 'source' as const,
+                    },
+                  ]
+                : []),
+              ...(row.compareCell
+                ? [
+                    {
+                      kind: 'cell' as const,
+                      cell_id: input.cellId,
+                      version: comparison.end,
+                      surface: 'source' as const,
+                    },
+                  ]
+                : []),
+            ],
+            assessment: {
+              kind: 'cell',
+              cell_id: input.cellId,
+              decision: input.decision,
+            },
           })
           created.push(decision)
           operations.push(decision)
@@ -2006,18 +2238,17 @@ export class LocalNotebooks extends Dexie {
             },
           })
           created.push(commit)
+          const appended =
+            created.map((op) => encodeOperation(op)).join('\n') + '\n'
+          parseOperationLog(document + appended)
           mutationCreated = true
-          return (
-            created
-              .map((op) => canonicalJson(op as unknown as JsonValue))
-              .join('\n') + '\n'
-          )
+          return appended
         },
         {
           validate: (document) => {
             const parsed = parseOperationLog(document)
             materializeOperationLog(parsed.operations)
-            buildReviewRounds(parsed.operations)
+            buildComparisons(parsed.operations)
           },
         }
       )
@@ -2035,59 +2266,11 @@ export class LocalNotebooks extends Dexie {
       if (mutationCreated)
         throw new OperationLogMutationCommitUncertainError(
           uri,
-          'review.cell_decision',
+          'comment.record',
           error
         )
       throw error
     }
-  }
-
-  async submitNotebookReview(
-    uri: string,
-    input: {
-      reviewId: string
-      outcome: ReviewOutcome
-      summary?: string
-      author?: Attribution
-    }
-  ) {
-    if (
-      !(await this.listNotebookReviews(uri)).some(
-        (round) => round.id === input.reviewId
-      )
-    )
-      throw new Error('Review not found')
-    if (!REVIEW_OUTCOMES.includes(input.outcome))
-      throw new Error('Invalid review outcome')
-    if (input.summary !== undefined && typeof input.summary !== 'string')
-      throw new Error('Review summary must be text')
-    await this.appendOperationLogMutation(uri, 'review.submit', {
-      ...input,
-      author: normalizeAttribution(input.author, true),
-    } as unknown as JsonValue)
-  }
-
-  async linkNotebookReviewThread(
-    uri: string,
-    reviewId: string,
-    commentId: string
-  ) {
-    if (
-      !(await this.listNotebookReviews(uri)).some(
-        (round) => round.id === reviewId
-      )
-    )
-      throw new Error('Review not found')
-    if (
-      !(await this.listOperationLogComments(uri)).some(
-        (comment) => comment.id === commentId
-      )
-    )
-      throw new Error('Thread not found')
-    await this.appendOperationLogMutation(uri, 'review.link_thread', {
-      reviewId,
-      commentId,
-    })
   }
 
   private async readMaterializedOperationLog(uri: string) {
@@ -2128,7 +2311,7 @@ export class LocalNotebooks extends Dexie {
             reverts,
           })
           mutationCreated = true
-          return `${canonicalJson(operation as unknown as JsonValue)}\n`
+          return `${encodeOperation(operation)}\n`
         },
         { validate: (document) => void parseOperationLog(document) }
       )
@@ -3114,9 +3297,7 @@ export class LocalNotebooks extends Dexie {
               return appendedOperations.length === 0
                 ? ''
                 : `${appendedOperations
-                    .map((operation) =>
-                      canonicalJson(operation as unknown as JsonValue)
-                    )
+                    .map((operation) => encodeOperation(operation))
                     .join('\n')}\n`
             },
             { validate: (document) => void parseOperationLog(document) }
@@ -4947,9 +5128,7 @@ export class LocalNotebooks extends Dexie {
           stored = await this.operationLogStorage.append(
             local.ref,
             `${missingLocally
-              .map((operation) =>
-                canonicalJson(operation as unknown as JsonValue)
-              )
+              .map((operation) => encodeOperation(operation))
               .join('\n')}\n`,
             { validate: (document) => void parseOperationLog(document) }
           )
@@ -5206,7 +5385,7 @@ export class LocalNotebooks extends Dexie {
       stored = await this.operationLogStorage.append(
         local.ref,
         `${missingLocally
-          .map((operation) => canonicalJson(operation as unknown as JsonValue))
+          .map((operation) => encodeOperation(operation))
           .join('\n')}\n`,
         { validate: (document) => void parseOperationLog(document) }
       )

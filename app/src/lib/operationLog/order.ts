@@ -162,6 +162,7 @@ export function committedOperationIds(
   const byId = operationMap(operations)
   const pending = pendingClosure(byId)
   const committed = new Set<string>()
+  const transactions = new Map<string, string>()
 
   for (const operation of byId.values()) {
     if (
@@ -191,6 +192,12 @@ export function committedOperationIds(
       throw new Error(`Invalid transaction.commit payload for ${commit.op_id}`)
     }
     const members = new Set(payload.members)
+    const previousCommit = transactions.get(payload.transaction_id)
+    if (previousCommit && previousCommit !== commit.op_id)
+      throw new Error(
+        `Transaction ${payload.transaction_id} has multiple commits`
+      )
+    transactions.set(payload.transaction_id, commit.op_id)
     if (members.size !== payload.members.length) {
       throw new Error(
         `Transaction ${payload.transaction_id} contains duplicate members`
@@ -217,6 +224,30 @@ export function committedOperationIds(
     ) {
       for (const memberId of payload.members) committed.add(memberId)
       committed.add(commit.op_id)
+    }
+  }
+  // A descendant of a pending transaction cannot become visible early. Commit
+  // markers and their members start together; then dependency closure removes
+  // any group or descendant whose external prerequisites remain unavailable.
+  let changed = true
+  while (changed) {
+    changed = false
+    for (const operation of byId.values()) {
+      if (
+        committed.has(operation.op_id) &&
+        operation.deps.some((id) => !committed.has(id))
+      ) {
+        committed.delete(operation.op_id)
+        changed = true
+      }
+      if (
+        operation.transaction_id &&
+        committed.has(operation.op_id) &&
+        !committed.has(transactions.get(operation.transaction_id) ?? '')
+      ) {
+        committed.delete(operation.op_id)
+        changed = true
+      }
     }
   }
   return committed

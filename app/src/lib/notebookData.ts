@@ -63,6 +63,7 @@ import { showToast } from './toast'
  * in the IndexedDB mirror before any upstream sync runs.
  */
 export interface NotebookSaveStore {
+  getObservedOperationHeads?(): string[]
   save(uri: string, notebook: parser_pb.Notebook): Promise<unknown>
 }
 
@@ -821,6 +822,11 @@ export class NotebookData {
 
   setNotebookStore(notebookStore: NotebookSaveStore | null): void {
     this.notebookStore = notebookStore
+  }
+
+  /** Capture this editor's view, not concurrent changes it has never loaded. */
+  getObservedOperationHeads(): string[] | undefined {
+    return this.notebookStore?.getObservedOperationHeads?.()
   }
 
   setReadOnly(readOnly: boolean): void {

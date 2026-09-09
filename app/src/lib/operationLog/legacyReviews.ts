@@ -1,8 +1,10 @@
+// Read-only V1 compatibility. New code must not write review.* operations.
 import { withCellReviewKeys } from './cellReviewIdentity'
 import type { DiffCommentTarget } from './diffCommentAnchor'
 import { materializeOperationLog } from './materialize'
 import { materializedLogToNotebook } from './notebook'
 import { committedOperationIds, orderOperationSet } from './order'
+import { type Attribution, normalizeAttribution } from './records'
 import {
   computeReviewDiff,
   normalizeReviewCellIds,
@@ -25,12 +27,9 @@ export const REVIEW_OUTCOMES: ReviewOutcome[] = [
   'good_enough',
   'needs_more_work',
 ]
-export type Attribution = {
-  displayName: string
-  kind: 'human' | 'agent' | 'service-account' | 'unknown'
-  source?: 'google-drive'
-  authenticatedPrincipal?: string
-}
+export type { Attribution } from './records'
+
+export { normalizeAttribution } from './records'
 export type CellReviewDecision = {
   cellId: string
   decision: 'accept' | 'undo'
@@ -50,29 +49,7 @@ export interface ReviewRoundRecord {
   cellDecisions?: CellReviewDecision[]
 }
 
-/** Labels are attribution, never authentication or an operation actor override. */
-export function normalizeAttribution(
-  author?: Attribution,
-  preserveIdentity = false
-): Attribution {
-  if (!author?.displayName?.trim())
-    return { displayName: 'unknown', kind: 'unknown' }
-  if (!['human', 'agent', 'service-account', 'unknown'].includes(author.kind))
-    throw new Error('Invalid author kind')
-  return {
-    displayName: author.displayName.trim(),
-    kind: author.kind,
-    ...(preserveIdentity &&
-    author.source === 'google-drive' &&
-    author.authenticatedPrincipal
-      ? {
-          source: 'google-drive' as const,
-          authenticatedPrincipal: author.authenticatedPrincipal,
-        }
-      : {}),
-  }
-}
-
+/** Legacy anchor encoder retained solely for fixtures and migration readers. */
 export function createReviewAnchor(
   reviewId: string,
   cellId?: string,
@@ -290,6 +267,17 @@ export function buildReviewRounds(operations: RunmeOperation[]) {
       if (!round.threadIds.includes(payload.commentId))
         round.threadIds.push(payload.commentId)
     }
+  }
+  // Early V1 writers attached the review directly in the root anchor without
+  // emitting a separate link operation. Keep those conversations discoverable.
+  for (const op of ordered) {
+    if (op.kind !== 'comment.add') continue
+    const payload = op.payload as any
+    if (payload.parent_comment_id) continue
+    const anchor = parseReviewAnchor(payload.annotation?.targets?.[0]?.anchor)
+    const round = anchor ? rounds.get(anchor.reviewId) : undefined
+    if (round && !round.threadIds.includes(payload.comment_id))
+      round.threadIds.push(payload.comment_id)
   }
   return [...new Set(rounds.values())].map((round) => {
     const before = snapshot(round.baseOperationIds)

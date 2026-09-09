@@ -8,7 +8,7 @@ import {
 import type LocalNotebooks from '../../storage/local'
 
 export type ReviewPreview = Awaited<
-  ReturnType<LocalNotebooks['previewNotebookReview']>
+  ReturnType<LocalNotebooks['previewNotebookComparison']>
 >
 
 /** Preview is read-only. Cleanup prevents slow responses replacing newer choices. */
@@ -77,7 +77,7 @@ export function ReviewRevisionPicker({
     setStartId(start.id)
     setEndId(end.id)
     void store
-      .previewNotebookReview(docUri, {
+      .previewNotebookComparison(docUri, {
         startRevisionId: start.id,
         endRevisionId: end.id,
       })
@@ -117,7 +117,7 @@ export function ReviewRevisionPicker({
     if (cellIds === undefined) publish(currentFullPreview)
     else
       void store
-        .previewNotebookReview(docUri, {
+        .previewNotebookComparison(docUri, {
           startRevisionId: currentFullPreview.start.id,
           endRevisionId: currentFullPreview.end.id,
           cellIds,

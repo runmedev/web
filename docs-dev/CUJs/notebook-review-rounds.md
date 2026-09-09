@@ -43,6 +43,10 @@ authentication or Drive upload.
 11. Click X for that cell. Only its changes are undone; unrelated later edits
     and all comments remain. A subsequent editor save must not revive the undone
     content. Attempting to undo a stale cell must fail without modifying it.
+12. Compare two versions of a long Markdown cell (over 400 word/whitespace
+    tokens) with edits near both ends. Only edited words should be red/green;
+    shared headings and paragraphs must remain neutral. Rendered runs must
+    reconstruct both original endpoints exactly, preserving comment offsets.
 
 ## Additional regression coverage
 
@@ -55,6 +59,10 @@ Component/storage tests cover source selection and composer submission, repeated
 words/Unicode, mixed-side and cross-cell rejection, readonly controls, stale
 preview responses, one-root replies, noncontiguous scopes, invalid/empty scopes,
 canonical duplicate/reordered cell sets, and historical snapshots.
+Inline-diff tests additionally cover long single-line cells, large rewrites,
+ordered matching anchors, CRLF/trailing newlines, and exact Unicode offsets.
+Expensive unmatched regions may use coarser replacements, but exceeding a
+cell-length threshold alone must never mark the whole cell replaced.
 
 The comparison panel has no numbered Change buttons. Reusing the existing
 document outline to navigate long diffs is deferred; the section-range controls

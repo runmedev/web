@@ -10,7 +10,7 @@ import {
   createDiffCommentTarget,
   parseDiffCommentTarget,
 } from '../../lib/operationLog/diffCommentAnchor'
-import { createReviewAnchor } from '../../lib/operationLog/reviews'
+import { createReviewAnchor } from '../../lib/operationLog/legacyReviews'
 import { createSuggestionCommentAnchor } from '../../lib/operationLog/suggestions'
 
 afterEach(() => {
@@ -58,6 +58,32 @@ function select(
   document.getSelection()!.addRange(range)
 }
 describe('diff comment selection', () => {
+  it('renders a long-cell edit inline and retains exact comment offsets', () => {
+    const prefix = `## Critical user journey\n\n${'Keep this paragraph.\n'.repeat(100)}\n`
+    const before = `${prefix}Discuss old wording.\n\n### Codex addresses comments\n`
+    const after = `${prefix}Discuss revised wording.\n\n### Codex addresses comments\n`
+    const f = fixture(before, after)
+    const deleted = f.runs.find((run) => run.textContent === 'old')!
+    const inserted = f.runs.find((run) => run.textContent === 'revised')!
+    expect(deleted.className).toContain('line-through')
+    expect(inserted.className).toContain('text-emerald-800')
+    expect(f.runs[0].className).toContain('text-nb-text')
+    expect(f.runs[0].textContent).toContain('## Critical user journey')
+    expect(f.runs.at(-1)!.className).toContain('text-nb-text')
+    expect(f.runs.at(-1)!.textContent).toContain('### Codex addresses comments')
+    for (const [run, source, side] of [
+      [deleted, before, 'base'],
+      [inserted, after, 'head'],
+    ] as const) {
+      select(run.firstChild!, 0, run.firstChild!, run.textContent!.length)
+      const target = captureDiffSelection(f.root, f.row)!
+      expect(target.side).toBe(side)
+      expect(target.sourceRange?.start).toBe(prefix.length + 'Discuss '.length)
+      expect(
+        source.slice(target.sourceRange!.start, target.sourceRange!.end)
+      ).toBe(run.textContent)
+    }
+  })
   it.each([
     ['inserted', undefined, 'abc', 'head'],
     ['deleted', 'abc', undefined, 'base'],

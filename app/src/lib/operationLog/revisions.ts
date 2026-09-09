@@ -3,7 +3,11 @@ import md5 from 'md5'
 import { materializeOperationLog } from './materialize'
 import { materializedLogToNotebook } from './notebook'
 import { committedOperationIds, orderOperationSet } from './order'
+import { type VersionRef, changesNotebook } from './records'
 import type { RunmeOperation } from './types'
+import { ancestorClosure, resolveVersion } from './versions'
+
+export { changesNotebook } from './records'
 
 export interface NotebookRevision {
   id: string
@@ -12,14 +16,7 @@ export interface NotebookRevision {
   lastChangedAt?: string
   name?: string
   description?: string
-}
-
-/** Review/comment/label operations must not create new notebook versions. */
-export function changesNotebook(op: RunmeOperation): boolean {
-  return (
-    /^(cell\.|notebook\.|execution\.)/.test(op.kind) ||
-    op.kind === 'suggestion.review'
-  )
+  version?: VersionRef
 }
 
 /** Compare full change sets, not labels, timestamps, or their display hashes. */
@@ -80,6 +77,22 @@ export function revisionFollows(
   )
 }
 
+/** Resolve a public reference without replacing its exact history with a picker alias. */
+export function notebookRevisionForVersion(
+  operations: RunmeOperation[],
+  version: VersionRef
+): NotebookRevision {
+  const selected = resolveVersion(operations, version)
+  const operationIds = selected.map((op) => op.op_id)
+  return {
+    id: version.kind === 'revision' ? version.revision_id : version.op_id,
+    version,
+    operationIds,
+    changeIds: JSON.parse(revisionKey(selected, operationIds)),
+    lastChangedAt: selected.filter(changesNotebook).at(-1)?.created_at,
+  }
+}
+
 /** Each committed edit/save is selectable. Named and reviewed snapshots remain
  * addressable even if merging a concurrent branch changes the linear history.
  */
@@ -102,19 +115,9 @@ export function buildNotebookRevisions(
       return existing
     }
     const changes = subset.filter(changesNotebook)
-    const transactions = new Set(
-      changes.map((op) => op.transaction_id).filter(Boolean)
-    )
-    const dates = subset
-      .filter(
-        (op) =>
-          changesNotebook(op) ||
-          (op.kind === 'transaction.commit' &&
-            transactions.has((op.payload as any).transaction_id))
-      )
+    const dates = changes
       .map((op) => op.created_at)
       .filter((date) => Number.isFinite(Date.parse(date)))
-      .sort()
     const revision: NotebookRevision = {
       id,
       operationIds: [...ids],
@@ -132,28 +135,45 @@ export function buildNotebookRevisions(
       (changesNotebook(op) && !op.transaction_id) ||
       op.kind === 'transaction.commit'
     ) {
-      const committed = committedOperationIds(prefix)
-      const ids = prefix
-        .filter((candidate) => committed.has(candidate.op_id))
-        .map((candidate) => candidate.op_id)
+      const closure = ancestorClosure(ordered, [op.op_id])
+      const committed = committedOperationIds(closure)
+      const ids = closure.map((candidate) => candidate.op_id)
       // A dependent edit can precede its transaction commit in the total order.
       // Such an intermediate prefix is not a standalone revision.
-      if (
-        prefix.some(
-          (candidate) =>
-            committed.has(candidate.op_id) &&
-            candidate.deps.some((dep) => !committed.has(dep))
-        )
-      )
-        continue
-      add(ids)
+      if (closure.some((candidate) => !committed.has(candidate.op_id))) continue
+      const revision = add(ids)
+      revision.version ??= { kind: 'operation', op_id: op.op_id }
     }
     const payload = op.payload as any
+    if (op.kind === 'revision.checkpoint') {
+      const subset = resolveVersion(ordered, {
+        kind: 'revision',
+        revision_id: op.op_id,
+      })
+      const revision = add(subset.map((op) => op.op_id))
+      // Preserve old display IDs as aliases in callers, while native checkpoints
+      // remain directly addressable by their actual causal record identity.
+      const checkpoint = {
+        ...revision,
+        id: op.op_id,
+        version: { kind: 'revision' as const, revision_id: op.op_id },
+        name: payload.name,
+        description: payload.description,
+      }
+      revisions.set(op.op_id, checkpoint)
+    }
     if (op.kind === 'review.create') {
       add(payload.baseOperationIds)
       add(payload.headOperationIds)
     }
     if (op.kind === 'revision.label') {
+      if (payload.revision?.kind === 'revision') {
+        const revision = revisions.get(payload.revision.revision_id)
+        if (!revision) throw new Error('Revision label target unavailable')
+        revision.name = payload.name
+        revision.description = payload.description
+        continue
+      }
       if (
         typeof payload.name !== 'string' ||
         !payload.name.trim() ||
@@ -183,6 +203,9 @@ export function buildNotebookRevisions(
       revision.description = payload.description
     }
   }
+  // A merged visible head can contain several concurrent causal branches. This
+  // ephemeral picker entry becomes durable only when checkpointed by a writer.
+  add(ordered.map((op) => op.op_id))
   return [...revisions.values()].sort(
     (a, b) =>
       a.changeIds.length - b.changeIds.length || a.id.localeCompare(b.id)

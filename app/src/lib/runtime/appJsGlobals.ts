@@ -1296,7 +1296,7 @@ export function createAppJsGlobals({
     documents: documentsHelpers,
     documentation: documentationHelpers,
     comments: commentsHelpers,
-    reviews: commentsApi.reviews,
+    comparisons: commentsApi.comparisons,
     revisions: commentsApi.revisions,
     suggestions: commentsApi.suggestions,
     notebookDiff: notebookDiffApi,

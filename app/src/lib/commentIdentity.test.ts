@@ -2,7 +2,7 @@ import { afterEach, describe, expect, it, vi } from 'vitest'
 
 import { commentAttributionLabel } from './commentAttribution'
 import { resolveCommentIdentity } from './commentIdentity'
-import { normalizeAttribution } from './operationLog/reviews'
+import { normalizeAttribution } from './operationLog/records'
 
 afterEach(() => vi.unstubAllGlobals())
 

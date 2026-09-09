@@ -122,18 +122,17 @@ const DEFAULT_SANDBOX_ALLOWED_METHODS = [
   'documentation.get',
   'comments.list',
   'comments.add',
-  'reviews.list',
-  'reviews.preview',
+  'comparisons.list',
+  'comparisons.preview',
   'revisions.list',
   'revisions.label',
+  'revisions.checkpoint',
+  'revisions.migrate',
   'revisions.help',
-  'reviews.help',
-  'reviews.create',
-  'reviews.submit',
-  'reviews.comment',
-  'reviews.assess',
-  'reviews.decideCell',
-  'reviews.linkThread',
+  'comparisons.help',
+  'comparisons.comment',
+  'comparisons.assess',
+  'comparisons.decideCell',
   'suggestions.list',
   'comments.parseAnchor',
   'comments.resolveAnchor',
@@ -443,20 +442,19 @@ export function buildSandboxSrcDoc(options: {
             consoleProxy.log("comments.list includes sync.status; .runme writes append to the operation log, while Drive writes reconcile asynchronously");
           },
         };
-        const reviews = {
-          list: (args) => hostCall("reviews.list", [args]),
-          preview: (args) => hostCall("reviews.preview", [args]),
-          create: (args) => hostCall("reviews.create", [args]),
-          submit: (args) => hostCall("reviews.submit", [args]),
-          comment: (args) => hostCall("reviews.comment", [args]),
-          assess: (args) => hostCall("reviews.assess", [args]),
-          decideCell: (args) => hostCall("reviews.decideCell", [args]),
-          linkThread: (args) => hostCall("reviews.linkThread", [args]),
-          help: () => hostCall("reviews.help", []),
+        const comparisons = {
+          list: (args) => hostCall("comparisons.list", [args]),
+          preview: (args) => hostCall("comparisons.preview", [args]),
+          comment: (args) => hostCall("comparisons.comment", [args]),
+          assess: (args) => hostCall("comparisons.assess", [args]),
+          decideCell: (args) => hostCall("comparisons.decideCell", [args]),
+          help: () => hostCall("comparisons.help", []),
         };
         const revisions = {
           list: (args) => hostCall("revisions.list", [args]),
           label: (args) => hostCall("revisions.label", [args]),
+          checkpoint: (args) => hostCall("revisions.checkpoint", [args]),
+          migrate: (args) => hostCall("revisions.migrate", [args]),
           help: () => hostCall("revisions.help", []),
         };
         const suggestions = { list: (args) => hostCall("suggestions.list", [args]) };
@@ -618,7 +616,7 @@ export function buildSandboxSrcDoc(options: {
               "documents",
               "documentation",
               "comments",
-              "reviews",
+              "comparisons",
               "revisions",
               "suggestions",
               "notebookDiff",
@@ -630,7 +628,7 @@ export function buildSandboxSrcDoc(options: {
               "help",
               '"use strict"; return (async () => {\\n' + code + '\\n})();',
             );
-            await runner(consoleProxy, runme, tour, ui, opfs, net, embed, notebooks, documents, documentation, comments, reviews, revisions, suggestions, notebookDiff, app, runmeRunners, explorer, credentials, drive, help);
+            await runner(consoleProxy, runme, tour, ui, opfs, net, embed, notebooks, documents, documentation, comments, comparisons, revisions, suggestions, notebookDiff, app, runmeRunners, explorer, credentials, drive, help);
           } catch (error) {
             exitCode = 1;
             post({ type: "stderr", data: String(error) + "\\n" });

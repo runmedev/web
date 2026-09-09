@@ -8,7 +8,8 @@ import {
 } from './diffCommentAnchor'
 import { materializeOperationLog } from './materialize'
 import { materializedLogToNotebook } from './notebook'
-import { type Attribution, createReviewAnchor } from './reviews'
+import type { Anchor, Attribution, ComparisonContext } from './records'
+import { codePointRange, snapshotHeads } from './versions'
 
 /** Public comparison identity: browsing is read-only; feedback freezes this scope. */
 export type ComparisonSelection = {
@@ -70,7 +71,7 @@ export async function decideComparisonCell(
         'Execution cancelled because a cell change is being undone.\n'
       )
     await notebook?.flushPendingPersist?.()
-    const preview = await store.previewNotebookReview(uri, input)
+    const preview = await store.previewNotebookComparison(uri, input)
     if (
       !preview.diff.cells.some(
         (row) =>
@@ -79,9 +80,15 @@ export async function decideComparisonCell(
       )
     )
       throw new Error('Changed cell not found in comparison scope')
-    const record = await store.createNotebookReview(uri, input)
-    await store.decideNotebookReviewCell(uri, {
-      reviewId: record.id,
+    const comparison = await freezeComparison(store, uri, input)
+    await store.decideNotebookComparisonCell(uri, {
+      startRevisionId:
+        comparison.start.kind === 'revision'
+          ? comparison.start.revision_id
+          : '',
+      endRevisionId:
+        comparison.end.kind === 'revision' ? comparison.end.revision_id : '',
+      cellIds: input.cellIds,
       cellId: input.cellId,
       decision: input.decision,
       author: input.author,
@@ -104,7 +111,7 @@ export async function decideComparisonCell(
     }
     reloaded = true
     return {
-      comparisonId: record.id,
+      comparison,
       cellId: input.cellId,
       decision: input.decision,
     }
@@ -143,7 +150,7 @@ export async function commentOnComparison(
     endRevisionId: input.endRevisionId,
     cellIds: input.cellIds,
   }
-  const preview = await store.previewNotebookReview(uri, selection)
+  const preview = await store.previewNotebookComparison(uri, selection)
   const target = input.cellId
     ? createDiffCommentTarget(
         preview.diff.cells,
@@ -152,23 +159,67 @@ export async function commentOnComparison(
         input.sourceRange
       )
     : undefined
-  const record = await store.createNotebookReview(uri, {
-    ...selection,
-    author: input.author,
-  })
-  return store.addOperationLogComment(uri, {
+  const comparison = await freezeComparison(store, uri, selection)
+  const version = target?.side === 'base' ? comparison.start : comparison.end
+  const source = (
+    target?.side === 'base' ? preview.before : preview.after
+  ).cells.find((c) => c.refId === input.cellId)?.value
+  const anchors: Anchor[] = target
+    ? [
+        {
+          kind: 'cell',
+          cell_id: target.cellId,
+          version,
+          surface: 'source',
+          ...(input.sourceRange
+            ? {
+                range: codePointRange(
+                  source!,
+                  input.sourceRange.start,
+                  input.sourceRange.end
+                ),
+              }
+            : {}),
+        },
+      ]
+    : [
+        { kind: 'notebook', version: comparison.start },
+        { kind: 'notebook', version: comparison.end },
+      ]
+  return store.addAnchoredComment(uri, {
     content: input.content,
     author: input.author,
-    anchor: createReviewAnchor(
-      record.id,
-      target?.cellId,
-      target?.quote,
-      target
-    ),
+    anchors,
+    comparison,
   })
 }
 
-/** An assessment records feedback only; it never undoes edits or resolves threads. */
+/** Freeze only when feedback is written. Picker state itself never writes. */
+async function freezeComparison(
+  store: LocalNotebooks,
+  uri: string,
+  input: ComparisonSelection
+): Promise<ComparisonContext> {
+  const preview = await store.previewNotebookComparison(uri, input)
+  const operations =
+    preview.start.version?.kind === 'revision' &&
+    preview.end.version?.kind === 'revision'
+      ? []
+      : parseOperationLog(await store.loadContent(uri)).operations
+  const capture = async (revision: typeof preview.start) =>
+    revision.version?.kind === 'revision'
+      ? revision.version
+      : store.checkpointNotebookRevision(uri, {
+          snapshot_heads: snapshotHeads(operations, revision.operationIds),
+        })
+  return {
+    start: await capture(preview.start),
+    end: await capture(preview.end),
+    ...(preview.cellIds ? { cell_ids: preview.cellIds } : {}),
+  }
+}
+
+/** Assessments are messages, not mutable review submissions. */
 export async function assessComparison(
   store: LocalNotebooks,
   uri: string,
@@ -176,16 +227,16 @@ export async function assessComparison(
 ) {
   if (!['good_enough', 'needs_more_work'].includes(input.outcome))
     throw new Error('Invalid comparison assessment')
-  const record = await store.createNotebookReview(uri, {
-    startRevisionId: input.startRevisionId,
-    endRevisionId: input.endRevisionId,
-    cellIds: input.cellIds,
+  const comparison = await freezeComparison(store, uri, input)
+  return store.addAnchoredComment(uri, {
+    content:
+      input.outcome === 'good_enough' ? 'Good Enough' : 'Needs More Work',
     author: input.author,
+    comparison,
+    anchors: [
+      { kind: 'notebook', version: comparison.start },
+      { kind: 'notebook', version: comparison.end },
+    ],
+    assessment: { kind: 'scope', outcome: input.outcome },
   })
-  await store.submitNotebookReview(uri, {
-    reviewId: record.id,
-    outcome: input.outcome,
-    author: input.author,
-  })
-  return { comparisonId: record.id, outcome: input.outcome }
 }
