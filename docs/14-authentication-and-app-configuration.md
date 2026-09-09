@@ -35,6 +35,23 @@ oidc.getStatus()
 
 ## Application login UI
 
+For Google OIDC with no client secret, browser login uses Google's implicit
+`id_token token` response. Runme verifies the signed ID token and callback before
+storing credentials. This flow has no refresh token; sign in again when the
+tokens expire. Other OIDC providers and configurations with a client secret
+continue to use authorization code with PKCE.
+
+Returning users of the shared development client are signed out once while
+Runme removes its previously stored client secret and credentials. Sign in
+again to use the browser flow. Custom OIDC providers and other client IDs keep
+their saved configuration.
+
+Google Drive authentication is configured separately. Never put client secrets
+or private keys in an app-config YAML served as a public asset. Deleting a secret
+from the current file does not revoke copies in Git history.
+
+See [Google's OIDC flow documentation](https://developers.google.com/identity/openid-connect/openid-connect#authenticationuriparameters).
+
 Open **Authentication Settings** from the key icon in the left navigation. The
 panel groups the settings and actions for:
 

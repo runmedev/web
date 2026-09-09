@@ -826,7 +826,7 @@ describe('driveTransfer', () => {
         'metadata-revision'
       )
     })
-    const saveContentIfVersion = vi
+    const saveContentAfterVersionCheck = vi
       .fn()
       .mockImplementation(async (_uri, content) => {
         remoteContent = content
@@ -849,7 +849,7 @@ describe('driveTransfer', () => {
     appState.setDriveNotebookStore({
       findByCreateOperation,
       createContent,
-      saveContentIfVersion,
+      saveContentAfterVersionCheck,
       getVersionMetadata,
       loadContent,
       markCreateOperationComplete,
@@ -871,7 +871,7 @@ describe('driveTransfer', () => {
 
     expect(result.fileId).toBe('partial123')
     expect(createContent).toHaveBeenCalledTimes(1)
-    expect(saveContentIfVersion).toHaveBeenCalledWith(
+    expect(saveContentAfterVersionCheck).toHaveBeenCalledWith(
       remoteFile.uri,
       expect.stringContaining('Recovered'),
       'application/json',
@@ -902,7 +902,7 @@ describe('driveTransfer', () => {
     }
     let metadataCreated = false
     const markCreateOperationComplete = vi.fn()
-    const saveContentIfVersion = vi.fn()
+    const saveContentAfterVersionCheck = vi.fn()
     appState.setDriveNotebookStore({
       findByCreateOperation: vi
         .fn()
@@ -922,7 +922,7 @@ describe('driveTransfer', () => {
         appProperties: {},
       }),
       loadContent: vi.fn().mockResolvedValue(''),
-      saveContentIfVersion,
+      saveContentAfterVersionCheck,
       markCreateOperationComplete,
     } as any)
 
@@ -935,7 +935,7 @@ describe('driveTransfer', () => {
     await expect(createOnce()).rejects.toThrow(
       'changed before creation completed'
     )
-    expect(saveContentIfVersion).not.toHaveBeenCalled()
+    expect(saveContentAfterVersionCheck).not.toHaveBeenCalled()
     expect(markCreateOperationComplete).not.toHaveBeenCalled()
   })
 

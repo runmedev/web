@@ -38,6 +38,7 @@
     "d3": "^7.9.0",
     "dexie": "3.2.4",
     "dexie-react-hooks": "4.2.0",
+    "jose": "^6.2.10",
     "jwt-decode": "^4.0.0",
     "md5": "2.3.0",
     "oauth4webapi": "^2.4.0",

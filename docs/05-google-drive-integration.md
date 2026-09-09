@@ -32,6 +32,40 @@ Benefits:
 - sync can resume after auth or connectivity recovery,
 - the UI can surface pending or error states explicitly.
 
+## Concurrent edits and sync
+
+Runme uses Google Drive API v3. Before replacing notebook content, the client
+checks the upstream version or checksum it read. This check and the upload are
+separate requests; they do not provide an atomic write condition.
+
+- `.json` and `.ipynb` notebooks keep the existing checksum check and conflict
+  workflow. They do not automatically merge concurrent snapshots.
+- `.runme` notebooks merge operations into the local journal, recheck Drive,
+  upload, then inspect all pages of revision history. If another writer saved
+  between our check and upload, its overwritten revision can contain operations
+  missing from the current head. Runme reads that revision, merges its operations
+  locally, and uploads the union. It also checks for writes after its upload.
+
+Recovery progress is stored locally and resumes after an error or reload. Sync
+reports success only after the observed history is reconciled and the head is
+rechecked. Retries are bounded; active contention can leave sync pending.
+
+Google permits downloading historical blob revisions only after they are
+marked `keepForever`. Runme retains only revisions it needs to download for
+recovery. Retained revisions count toward storage and Drive limits them to 200
+per file; Runme never deletes history to free slots. If retention or download
+fails, check edit permission and the retention limit. Local operations remain
+safe and sync reports the error. Missing history requires restoring a saved
+revision or reconciling another replica before retrying.
+
+This is best-effort convergence. Drive can purge or omit revisions, and a
+client cannot detect a write that disappears before it ever observes the
+revision. Recovery starts at the current head when a local replica first
+establishes its history checkpoint; it does not repair all older lost writes.
+
+See Google's [file update reference](https://developers.google.com/workspace/drive/api/reference/rest/v3/files/update)
+and [revision retention guide](https://developers.google.com/workspace/drive/api/guides/manage-revisions).
+
 ## Common user actions
 
 - authenticate Drive access,

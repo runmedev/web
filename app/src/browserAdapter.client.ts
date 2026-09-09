@@ -3,13 +3,20 @@ import { useEffect, useState } from 'react'
 import * as oauth from 'oauth4webapi'
 import pkceChallenge from 'pkce-challenge'
 
+import { readAppLoginConfiguration } from './auth/appLoginConfiguration'
+import {
+  beginGoogleImplicitLogin,
+  clearGoogleImplicitLogin,
+  finishGoogleImplicitLogin,
+  hasGoogleImplicitLogin,
+  usesGoogleImplicitLogin,
+} from './auth/googleImplicitLogin'
 import {
   IMPERSONATED_SERVICE_ACCOUNT_CREDENTIAL_CHANGED_EVENT,
   IMPERSONATED_SERVICE_ACCOUNT_CREDENTIAL_STORAGE_KEY,
   clearImpersonatedServiceAccountCredential,
   readImpersonatedServiceAccountCredential,
 } from './auth/impersonatedServiceAccountCredentialStore'
-import { readAppLoginConfiguration } from './auth/appLoginConfiguration'
 import { getOidcConfig } from './auth/oidcConfig'
 import type {
   OAuthTokenEndpointResponse,
@@ -199,6 +206,8 @@ async function loadDiscovery(): Promise<DiscoveryDocument> {
 
 export class BrowserAuthAdapter {
   private readonly listeners = new Set<AuthListener>()
+  private callbackInFlight: Promise<void> | null = null
+  private authOperationVersion = 0
   // The adapter keeps a current-tab copy for immediate subscribers. The
   // canonical, short-lived service-account token is stored in the versioned
   // impersonated-credential bundle; human OAuth credentials are never copied
@@ -206,11 +215,34 @@ export class BrowserAuthAdapter {
   private ephemeralTokenResponse: StoredTokenResponse | null = null
 
   /**
-   * Handles the OAuth callback by exchanging the authorization code for tokens,
-   * removing PKCE state from localStorage, and persisting the token response.
+   * Share callback processing across repeated route effects so one-time login
+   * state is consumed once, including while Google's signing keys are loading.
    */
-  handleCallback = async () => {
+  handleCallback = (): Promise<void> => {
+    if (!this.callbackInFlight) {
+      this.callbackInFlight = this.processCallback().finally(() => {
+        this.callbackInFlight = null
+      })
+    }
+    return this.callbackInFlight
+  }
+
+  /** Validate the selected OAuth flow and persist only its verified credentials. */
+  private processCallback = async () => {
+    const operationVersion = this.authOperationVersion
     const callbackUrl = new URL(window.location.href)
+    if (hasGoogleImplicitLogin()) {
+      const token = await finishGoogleImplicitLogin(
+        callbackUrl,
+        getOidcConfig()
+      )
+      if (operationVersion !== this.authOperationVersion) {
+        throw new Error('Login was superseded by another authentication action')
+      }
+      // Implicit login cannot refresh; discard any previous identity's refresh token.
+      this.persist(token, true)
+      return
+    }
     const callbackParams = callbackUrl.searchParams
     const codeVerifier = window.localStorage.getItem(PKCE_CODE_VERIFIER_KEY)
     const storedState = window.localStorage.getItem(PKCE_STATE_KEY)
@@ -380,6 +412,9 @@ export class BrowserAuthAdapter {
         scopeCount: summarizeScope(result.scope ?? '').length,
       },
     })
+    if (operationVersion !== this.authOperationVersion) {
+      throw new Error('Login was superseded by another authentication action')
+    }
     this.persist(result)
   }
 
@@ -388,7 +423,16 @@ export class BrowserAuthAdapter {
    * Stores PKCE code verifier and state in localStorage.
    */
   loginWithRedirect = async (options?: { loginHint?: string }) => {
+    this.authOperationVersion += 1
     const config = getOidcConfig()
+    if (usesGoogleImplicitLogin(config)) {
+      window.location.href = beginGoogleImplicitLogin(
+        config,
+        options?.loginHint
+      )
+      return
+    }
+    clearGoogleImplicitLogin()
     const discovery = await loadDiscovery()
     const { code_verifier, code_challenge } = await pkceChallenge()
     const state = crypto.randomUUID()
@@ -444,6 +488,8 @@ export class BrowserAuthAdapter {
    * Logs out the user by removing the token from localStorage and notifying listeners.
    */
   logout = () => {
+    this.authOperationVersion += 1
+    clearGoogleImplicitLogin()
     this.ephemeralTokenResponse = null
     window.localStorage.removeItem(STORAGE_KEY)
     clearImpersonatedServiceAccountCredential(['app'])
@@ -472,6 +518,8 @@ export class BrowserAuthAdapter {
     }
     // Switching effective identity must also remove any persisted human OIDC
     // refresh token so expiry cannot silently fall back to the human account.
+    this.authOperationVersion += 1
+    clearGoogleImplicitLogin()
     window.localStorage.removeItem(STORAGE_KEY)
     this.ephemeralTokenResponse = {
       access_token: normalizedToken,
@@ -515,6 +563,11 @@ export class BrowserAuthAdapter {
   refresh = async () => {
     const tokenResponse = this.getTokenResponse()
     if (!tokenResponse?.refresh_token) {
+      if (tokenResponse && buildSimpleAuth(tokenResponse).isExpired()) {
+        // Implicit credentials cannot renew; notify the UI to offer sign-in again.
+        this.logout()
+        return
+      }
       appLogger.warn(
         'OIDC refresh skipped because no refresh token is available',
         {
@@ -669,11 +722,14 @@ export class BrowserAuthAdapter {
     return authData ? (JSON.parse(authData) as StoredTokenResponse) : null
   }
 
-  private persist(tokenResponse: OAuthTokenEndpointResponse) {
+  private persist(
+    tokenResponse: OAuthTokenEndpointResponse,
+    replaceExisting = false
+  ) {
     this.ephemeralTokenResponse = null
     const stored = normalizeTokenResponse(
       tokenResponse,
-      this.getPersistedTokenResponse()
+      replaceExisting ? null : this.getPersistedTokenResponse()
     )
     window.localStorage.setItem(STORAGE_KEY, JSON.stringify(stored))
     const simpleAuth = this.simpleAuth

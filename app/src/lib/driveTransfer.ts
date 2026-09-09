@@ -773,7 +773,7 @@ export async function saveNotebookAsDriveCopy(
               `IDEMPOTENCY_CONFLICT: Drive notebook changed before creation completed: ${remoteUri}`
             )
           }
-          const repaired = await driveStore.saveContentIfVersion(
+          const repaired = await driveStore.saveContentAfterVersionCheck(
             remoteUri,
             notebookJson,
             mimeType,

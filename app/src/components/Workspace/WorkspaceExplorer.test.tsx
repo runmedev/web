@@ -1448,6 +1448,100 @@ describe('WorkspaceExplorer current document handling', () => {
     expect(mocks.setCurrentDoc).toHaveBeenCalledWith('local://file/excalidraw')
   })
 
+  it.each([
+    { x: 1000, y: 750, width: 220, height: 620, left: 796, top: 140 },
+    { x: 24, y: 32, width: 220, height: 300, left: 24, top: 32 },
+  ])('positions the rendered menu inside the viewport: $x, $y', async ({ x, y, width, height, left, top }) => {
+    vi.stubGlobal('innerWidth', 1024)
+    vi.stubGlobal('innerHeight', 768)
+    const rect = vi.spyOn(HTMLElement.prototype, 'getBoundingClientRect')
+      .mockReturnValue({ width, height } as DOMRect)
+    mocks.workspaceItems = ['local://folder/drive']
+    mocks.store.getMetadata.mockImplementation(async (uri: string) => {
+      if (uri === 'local://folder/drive') {
+        return {
+          uri,
+          name: 'Drive Root',
+          type: NotebookStoreItemType.Folder,
+          children: ['local://file/untitled'],
+          remoteUri: 'https://drive.google.com/drive/folders/drive-root',
+          parents: [],
+        }
+      }
+      if (uri === 'local://file/untitled') {
+        return {
+          uri,
+          name: 'untitled.json',
+          type: NotebookStoreItemType.File,
+          children: [],
+          remoteUri: 'https://drive.google.com/file/d/file123/view',
+          parents: ['local://folder/drive'],
+        }
+      }
+      return null
+    })
+    const { unmount } = render(<WorkspaceExplorer />)
+    try {
+      await screen.findByText('Drive Root')
+      fireEvent.click(screen.getAllByRole('button', { name: 'Collapse folder' })[0])
+      fireEvent.contextMenu(await screen.findByText('untitled.json'), { clientX: x, clientY: y })
+      const menu = document.getElementById('workspace-explorer-context-menu')!
+      expect(menu.style.left).toBe(`${left}px`)
+      expect(menu.style.top).toBe(`${top}px`)
+      expect(screen.getByRole('button', { name: 'Move to Google Drive Trash' })).toBeTruthy()
+
+      // A shorter viewport must reposition the already-open menu. CSS limits
+      // its rendered height and lets the user scroll to the final actions.
+      vi.stubGlobal('innerHeight', 480)
+      rect.mockReturnValue({ width, height: 464 } as DOMRect)
+      fireEvent(window, new Event('resize'))
+      expect(menu.style.top).toBe('8px')
+      expect(menu.style.maxHeight).toBe('calc(100vh - 16px)')
+      expect(menu.style.maxWidth).toBe('calc(100vw - 16px)')
+      expect(menu.style.minWidth).toBe('0')
+      expect(menu.style.overflowY).toBe('auto')
+    } finally {
+      unmount()
+      rect.mockRestore()
+      vi.unstubAllGlobals()
+    }
+  })
+
+  it('remeasures menu content and stops observing when dismissed', async () => {
+    vi.stubGlobal('innerWidth', 1024)
+    vi.stubGlobal('innerHeight', 768)
+    const observers: { callback: () => void; element?: Element; disconnect: ReturnType<typeof vi.fn> }[] = []
+    vi.stubGlobal('ResizeObserver', class {
+      entry: typeof observers[number]
+      constructor(callback: () => void) {
+        this.entry = { callback, disconnect: vi.fn() }
+        observers.push(this.entry)
+      }
+      observe(element: Element) { this.entry.element = element }
+      unobserve() {}
+      disconnect() { this.entry.disconnect() }
+    })
+    const rect = vi.spyOn(HTMLElement.prototype, 'getBoundingClientRect')
+      .mockReturnValue({ width: 220, height: 300 } as DOMRect)
+    const { unmount } = render(<WorkspaceExplorer />)
+    try {
+      fireEvent.contextMenu(await screen.findByText('Local Notebooks'), { clientX: 900, clientY: 700 })
+      const menu = document.getElementById('workspace-explorer-context-menu')!
+      expect(menu.style.top).toBe('460px')
+      const observer = observers.find(entry => entry.element === menu)!
+      rect.mockReturnValue({ width: 220, height: 600 } as DOMRect)
+      act(() => observer.callback())
+      expect(menu.style.top).toBe('160px')
+      fireEvent.click(document.getElementById('workspace-explorer-box')!)
+      expect(document.getElementById('workspace-explorer-context-menu')).toBeNull()
+      expect(observer.disconnect).toHaveBeenCalledOnce()
+    } finally {
+      unmount()
+      rect.mockRestore()
+      vi.unstubAllGlobals()
+    }
+  })
+
   it('moves a Drive-backed file to Google Drive trash from the context menu after confirmation', async () => {
     mocks.workspaceItems = ['local://folder/drive']
     mocks.store.getMetadata.mockImplementation(async (uri: string) => {
