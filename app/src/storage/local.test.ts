@@ -1777,7 +1777,7 @@ describe('LocalNotebooks operation-log storage', () => {
       getMetadata: vi.fn(async () => ({ name: 'review-cuj.runme' })),
       getVersionMetadata: vi.fn(async () => remoteVersion),
       loadContent: vi.fn(async () => remoteDocument),
-      saveContentIfVersion: vi.fn(
+      saveContentAfterVersionCheck: vi.fn(
         async (
           _uri: string,
           content: string,
@@ -1791,7 +1791,7 @@ describe('LocalNotebooks operation-log storage', () => {
             headRevisionId: '2',
             version: '2',
           }
-          return true
+          return remoteVersion
         }
       ),
     }
@@ -1802,7 +1802,7 @@ describe('LocalNotebooks operation-log storage', () => {
       remoteId: 'https://drive.google.com/file/d/review-cuj/view',
     })
     await writer.reconcileDriveNotebook(uri)
-    expect(drive.saveContentIfVersion).toHaveBeenCalledOnce()
+    expect(drive.saveContentAfterVersionCheck).toHaveBeenCalledOnce()
     expect(
       buildComparisons(parseOperationLog(remoteDocument).operations)
     ).toEqual(rounds)
