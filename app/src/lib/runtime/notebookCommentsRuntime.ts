@@ -50,6 +50,7 @@ export type CommentMutationInput = {
 }
 
 export type CommentReplyInput = CommentMutationInput & {
+  anchors?: Anchor[]
   parent_comment_id?: string
   content: string
   author?: Attribution
@@ -182,6 +183,8 @@ export async function listNotebookComments(
     operationLog,
     notebookUri,
   } = await resolveCommentsContext(dependencies, input.target)
+  if (operationLog && !input.target)
+    throw new Error('An explicit notebook target is required')
   const comments = operationLog
     ? await dependencies
         .resolveLocalNotebooks()!
@@ -397,13 +400,14 @@ export function createNotebookCommentsRuntimeApi(
   }
   const revisions = {
     help: () =>
-      'revisions.list({target:{uri}}); revisions.checkpoint({target,snapshot_heads?,name?,description?,author?}) freezes current committed head by default; revisions.label({target,revision,name,description?,author?}) takes a VersionRef (revisionId is a picker adapter); revisions.migrate({target,name?}) explicitly exports a separate V2 local copy or returns migration warnings. lastChangedAt is the last content change, not label time.',
+      'revisions.list({target:{uri}}); revisions.create({target,snapshot_heads?,name?,description?,author?}) returns a revision VersionRef for the selected immutable snapshot (current committed head by default), without changing notebook content; revisions.label({target,revision,name,description?,author?}) labels an existing VersionRef (revisionId is a picker adapter) without changing its snapshot; revisions.migrate({target,name?}) explicitly exports a separate V2 local copy or returns migration warnings. lastChangedAt is the last content change, not label time.',
     list: async (input: { target: unknown }) => {
       const c = await operationContext(input.target)
       await c.notebookData.flushPendingPersist?.()
       return c.store.listNotebookRevisions(c.notebookUri)
     },
-    checkpoint: async (input: {
+    // The public API creates a revision; checkpointing is the storage mechanism.
+    create: async (input: {
       target: unknown
       snapshot_heads?: string[]
       name?: string
@@ -486,12 +490,17 @@ export function createNotebookCommentsRuntimeApi(
       } = await resolveCommentsContext(dependencies, input.target)
       assertWritable(notebookData)
       if (operationLog) {
+        if (!input.target)
+          throw new Error('An explicit notebook target is required')
         return dependencies
           .resolveLocalNotebooks()!
           .replyToOperationLogComment(notebookUri, commentId, input.content, {
             author: normalizeAttribution(input.author),
+            ...(input.anchors ? { anchors: input.anchors } : {}),
           })
       }
+      if (input.anchors)
+        throw new Error('Version-bound reply anchors require a .runme notebook')
       if (input.author !== undefined)
         throw new Error(
           'Native Google Drive comment authors cannot be overridden'
@@ -525,6 +534,8 @@ export function createNotebookCommentsRuntimeApi(
       } = await resolveCommentsContext(dependencies, input.target)
       assertWritable(notebookData)
       if (operationLog) {
+        if (!input.target)
+          throw new Error('An explicit notebook target is required')
         return dependencies
           .resolveLocalNotebooks()!
           .setOperationLogCommentResolved(notebookUri, commentId, true)
@@ -556,6 +567,8 @@ export function createNotebookCommentsRuntimeApi(
       } = await resolveCommentsContext(dependencies, input.target)
       assertWritable(notebookData)
       if (operationLog) {
+        if (!input.target)
+          throw new Error('An explicit notebook target is required')
         return dependencies
           .resolveLocalNotebooks()!
           .setOperationLogCommentResolved(notebookUri, commentId, false)
@@ -576,14 +589,14 @@ export function createNotebookCommentsRuntimeApi(
     },
     help: () =>
       [
-        'await comments.list({ target?, status? })',
+        'await comments.list({ target, status? })',
         'await comments.add({ target, content, anchors?, comparison?, cellId?, author? }); anchors bind cell IDs and Unicode-code-point source ranges to operation/revision VersionRefs; no stored quote.',
         'author: { displayName, kind: human|agent|service-account|unknown }; omitted/blank API author is unknown, never the signed-in human',
         'comments.parseAnchor(anchor)',
         'comments.resolveAnchor({ anchor, source })',
-        'await comments.reply({ target?, parent_comment_id, content, author? }); commentId remains a UI adapter',
-        'await comments.resolve({ target?, thread_id })',
-        'await comments.reopen({ target?, thread_id })',
+        'await comments.reply({ target, parent_comment_id, content, anchors?, author? }); optional anchors add historical context; commentId remains a UI adapter',
+        'await comments.resolve({ target, thread_id })',
+        'await comments.reopen({ target, thread_id })',
         'comments.list includes sync.status; .runme mutations append to the operation log, while Drive mutations persist locally and reconcile asynchronously',
       ].join('\n'),
   }

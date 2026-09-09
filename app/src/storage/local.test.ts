@@ -953,6 +953,43 @@ describe('LocalNotebooks operation-log storage', () => {
     ).toHaveLength(2)
   })
 
+  it('stores a minimal snapshot frontier and reuses equivalent explicit checkpoints', async () => {
+    const actor = vi
+      .spyOn(actorIdentity, 'getNotebookActorId')
+      .mockResolvedValue('actor_frontier')
+    const store = createTestStore(
+      {},
+      { operationLogStorage: new MemoryOperationLogStorage() }
+    )
+    await store.folders.put({
+      id: LOCAL_FOLDER_URI,
+      name: 'Local Notebooks',
+      remoteId: '',
+      children: [],
+      lastSynced: '',
+    })
+    const created = await store.create(LOCAL_FOLDER_URI, 'frontier.runme')
+    const first = await store.checkpointNotebookRevision(created.uri)
+    const second = await store.checkpointNotebookRevision(created.uri, {
+      snapshot_heads: [first.revision_id],
+    })
+    const third = await store.checkpointNotebookRevision(created.uri, {
+      snapshot_heads: [first.revision_id, second.revision_id],
+    })
+    const operations = parseOperationLog(
+      await store.loadContent(created.uri)
+    ).operations
+    expect(
+      operations.find((op) => op.op_id === third.revision_id)?.payload
+    ).toMatchObject({ snapshot_heads: [second.revision_id] })
+    await expect(
+      store.checkpointNotebookRevision(created.uri, {
+        snapshot_heads: [second.revision_id, first.revision_id],
+      })
+    ).resolves.toEqual(third)
+    actor.mockRestore()
+  })
+
   it('allocates unique actor sequences for concurrent editor and comment writes', async () => {
     const operationLogStorage = new MemoryOperationLogStorage()
     const store = createTestStore({}, { operationLogStorage })

@@ -1495,8 +1495,16 @@ export class LocalNotebooks extends Dexie {
       if (!comment.parent_comment_id) continue
       const replies = repliesByThread.get(comment.thread_id) ?? []
       const operation = operations.get(comment.operation_id)
+      const replyTarget = comment.payload.annotation.targets[0]
       replies.push({
         id: comment.comment_id,
+        anchor:
+          replyTarget &&
+          typeof replyTarget === 'object' &&
+          !Array.isArray(replyTarget) &&
+          typeof replyTarget.anchor === 'string'
+            ? replyTarget.anchor
+            : undefined,
         content: comment.payload.body.value,
         createdTime: operation?.created_at,
         modifiedTime: operation?.created_at,
@@ -1625,7 +1633,7 @@ export class LocalNotebooks extends Dexie {
     uri: string,
     parentCommentId: string,
     content: string,
-    options: { actorId?: string; author?: Attribution } = {}
+    options: { actorId?: string; author?: Attribution; anchors?: Anchor[] } = {}
   ): Promise<DriveComment> {
     const { materialized } = await this.readMaterializedOperationLog(uri)
     const parent = materialized.comments.find(
@@ -1646,6 +1654,7 @@ export class LocalNotebooks extends Dexie {
           record_type: 'runme.comment',
           thread_id: parent.thread_id,
           parent_comment_id: parentCommentId,
+          ...(options.anchors ? { anchors: options.anchors } : {}),
           author,
           body: { format: 'text/markdown', value: content },
         }
@@ -1654,6 +1663,8 @@ export class LocalNotebooks extends Dexie {
         (c) => c.id === parent.thread_id
       )!
     }
+    if (options.anchors)
+      throw new Error('Version-bound reply anchors require a V2 notebook')
     const payload: CommentReplyPayload = {
       comment_id: crypto.randomUUID(),
       thread_id: parent.thread_id,
@@ -1834,7 +1845,14 @@ export class LocalNotebooks extends Dexie {
       input.description === undefined
     ) {
       const { parsed } = await this.readMaterializedOperationLog(uri)
-      const key = JSON.stringify([...input.snapshot_heads].sort())
+      const key = JSON.stringify(
+        snapshotHeads(
+          parsed.operations,
+          ancestorClosure(parsed.operations, input.snapshot_heads).map(
+            (op) => op.op_id
+          )
+        ).sort()
+      )
       const existing = parsed.operations.find(
         (op) =>
           op.kind === 'revision.checkpoint' &&
@@ -1847,8 +1865,14 @@ export class LocalNotebooks extends Dexie {
       uri,
       (operations, envelope) => {
         const committed = captureReviewRevision(operations)
-        const heads =
-          input.snapshot_heads ?? snapshotHeads(operations, committed)
+        const heads = snapshotHeads(
+          operations,
+          input.snapshot_heads
+            ? ancestorClosure(operations, input.snapshot_heads).map(
+                (op) => op.op_id
+              )
+            : committed
+        )
         const { kind: _kind, payload: _payload, ...causal } = envelope
         return {
           ...causal,

@@ -6,6 +6,7 @@ import {
   validateOperation,
 } from './codec'
 import { previewComparison } from './comparisons'
+import { materializeOperationLog } from './materialize'
 import { createRunmeOperation } from './mutations'
 import { committedOperationIds } from './order'
 import {
@@ -87,6 +88,74 @@ function comment(ops: RunmeOperation[]): CommentRecord {
 }
 
 describe('first-class V2 records', () => {
+  it('lets a reply cite a later version without changing its comparison endpoints', () => {
+    const a = seed()
+    const b = createRunmeOperation({
+      actorId: 'a',
+      actorSequence: 2,
+      dependencies: [a.op_id],
+      knownOperations: [a],
+      kind: 'cell.update',
+      payload: {
+        cell_id: 'cell',
+        cell: {
+          kind: 'markup',
+          language_id: 'markdown',
+          value: 'First response',
+          metadata: {},
+        },
+      },
+    })
+    const start = { kind: 'operation' as const, op_id: a.op_id },
+      end = { kind: 'operation' as const, op_id: b.op_id }
+    const anchor = {
+      kind: 'cell' as const,
+      cell_id: 'cell',
+      surface: 'source' as const,
+      version: end,
+    }
+    const root = projectRecord({
+      ...comment([a, b]),
+      anchors: [anchor],
+      comparison: { start, end },
+    })
+    const next = createRunmeOperation({
+      actorId: 'a',
+      actorSequence: 3,
+      dependencies: [root.op_id],
+      knownOperations: [a, b, root],
+      kind: 'cell.update',
+      payload: {
+        cell_id: 'cell',
+        cell: {
+          kind: 'markup',
+          language_id: 'markdown',
+          value: 'Second response',
+          metadata: {},
+        },
+      },
+    })
+    const reply = projectRecord({
+      ...comment([a, b, root, next]),
+      op_id: 'c:2',
+      actor_seq: 2,
+      parent_comment_id: root.op_id,
+      anchors: [
+        { ...anchor, version: { kind: 'operation', op_id: next.op_id } },
+      ],
+    })
+    const parsed = parseOperationLog(
+      serializeOperationLog(header, [a, b, root, next, reply])
+    )
+    expect(parsed.operations).toHaveLength(5)
+    expect(
+      anchorSource(
+        parsed.operations,
+        (reply.payload as CommentRecord).anchors![0]
+      )
+    ).toBe('Second response')
+    expect((root.payload as CommentRecord).comparison).toEqual({ start, end })
+  })
   it('serializes flat entities and derives quotes from historical source', () => {
     const a = seed()
     const r = projectRecord(checkpoint([a], [a.op_id]))
@@ -111,6 +180,12 @@ describe('first-class V2 records', () => {
       '😀'
     )
     expect(serializeOperationLog(header, parsed.operations)).toBe(text)
+    const projected = materializeOperationLog(parsed.operations).comments[0]!
+    const target = projected.payload.annotation.targets[0] as { anchor: string }
+    expect(JSON.parse(target.anchor).runme.anchorSources).toEqual([
+      { anchor: comment([a, r]).anchors![0], source: 'A😀B' },
+    ])
+    expect(text).not.toContain('anchorSources')
   })
   it('names an old snapshot without including the newer writer history', () => {
     const a = seed()

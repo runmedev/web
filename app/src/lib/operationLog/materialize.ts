@@ -125,6 +125,7 @@ export function materializeOperationLog(
     { payload: ExecutionFinishPayload; operationId: string }
   >()
   const comments: MaterializedComment[] = []
+  const historicalSources = new Map<string, string>()
   const migratedComments = new Set(
     operations
       .filter((op) => op.kind === 'migration.v2')
@@ -353,12 +354,27 @@ export function materializeOperationLog(
       }
       case 'comment.record': {
         const record = serializedRecord(operation) as CommentRecord
+        const anchorSources = record.anchors
+          ?.filter((a) => a.kind === 'cell')
+          .map((a) => {
+            const wholeCell = { ...a, range: undefined },
+              key = JSON.stringify(wholeCell)
+            let source = historicalSources.get(key)
+            if (source === undefined) {
+              source = anchorSource(operations, wholeCell)!
+              historicalSources.set(key, source)
+            }
+            return { anchor: a, source }
+          })
         // Quotes exist only in this UI projection. They are never serialized.
         const anchor = record.anchors?.find((a) => a.kind === 'cell')
-        const quote = anchor ? anchorSource(operations, anchor) : undefined
-        const source = anchor
-          ? anchorSource(operations, { ...anchor, range: undefined })
-          : undefined
+        const source = anchorSources?.[0]?.source
+        const quote =
+          anchor?.kind === 'cell' && anchor.range
+            ? Array.from(source!)
+                .slice(anchor.range.start_index, anchor.range.end_index)
+                .join('')
+            : source
         const diffTarget =
           anchor?.kind === 'cell' && (record.comparison || anchor.range)
             ? {
@@ -396,6 +412,8 @@ export function materializeOperationLog(
                   : {}),
                 ...(diffTarget ? { diffTarget } : {}),
                 anchors: record.anchors,
+                // Historical sources are a read-only UI projection, never log fields.
+                anchorSources,
                 comparison: record.comparison,
               },
             }),

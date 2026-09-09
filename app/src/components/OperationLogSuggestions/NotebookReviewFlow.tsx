@@ -1,4 +1,11 @@
-import { useCallback, useEffect, useRef, useState } from 'react'
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
+import {
+  historicalAnchors,
+  locateComment,
+  isLocated,
+  type LocatedAnchor,
+} from '../../lib/commentAnchorMapping'
+import type { CommentSourceRange } from '../CommentedSourceRun'
 import {
   CheckIcon,
   XMarkIcon,
@@ -60,6 +67,12 @@ export function NotebookReviewFlow({
   onClose,
 }: Props) {
   const [revisions, setRevisions] = useState<NotebookRevision[]>([])
+  const viewRoot = useRef<HTMLDivElement>(null)
+  // Other mounted notebook tabs can contain the same notebook-local operation IDs.
+  const findInView = (id: string) =>
+    Array.from(
+      viewRoot.current?.querySelectorAll<HTMLElement>('[id]') ?? []
+    ).find((element) => element.id === id)
   const [records, setRecords] = useState<NotebookComparison[]>([])
   const [comments, setComments] = useState<DriveComment[]>([])
   const [preview, setPreview] = useState<ReviewPreview>()
@@ -75,7 +88,7 @@ export function NotebookReviewFlow({
     if (commentsCollapsed || !pendingGutterFocus.current) return
     const gutter = pendingGutterFocus.current
     pendingGutterFocus.current = null
-    gutter.scrollIntoView({ block: 'nearest', inline: 'nearest' })
+    gutter.scrollIntoView?.({ block: 'nearest', inline: 'nearest' })
     gutter.focus({ preventScroll: true })
   }, [commentsCollapsed])
   const sequence = useRef(0)
@@ -154,11 +167,91 @@ export function NotebookReviewFlow({
   })
   const cellId = (thread: DriveComment) =>
     parseCommentAnchor(thread.anchor)?.cellId
+  const locations = useMemo(
+    () =>
+      new Map(
+        comments.map((c) => [
+          c.id,
+          preview
+            ? [
+                ...locateComment(c, preview.before.cells, 'base'),
+                ...locateComment(c, preview.after.cells, 'head'),
+              ].filter(
+                (l) =>
+                  l.anchor.kind !== 'cell' ||
+                  !preview.cellIds ||
+                  preview.cellIds.includes(l.anchor.cell_id)
+              )
+            : [],
+        ])
+      ),
+    [comments, preview]
+  )
+  // Assign a conversation to one gutter; other anchors link to that same thread.
+  const threadHome = (c: DriveComment) => {
+    const entries = locations.get(c.id) ?? []
+    if (!historicalAnchors(c).length) return cellId(c)
+    const entry = entries.find(
+      (l) => isLocated(l.location) && l.anchor.kind === 'cell'
+    )
+    return entry?.anchor.kind === 'cell' ? entry.anchor.cell_id : undefined
+  }
+  const anchoredTo = (c: DriveComment, id: string) =>
+    historicalAnchors(c).length
+      ? (locations.get(c.id) ?? []).some(
+          (l) => l.anchor.kind === 'cell' && l.anchor.cell_id === id
+        )
+      : cellId(c) === id
+  const openThread = (id: string) => {
+    setCommentsCollapsed(false)
+    const element = findInView(`review-thread-${id}`)
+    pendingGutterFocus.current = element ?? null
+    if (!commentsCollapsed) {
+      element?.scrollIntoView?.({ block: 'nearest' })
+      element?.focus({ preventScroll: true })
+    }
+  }
+  const navigateLocation = (entry: LocatedAnchor) => {
+    const id = entry.anchor.kind === 'cell' ? entry.anchor.cell_id : undefined
+    const row = preview?.diff.cells.find(
+      (r) => (r.compareCell ?? r.baseCell)?.refId === id
+    )
+    if (row)
+      findInView(`review-diff-${row.id}`)?.scrollIntoView({ block: 'center' })
+  }
+  const rangesForCell = (id: string): CommentSourceRange[] =>
+    comments
+      .filter((c) => !c.deleted && !c.resolved)
+      .flatMap((c) =>
+        (locations.get(c.id) ?? []).flatMap((l) => {
+          if (
+            l.anchor.kind !== 'cell' ||
+            l.anchor.cell_id !== id ||
+            !('start' in l.location)
+          )
+            return []
+          const source =
+            (l.side === 'base' ? preview?.before : preview?.after)?.cells.find(
+              (cell) => cell.refId === id
+            )?.value ?? ''
+          const points = Array.from(source)
+          return [
+            {
+              start: points.slice(0, l.location.start).join('').length,
+              end: points.slice(0, l.location.end).join('').length,
+              threadId: c.id!,
+              side: l.side,
+            },
+          ]
+        })
+      )
   const cellThreads = comments.filter(
     (c) =>
       !c.deleted &&
-      cellId(c) &&
-      (!preview?.cellIds || preview.cellIds.includes(cellId(c)!))
+      (historicalAnchors(c).length
+        ? (locations.get(c.id)?.length ?? 0) > 0
+        : cellId(c) &&
+          (!preview?.cellIds || preview.cellIds.includes(cellId(c)!)))
   )
   const discussion = comments.filter(
     (c) =>
@@ -191,7 +284,9 @@ export function NotebookReviewFlow({
         key={thread.id}
         thread={thread}
         disabled={busy || readOnly}
-        outdated={outdated}
+        outdated={!locations.get(thread.id)?.length && outdated}
+        locations={locations.get(thread.id)}
+        onSelectLocation={navigateLocation}
         onReply={reply}
         onResolve={resolve}
       />
@@ -200,6 +295,7 @@ export function NotebookReviewFlow({
   return (
     <div
       id="notebook-review-flow"
+      ref={viewRoot}
       className="flex h-full min-w-0 bg-white text-nb-text"
     >
       <aside
@@ -381,7 +477,12 @@ export function NotebookReviewFlow({
                       : row
                   )
                 : row
-              const threads = cellThreads.filter((c) => cellId(c) === rowCellId)
+              const threads = cellThreads.filter((c) =>
+                anchoredTo(c, rowCellId!)
+              )
+              const ownedThreads = cellThreads.filter(
+                (c) => threadHome(c) === rowCellId
+              )
               const gutterId = `review-comments-${row.id}`
               // A shared two-column layout keeps threads beside their cell,
               // without measuring text or overlapping neighboring discussions.
@@ -412,6 +513,8 @@ export function NotebookReviewFlow({
                       >
                         <ChangedCell
                           row={shownRow}
+                          commentRanges={rangesForCell(rowCellId!)}
+                          onSelectComment={openThread}
                           plainSide={
                             decision?.decision === 'undo'
                               ? 'base'
@@ -430,7 +533,14 @@ export function NotebookReviewFlow({
                         title={`${threads.length} comment threads — view in right gutter`}
                         className="absolute inset-y-0 right-0 w-3 rounded-r border-r-4 border-nb-accent hover:bg-blue-100 focus-visible:outline focus-visible:outline-2 focus-visible:outline-nb-accent"
                         onClick={() => {
-                          const gutter = document.getElementById(gutterId)
+                          if (
+                            threads[0]?.id &&
+                            historicalAnchors(threads[0]).length
+                          ) {
+                            openThread(threads[0].id)
+                            return
+                          }
+                          const gutter = findInView(gutterId) ?? null
                           if (commentsCollapsed) {
                             pendingGutterFocus.current = gutter
                             setCommentsCollapsed(false)
@@ -555,7 +665,7 @@ export function NotebookReviewFlow({
                         />
                       </section>
                     )}
-                    {threads.map(renderThread)}
+                    {ownedThreads.map(renderThread)}
                     {diffTarget && diffTarget.cellId === rowCellId && (
                       <DiffCommentComposer
                         key={identity + diffTarget.cellId}
@@ -584,20 +694,22 @@ export function NotebookReviewFlow({
               (c) =>
                 !preview.diff.cells.some(
                   (row) =>
-                    (row.compareCell ?? row.baseCell)?.refId === cellId(c)
+                    (row.compareCell ?? row.baseCell)?.refId === threadHome(c)
                 )
             ) && (
               <section
                 hidden={commentsCollapsed}
                 aria-label="Discussions on earlier cells"
+                className="ml-auto w-[clamp(220px,40%,320px)]"
               >
-                <h3>Discussions on cells absent from this comparison</h3>
+                <h3>Outdated anchors / Deleted cells</h3>
                 {cellThreads
                   .filter(
                     (c) =>
                       !preview.diff.cells.some(
                         (row) =>
-                          (row.compareCell ?? row.baseCell)?.refId === cellId(c)
+                          (row.compareCell ?? row.baseCell)?.refId ===
+                          threadHome(c)
                       )
                   )
                   .map(renderThread)}

@@ -1,5 +1,7 @@
 import { useEffect, useRef, useState, type KeyboardEvent } from 'react'
 import { commentAttributionLabel } from '../../lib/commentAttribution'
+import { CommentAnchorLocations } from '../CommentAnchorLocations'
+import type { LocatedAnchor } from '../../lib/commentAnchorMapping'
 import {
   parseDiffCommentTarget,
   type DiffCommentTarget,
@@ -140,12 +142,16 @@ export function CellDiscussion({
   thread,
   disabled,
   outdated,
+  locations = [],
+  onSelectLocation,
   onReply,
   onResolve,
 }: {
   thread: DriveComment
   disabled: boolean
   outdated: boolean
+  locations?: LocatedAnchor[]
+  onSelectLocation?: (location: LocatedAnchor) => void
   onReply: (id: string, content: string) => Promise<boolean>
   onResolve: (id: string, resolved: boolean) => Promise<boolean>
 }) {
@@ -162,6 +168,7 @@ export function CellDiscussion({
   return (
     <article
       id={`review-thread-${thread.id}`}
+      tabIndex={-1}
       className="my-2 rounded border border-nb-border bg-white p-3"
     >
       <p className="text-xs text-nb-text-muted">
@@ -171,7 +178,11 @@ export function CellDiscussion({
           ? ` · ${target.side === 'base' ? 'Previous' : 'Proposed'} cell${target.sourceRange ? ' selection' : ''}`
           : ''}
       </p>
-      {quote && (
+      <CommentAnchorLocations
+        locations={locations}
+        onSelect={onSelectLocation}
+      />
+      {locations.length === 0 && quote && (
         <blockquote className="my-2 max-h-24 overflow-auto border-l-2 border-nb-accent pl-2 text-xs text-nb-text-muted">
           {quote}
         </blockquote>

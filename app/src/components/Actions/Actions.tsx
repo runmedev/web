@@ -14,6 +14,9 @@ import {
 import { create } from '@bufbuild/protobuf'
 import { useCommentAuthor } from '../../contexts/GoogleAuthContext'
 import { NotebookReviewFlow } from '../OperationLogSuggestions/NotebookReviewFlow'
+import { projectSourceCommentRange } from '../../lib/markdown/sourceCommentProjection'
+import type { CommentSourceRange } from '../CommentedSourceRun'
+import { captureCommentSnapshot } from '../../lib/captureCommentSnapshot'
 import { Button, ScrollArea, Tabs, Text, Tooltip } from '@radix-ui/themes'
 
 import { NotebookPropertiesDialog } from '../NotebookPropertiesDialog'
@@ -688,6 +691,8 @@ export function Action({
   commentsAvailable = false,
   commentCount = 0,
   commentRanges = [],
+  commentSourceRanges = [],
+  onSelectComment,
   onStartComment,
   isDeepLinkTarget = false,
 }: {
@@ -703,6 +708,8 @@ export function Action({
   commentsAvailable?: boolean
   commentCount?: number
   commentRanges?: readonly RenderedMarkdownCommentRange[]
+  commentSourceRanges?: CommentSourceRange[]
+  onSelectComment?: (id: string) => void
   onStartComment?: (target: CommentDraftTarget) => void
   isDeepLinkTarget?: boolean
 }) {
@@ -1679,6 +1686,8 @@ export function Action({
               onFocusRoleChange={handleMarkdownFocusRoleChange}
               onLinkClick={handleMarkdownLinkClick}
               commentRanges={commentRanges}
+              commentSourceRanges={commentSourceRanges}
+              onSelectComment={onSelectComment}
               onRenderedSelectionContextMenu={
                 handleRenderedSelectionContextMenu
               }
@@ -1967,6 +1976,8 @@ export function Action({
             data-cell-focus-role="editor"
           >
             <Editor
+              commentRanges={commentSourceRanges}
+              onSelectComment={onSelectComment}
               key={`editor-${cell.refId}-${selectedLanguage}`}
               id={cell.refId}
               value={cell.value}
@@ -2308,6 +2319,21 @@ function NotebookTabContent({
     string | undefined
   >()
   const [comments, setComments] = useState<DriveComment[]>([])
+  const [activeCommentId, setActiveCommentId] = useState<string | null>(null)
+  const openComment = useCallback(
+    (id: string) => {
+      setActiveCommentId(id)
+      openCommentsPanel()
+      requestAnimationFrame(() =>
+        Array.from(
+          notebookRootRef.current?.querySelectorAll<HTMLElement>('[id]') ?? []
+        )
+          .find((element) => element.id === `editor-comment-${id}`)
+          ?.scrollIntoView?.({ block: 'nearest' })
+      )
+    },
+    [openCommentsPanel]
+  )
   const [commentsBusy, setCommentsBusy] = useState(false)
   const [pendingCommentCount, setPendingCommentCount] = useState(0)
   const [failedCommentCount, setFailedCommentCount] = useState(0)
@@ -2368,7 +2394,12 @@ function NotebookTabContent({
   )
   const commentRangesByCell = useMemo(() => {
     const ranges = new Map<string, RenderedMarkdownCommentRange[]>()
-    const addRange = (cellId: string, start: number, end: number) => {
+    const addRange = (
+      cellId: string,
+      start: number,
+      end: number,
+      commentId?: string
+    ) => {
       const values = ranges.get(cellId) ?? []
       const active =
         activeCommentRange?.cellId === cellId &&
@@ -2384,11 +2415,27 @@ function NotebookTabContent({
           start,
           end,
           active,
+          ...(commentId ? { onSelect: () => openComment(commentId) } : {}),
         })
         ranges.set(cellId, values)
       }
     }
     commentThreads.forEach((thread) => {
+      if (!thread.comment.resolved && thread.locations?.length) {
+        for (const entry of thread.locations)
+          if (entry.anchor.kind === 'cell' && 'start' in entry.location) {
+            const id = entry.anchor.cell_id
+            const source =
+              commentCellIdentities.find((c) => c.refId === id)?.value ?? ''
+            for (const range of projectSourceCommentRange(
+              source,
+              entry.location.start,
+              entry.location.end
+            ))
+              addRange(id, range.start, range.end, thread.comment.id)
+          }
+        return
+      }
       if (
         thread.comment.resolved ||
         !thread.cellId ||
@@ -2404,7 +2451,35 @@ function NotebookTabContent({
       addRange(draftTarget.cellId, start, end)
     }
     return ranges
-  }, [activeCommentRange, commentThreads, draftTarget])
+  }, [
+    activeCommentRange,
+    commentThreads,
+    draftTarget,
+    commentCellIdentities,
+    openComment,
+  ])
+  const sourceRangesByCell = useMemo(() => {
+    const ranges = new Map<string, CommentSourceRange[]>()
+    for (const thread of commentThreads)
+      if (!thread.comment.resolved)
+        for (const entry of thread.locations ?? []) {
+          if (entry.anchor.kind !== 'cell' || !('start' in entry.location))
+            continue
+          const id = entry.anchor.cell_id,
+            source = Array.from(
+              commentCellIdentities.find((c) => c.refId === id)?.value ?? ''
+            )
+          ranges.set(id, [
+            ...(ranges.get(id) ?? []),
+            {
+              threadId: thread.comment.id!,
+              start: source.slice(0, entry.location.start).join('').length,
+              end: source.slice(0, entry.location.end).join('').length,
+            },
+          ])
+        }
+    return ranges
+  }, [commentThreads, commentCellIdentities])
 
   const findCellElement = useCallback((cellId: string) => {
     const elements =
@@ -3061,8 +3136,23 @@ function NotebookTabContent({
     }
   }, [syncPendingComments])
 
+  // A draft retains its selection-time snapshot even if edits arrive before Send.
+  const draftSnapshots = useRef(
+    new WeakMap<
+      CommentDraftTarget,
+      Promise<{ heads?: string[]; error?: unknown }>
+    >()
+  )
   const startCommentDraft = useCallback(
     (target: CommentDraftTarget) => {
+      if (operationLogComments && notebookData)
+        draftSnapshots.current.set(
+          target,
+          captureCommentSnapshot(notebookData).then(
+            (heads) => ({ heads }),
+            (error) => ({ error })
+          )
+        )
       openCommentsPanel()
       setDraftTarget(target)
       setDraftContent('')
@@ -3093,6 +3183,7 @@ function NotebookTabContent({
       focusCommentCell,
       openCommentsPanel,
       operationLogComments,
+      notebookData,
     ]
   )
 
@@ -3140,7 +3231,13 @@ function NotebookTabContent({
       if (operationLogComments && store) {
         setCommentsBusy(true)
         try {
-          await notebookData?.flushPendingPersist()
+          const captured = await draftSnapshots.current.get(target)
+          if (captured?.error) throw captured.error
+          const heads = captured
+            ? captured.heads
+            : notebookData
+              ? await captureCommentSnapshot(notebookData)
+              : undefined
           const commentId = crypto.randomUUID()
           const anchor =
             target.type === 'cell'
@@ -3150,7 +3247,7 @@ function NotebookTabContent({
             content,
             anchor,
             commentId,
-            snapshot_heads: notebookData?.getObservedOperationHeads(),
+            snapshot_heads: heads,
             author: await getCommentAuthor(),
           })
           setDraftTarget(null)
@@ -3784,23 +3881,41 @@ function NotebookTabContent({
               {cellDatas.map((cellData, index) => {
                 const refId = cellData.snapshot?.refId ?? `cell-${index}`
                 return (
-                  <Action
-                    key={`action-${refId}`}
-                    cellData={cellData}
-                    docUri={docUri}
-                    docTitle={entry.name}
-                    isFirst={index === 0}
-                    isActiveCell={activeCell?.refId === refId}
-                    activeFocusRole={activeCell?.focusRole ?? 'editor'}
-                    isWindowFocused={isWindowFocused}
-                    isDeepLinkTarget={highlightedDeepLinkCellId === refId}
-                    onFocusStateChange={(state) => onCellFocus(docUri, state)}
-                    readOnly={readOnly}
-                    commentsAvailable={Boolean(commentsRemoteUri)}
-                    commentCount={commentsByCell.get(refId)?.length ?? 0}
-                    commentRanges={commentRangesByCell.get(refId) ?? []}
-                    onStartComment={startCommentDraft}
-                  />
+                  <div
+                    key={`commented-cell-${refId}`}
+                    id={`commented-cell-${refId}`}
+                    className="relative"
+                  >
+                    <Action
+                      key={`action-${refId}`}
+                      cellData={cellData}
+                      docUri={docUri}
+                      docTitle={entry.name}
+                      isFirst={index === 0}
+                      isActiveCell={activeCell?.refId === refId}
+                      activeFocusRole={activeCell?.focusRole ?? 'editor'}
+                      isWindowFocused={isWindowFocused}
+                      isDeepLinkTarget={highlightedDeepLinkCellId === refId}
+                      onFocusStateChange={(state) => onCellFocus(docUri, state)}
+                      readOnly={readOnly}
+                      commentsAvailable={Boolean(commentsRemoteUri)}
+                      commentCount={commentsByCell.get(refId)?.length ?? 0}
+                      commentRanges={commentRangesByCell.get(refId) ?? []}
+                      commentSourceRanges={sourceRangesByCell.get(refId) ?? []}
+                      onSelectComment={openComment}
+                      onStartComment={startCommentDraft}
+                    />
+                    {!!commentsByCell.get(refId)?.length && (
+                      <button
+                        type="button"
+                        aria-label={`Open comments for cell ${index + 1}`}
+                        className="absolute inset-y-2 right-0 w-2 border-r-4 border-nb-accent rounded-r hover:bg-blue-100"
+                        onClick={() =>
+                          openComment(commentsByCell.get(refId)![0]!.id!)
+                        }
+                      />
+                    )}
+                  </div>
                 )
               })}
               {!readOnly && (
@@ -3856,8 +3971,13 @@ function NotebookTabContent({
           )}
         </div>
       </ScrollArea>
-      {commentsPanelOpen && (
+      <div
+        id="editor-comments-gutter"
+        hidden={!commentsPanelOpen}
+        className="h-full shrink-0"
+      >
         <NotebookCommentsPanel
+          activeCommentId={activeCommentId}
           storage={
             operationLogComments ? 'runme-operation-log' : 'google-drive'
           }
@@ -3886,7 +4006,7 @@ function NotebookTabContent({
           }}
           onSelectTarget={selectCommentTarget}
         />
-      )}
+      </div>
       {driveResourcePickerDialog}
     </div>
   )

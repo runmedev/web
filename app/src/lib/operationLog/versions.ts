@@ -253,11 +253,11 @@ export function validateRecordReferences(operations: RunmeOperation[]): void {
           throw new Error('Assessment cell is absent from comparison')
       }
     }
-    const anchorVersions = new Set<string>()
     for (const anchor of anchors as Anchor[]) {
       const key = versionKey(anchor.version)
-      anchorVersions.add(key)
-      if (comparison && !sides.includes(key))
+      // Roots describe the compared sides. Replies may cite later historical
+      // content without changing the conversation's original comparison.
+      if (comparison && !record.parent_comment_id && !sides.includes(key))
         throw new Error('Anchor is outside comparison endpoints')
       if (
         comparison?.cell_ids &&
@@ -267,8 +267,6 @@ export function validateRecordReferences(operations: RunmeOperation[]): void {
         throw new Error('Anchor is outside comparison scope')
       anchorSource(past, anchor)
     }
-    if (!comparison && anchorVersions.size > 1)
-      throw new Error('Snapshot comment anchors must use the same version')
     for (const cellId of comparison?.cell_ids ?? []) {
       const exists = [comparison!.start, comparison!.end].some((version) => {
         try {

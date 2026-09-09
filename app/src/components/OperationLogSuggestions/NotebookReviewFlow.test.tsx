@@ -295,6 +295,74 @@ describe('comment-first comparison flow', () => {
     expect(f.second.after.cells[0].value).toBe('Clarified')
     expect((accept as HTMLButtonElement).disabled).toBe(true)
   })
+  it('locates native anchors on both sides but renders one conversation', async () => {
+    const f = fixture()
+    const base = {
+      kind: 'cell',
+      cell_id: 'cell',
+      surface: 'source',
+      version: { kind: 'revision', revision_id: 'v1' },
+      range: { start_index: 0, end_index: 8, unit: 'unicode-code-point' },
+    }
+    f.comments[0]!.anchor = JSON.stringify({
+      runme: {
+        version: 1,
+        type: 'cell',
+        cellId: 'cell',
+        anchorSources: [
+          { anchor: base, source: 'Original' },
+          {
+            anchor: {
+              ...base,
+              version: { kind: 'revision', revision_id: 'v2' },
+              range: { ...base.range, end_index: 9 },
+            },
+            source: 'Clarified',
+          },
+        ],
+      },
+    })
+    mount(f)
+    await screen.findByText('Clarify the checks')
+    expect(screen.getAllByText('Clarify the checks')).toHaveLength(1)
+    const ranges = screen.getAllByRole('button', {
+      name: 'Open comment on this text',
+    })
+    expect(ranges.map((r) => r.textContent).join('')).toContain('Original')
+    expect(ranges.map((r) => r.textContent).join('')).toContain('Clarified')
+    fireEvent.click(screen.getByRole('button', { name: 'Hide comments' }))
+    fireEvent.keyDown(ranges[0]!, { key: 'Enter' })
+    await waitFor(() =>
+      expect(document.activeElement?.id).toBe('review-thread-request')
+    )
+    expect(screen.getAllByText('Clarify the checks')).toHaveLength(1)
+    expect(screen.getAllByText('Inspect historical context')).toHaveLength(4)
+  })
+  it('keeps unmatched native threads in an explicit outdated/deleted group', async () => {
+    const f = fixture()
+    f.comments[0]!.anchor = JSON.stringify({
+      runme: {
+        version: 1,
+        type: 'cell',
+        cellId: 'gone',
+        anchorSources: [
+          {
+            anchor: {
+              kind: 'cell',
+              cell_id: 'gone',
+              surface: 'source',
+              version: { kind: 'operation', op_id: 'old:1' },
+            },
+            source: 'Deleted historical cell',
+          },
+        ],
+      },
+    })
+    mount(f)
+    await screen.findByText('Outdated anchors / Deleted cells')
+    expect(screen.getAllByText('Clarify the checks')).toHaveLength(1)
+    expect(screen.getAllByText('Deleted historical cell')).toHaveLength(2)
+  })
   it('opens a commentable diff without starting a review and shows ordinary editor comments', async () => {
     const f = fixture()
     f.comments[0].anchor = JSON.stringify({

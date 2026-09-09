@@ -166,6 +166,48 @@ describe('codeModeExecutor', () => {
     expect(defaultRunner).toEqual(expect.any(String))
   })
 
+  it('dispatches revisions.create to the runtime in sandbox mode', async () => {
+    const notebook = createNotebook()
+    const version = { kind: 'revision', revision_id: 'revision:1' }
+    const checkpointNotebookRevision = vi.fn(async () => version)
+    appState.setLocalNotebooks({
+      isOperationLogNotebook: async () => true,
+      checkpointNotebookRevision,
+    } as never)
+    const input = {
+      target: { uri: notebook.getUri() },
+      snapshot_heads: ['actor:1'],
+      name: 'Baseline',
+    }
+    let returned: unknown
+    vi.spyOn(SandboxJSKernel.prototype, 'run').mockImplementation(
+      async function (this: SandboxJSKernel) {
+        const bridge = (
+          this as unknown as {
+            bridge: {
+              call: (method: string, args: unknown[]) => Promise<unknown>
+            }
+          }
+        ).bridge
+        returned = await bridge.call('revisions.create', [input])
+      }
+    )
+    const executor = createCodeModeExecutor({
+      mode: 'sandbox',
+      resolveNotebook: () => notebook,
+      listNotebooks: () => [notebook],
+    })
+    await executor.execute({
+      source: 'webmcp',
+      code: 'await revisions.create(input)',
+    })
+    expect(returned).toEqual(version)
+    expect(checkpointNotebookRevision).toHaveBeenCalledWith(notebook.getUri(), {
+      ...input,
+      author: { displayName: 'unknown', kind: 'unknown' },
+    })
+  })
+
   it('bridges named documentation discovery and retrieval in sandbox mode', async () => {
     const notebook = createNotebook()
     const fetchMock = vi.fn(async () => ({

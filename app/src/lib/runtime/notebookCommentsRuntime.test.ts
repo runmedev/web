@@ -10,11 +10,49 @@ import {
 import type { NotebookDataLike } from './runmeConsole'
 
 describe('notebook comments runtime', () => {
+  it('creates a revision through the public API and preserves the selected snapshot', async () => {
+    const uri = 'local://file/create-revision'
+    const target = { uri }
+    const version = { kind: 'revision' as const, revision_id: 'revision:1' }
+    const flushPendingPersist = vi.fn(async () => undefined)
+    const checkpointNotebookRevision = vi.fn(async () => version)
+    const api = createNotebookCommentsRuntimeApi({
+      resolveNotebook: () =>
+        ({ getUri: () => uri, flushPendingPersist }) as NotebookDataLike,
+      resolveLocalNotebooks: () =>
+        ({
+          isOperationLogNotebook: async () => true,
+          checkpointNotebookRevision,
+        }) as never,
+      resolveDriveNotebookStore: () => null,
+    })
+    const input = {
+      target,
+      snapshot_heads: ['actor:1', 'other:2'],
+      name: 'Reviewed baseline',
+      description: 'Before the next edit',
+      author: { displayName: 'Codex', kind: 'agent' as const },
+    }
+    expect(await api.revisions.create(input)).toEqual(version)
+    expect(checkpointNotebookRevision).toHaveBeenCalledWith(uri, input)
+    expect(flushPendingPersist.mock.invocationCallOrder[0]).toBeLessThan(
+      checkpointNotebookRevision.mock.invocationCallOrder[0]
+    )
+    await api.revisions.create({ target })
+    expect(checkpointNotebookRevision).toHaveBeenLastCalledWith(uri, {
+      target,
+      author: { displayName: 'unknown', kind: 'unknown' },
+    })
+    expect(api.revisions).not.toHaveProperty('checkpoint')
+    expect(api.revisions.help()).toContain('revisions.create(')
+  })
+
   it('accepts the documented version and comment reference fields', async () => {
     const store = {
       isOperationLogNotebook: vi.fn(async () => true),
       previewNotebookComparison: vi.fn(async () => ({})),
       labelNotebookRevision: vi.fn(async () => ({})),
+      listNotebookRevisions: vi.fn(async () => []),
       replyToOperationLogComment: vi.fn(async () => ({})),
       setOperationLogCommentResolved: vi.fn(async () => ({})),
     }
@@ -46,6 +84,28 @@ describe('notebook comments runtime', () => {
       'Reply',
       expect.any(Object)
     )
+    const anchors = [
+      {
+        kind: 'cell' as const,
+        cell_id: 'cell',
+        surface: 'source' as const,
+        version: end,
+      },
+    ]
+    await api.reply({
+      target,
+      parent_comment_id: 'c:1',
+      content: 'More context',
+      anchors,
+    })
+    expect(store.replyToOperationLogComment).toHaveBeenLastCalledWith(
+      uri,
+      'c:1',
+      'More context',
+      expect.objectContaining({ anchors })
+    )
+    await api.revisions.list({ target })
+    expect(store.listNotebookRevisions).toHaveBeenCalledWith(uri)
     await api.resolve({ target, thread_id: 'c:1' })
     expect(store.setOperationLogCommentResolved).toHaveBeenLastCalledWith(
       uri,
@@ -358,12 +418,26 @@ describe('notebook comments runtime', () => {
       resolveDriveNotebookStore: () => null,
     })
 
-    expect(await comments.list()).toEqual([
+    await expect(comments.list()).rejects.toThrow('explicit notebook target')
+    await expect(
+      comments.reply({ commentId: 'comment-1', content: 'No target' })
+    ).rejects.toThrow('explicit notebook target')
+    await expect(comments.resolve({ commentId: 'comment-1' })).rejects.toThrow(
+      'explicit notebook target'
+    )
+    await expect(comments.reopen({ commentId: 'comment-1' })).rejects.toThrow(
+      'explicit notebook target'
+    )
+    expect(await comments.list({ target: { uri } })).toEqual([
       expect.objectContaining({ id: 'comment-1', content: 'Clarify this.' }),
     ])
-    await comments.reply({ commentId: 'comment-1', content: 'Done.' })
-    await comments.resolve({ commentId: 'comment-1' })
-    await comments.reopen({ commentId: 'comment-1' })
+    await comments.reply({
+      target: { uri },
+      commentId: 'comment-1',
+      content: 'Done.',
+    })
+    await comments.resolve({ target: { uri }, commentId: 'comment-1' })
+    await comments.reopen({ target: { uri }, commentId: 'comment-1' })
 
     expect(listOperationLogComments).toHaveBeenCalledWith(uri)
     expect(localNotebooks.replyToOperationLogComment).toHaveBeenCalledWith(

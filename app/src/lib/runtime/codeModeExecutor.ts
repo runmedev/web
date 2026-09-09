@@ -581,6 +581,8 @@ async function handleSandboxAppKernelBridgeCall({
       return globals.documentation.get(String(args[0] ?? ''))
     case 'comments.list':
       return globals.comments.list((args[0] as any) ?? {})
+    case 'comments.help':
+      return globals.comments.help()
     case 'comments.add':
       return globals.comments.add(args[0] as any)
     case 'comparisons.list':
@@ -589,8 +591,8 @@ async function handleSandboxAppKernelBridgeCall({
       return globals.comparisons.preview(args[0] as any)
     case 'revisions.list':
       return globals.revisions.list(args[0] as any)
-    case 'revisions.checkpoint':
-      return globals.revisions.checkpoint(args[0] as any)
+    case 'revisions.create':
+      return globals.revisions.create(args[0] as any)
     case 'revisions.migrate':
       return globals.revisions.migrate(args[0] as any)
     case 'revisions.label':

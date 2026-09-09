@@ -71,20 +71,29 @@
 }
 
 ::highlight(runme-comment-range) {
+  text-decoration: underline solid #3b82f6 2px;
   background-color: var(--nb-comment-highlight);
 }
 
+.runme-source-comment-underline {
+  border-bottom: 2px solid #3b82f6;
+  cursor: pointer;
+}
+
 ::highlight(runme-comment-range-active) {
+  text-decoration: underline solid #2563eb 2px;
   background-color: var(--nb-comment-highlight-active);
   text-decoration: underline 2px var(--nb-warning);
   text-underline-offset: 2px;
 }
 
 [data-runme-comment-highlight="true"] {
+  border-bottom: 2px solid #3b82f6;
   background-color: var(--nb-comment-highlight);
 }
 
 [data-runme-comment-highlight="active"] {
+  border-bottom: 2px solid #2563eb;
   background-color: var(--nb-comment-highlight-active);
   text-decoration: underline 2px var(--nb-warning);
   text-underline-offset: 2px;

@@ -1,5 +1,11 @@
 import type { DriveComment } from '../storage/drive'
 import {
+  type LocatedAnchor,
+  historicalAnchors,
+  isLocated,
+  locateComment,
+} from './commentAnchorMapping'
+import {
   RENDERED_MARKDOWN_PROJECTION_NAME,
   RENDERED_MARKDOWN_PROJECTION_VERSION,
   type RenderedMarkdownSelectionDraft,
@@ -89,6 +95,7 @@ export type CommentLocationState =
     }
 
 export type CellCommentThread = {
+  locations?: LocatedAnchor[]
   comment: DriveComment
   anchor: CommentAnchor | null
   cellId: string | null
@@ -352,6 +359,18 @@ export function groupCommentsByCell(
     if (comment.deleted || comment.resolved) {
       return
     }
+    const historical = historicalAnchors(comment)
+    if (historical.length) {
+      const ids = new Set(
+        historical.flatMap((a) =>
+          a.anchor.kind === 'cell' ? [a.anchor.cell_id] : []
+        )
+      )
+      for (const id of ids)
+        if (identities.some((c) => c.refId === id))
+          byCell.set(id, [...(byCell.get(id) ?? []), comment])
+      return
+    }
     const anchor = parseCommentAnchor(comment.anchor)
     if (!anchor) {
       return
@@ -376,6 +395,25 @@ export function toCellCommentThreads(
     .filter((comment) => !comment.deleted)
     .map((comment) => {
       const anchor = parseCommentAnchor(comment.anchor)
+      const locations = locateComment(comment, identities)
+      if (locations.length) {
+        const primary =
+          locations.find((l) => isLocated(l.location)) ?? locations[0]!
+        const cellId =
+          primary.anchor.kind === 'cell' ? primary.anchor.cell_id : null
+        return {
+          comment,
+          anchor,
+          cellId,
+          locations,
+          orphaned: locations.every((l) => l.location.status === 'deleted'),
+          location: {
+            status: locations.some((l) => isLocated(l.location))
+              ? ('cell' as const)
+              : ('outdated' as const),
+          },
+        }
+      }
       if (!anchor) {
         return {
           comment,

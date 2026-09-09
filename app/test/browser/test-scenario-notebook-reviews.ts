@@ -125,13 +125,17 @@ try {
   })
   const initial = await api('notebooks.get', target)
   const ids = initial.notebook.cells.map((c) => c.refId)
-  const start = (await api('revisions.list', { target })).at(-1)
+  let start = (await api('revisions.list', { target })).at(-1)
   await api('revisions.label', {
     target,
     revisionId: start.id,
     name: 'Original',
     description: 'Human commented version',
   })
+  // Naming an implicit snapshot creates a first-class Revision record in V2.
+  start = (await api('revisions.list', { target })).find(
+    (r) => r.name === 'Original'
+  )
   const thread = await api('comments.add', {
     target,
     cellId: ids[2],
@@ -169,12 +173,13 @@ try {
     content: 'Added explicit checks; removed retired credentials.',
     author: { displayName: 'Codex', kind: 'agent' },
   })
-  const end = (await api('revisions.list', { target })).at(-1)
+  let end = (await api('revisions.list', { target })).at(-1)
   await api('revisions.label', {
     target,
     revisionId: end.id,
     name: 'Codex addressed comments',
   })
+  end = (await api('revisions.list', { target })).at(-1)
   const pair = { target, startRevisionId: start.id, endRevisionId: end.id }
   await page
     .getByRole('button', { name: 'Review suggestions', exact: true })
@@ -224,7 +229,7 @@ try {
   )
   await marker.click()
   assert.equal(
-    await gutter.evaluate((el) => el === document.activeElement),
+    await gutter.evaluate((el) => el.contains(document.activeElement)),
     true
   )
   assert.equal(
@@ -242,6 +247,9 @@ try {
   assert.equal((await api('comparisons.list', { target })).length, 0)
   await checkpoint('02-commentable-diff-with-original-thread')
   await page.getByRole('checkbox', { name: 'Named revisions only' }).check()
+  end = (await api('revisions.list', { target })).find(
+    (r) => r.name === 'Codex addressed comments'
+  )
   await canvas
     .getByText('Please explain the setup checks.', { exact: true })
     .waitFor()
@@ -393,6 +401,25 @@ try {
   await canvas
     .getByText('Which verification command?', { exact: true })
     .waitFor()
+  const selectedUnderline = canvas
+    .locator(`[data-comment-thread-id="${selected.id}"]`)
+    .first()
+  await selectedUnderline.waitFor()
+  assert.equal(await selectedUnderline.innerText(), 'Verify')
+  assert.equal(
+    await selectedUnderline.evaluate(
+      (el) => getComputedStyle(el).borderBottomWidth
+    ),
+    '2px'
+  )
+  await page.evaluate(() => document.getSelection()?.removeAllRanges())
+  await selectedUnderline.click()
+  assert.equal(
+    await canvas
+      .locator(`[id="review-thread-${selected.id}"]`)
+      .evaluate((el) => el === document.activeElement),
+    true
+  )
   const whole = await api('comparisons.comment', {
     ...scoped,
     content: 'Setup is almost ready.',
@@ -441,6 +468,31 @@ try {
   })
   await editorComments
     .getByText('Reply from the edit-view context.', { exact: true })
+    .waitFor()
+  await editorComments
+    .getByRole('button', { name: 'Hide', exact: true })
+    .click()
+  // Native CSS ranges must cover only the selected source text and reopen its
+  // existing conversation, not start a new comment or activate another tab.
+  const point = await page.evaluate(() => {
+    const ranges = [
+      ...(CSS.highlights.get('runme-comment-range') ?? []),
+      ...(CSS.highlights.get('runme-comment-range-active') ?? []),
+    ]
+    const range = ranges.find(
+      (r) => r.toString() === 'Verify' && r.getBoundingClientRect().width > 0
+    )
+    if (!range) return null
+    const rect = range.getBoundingClientRect()
+    return { x: rect.x + rect.width / 2, y: rect.y + rect.height / 2 }
+  })
+  assert.ok(
+    point,
+    'The editor must register an exact native Markdown comment highlight'
+  )
+  await page.mouse.click(point.x, point.y)
+  await editorComments
+    .getByText('Which verification command?', { exact: true })
     .waitFor()
   await checkpoint('07-diff-comments-and-replies-in-editor')
   await page
@@ -533,7 +585,7 @@ try {
     .getByText('Added the concrete health command.', { exact: true })
     .waitFor()
   await canvas
-    .getByText(/Outdated context/)
+    .getByText(/Outdated anchor/)
     .first()
     .waitFor()
   const original = await api('comparisons.preview', pair)

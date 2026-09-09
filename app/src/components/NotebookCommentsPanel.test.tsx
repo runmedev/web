@@ -13,6 +13,7 @@ import type {
   CommentDraftTarget,
 } from '../lib/notebookComments'
 import { createCellCommentAnchor } from '../lib/notebookComments'
+import { toCellCommentThreads } from '../lib/notebookComments'
 import { NotebookCommentsPanel } from './NotebookCommentsPanel'
 
 const noopAsync = vi.fn(async () => undefined)
@@ -49,6 +50,54 @@ function renderPanel(overrides = {}) {
 }
 
 describe('NotebookCommentsPanel', () => {
+  it('keeps one native conversation with all historical locations and Enter-to-send', async () => {
+    const anchor = {
+      kind: 'cell',
+      cell_id: 'cell-1',
+      surface: 'source',
+      version: { kind: 'operation', op_id: 'old:1' },
+      range: { start_index: 0, end_index: 4, unit: 'unicode-code-point' },
+    }
+    const threads = toCellCommentThreads(
+      [
+        {
+          id: 'native-thread',
+          content: 'Native feedback',
+          anchor: JSON.stringify({
+            runme: {
+              version: 1,
+              type: 'cell',
+              cellId: 'cell-1',
+              anchorSources: [{ anchor, source: 'Lost passage' }],
+            },
+          }),
+        },
+      ],
+      [{ refId: 'cell-1', value: 'Different passage' }]
+    )
+    const onReply = vi.fn(async () => undefined)
+    renderPanel({
+      storage: 'runme-operation-log',
+      threads,
+      cellLabels: new Map([['cell-1', 'Cell 1']]),
+      onReply,
+    })
+    expect(screen.getAllByText('Native feedback')).toHaveLength(1)
+    expect(screen.getByText('Outdated anchors / Deleted cells')).toBeTruthy()
+    expect(screen.getByText('Inspect historical context')).toBeTruthy()
+    const input = screen.getByPlaceholderText('Reply or add others with @')
+    fireEvent.change(input, { target: { value: 'Please clarify' } })
+    fireEvent.keyDown(input, { key: 'Enter', shiftKey: true })
+    expect(onReply).not.toHaveBeenCalled()
+    fireEvent.keyDown(input, { key: 'Enter', isComposing: true })
+    expect(onReply).not.toHaveBeenCalled()
+    fireEvent.keyDown(input, { key: 'Enter' })
+    fireEvent.keyDown(input, { key: 'Enter' })
+    await waitFor(() =>
+      expect(onReply).toHaveBeenCalledWith('native-thread', 'Please clarify')
+    )
+    expect(onReply).toHaveBeenCalledTimes(1)
+  })
   it('describes where comments are stored for each notebook format', () => {
     const view = renderPanel({ storage: 'runme-operation-log' })
 

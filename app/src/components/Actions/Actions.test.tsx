@@ -627,6 +627,7 @@ describe('Actions tabs', () => {
     })
     contextMocks.getNotebookData.mockReturnValue({
       getCell: (refId: string) => cellData.get(refId),
+      getNotebook: () => ({ cells }),
       appendCell: vi.fn(),
       flushPendingPersist: vi.fn(async () => undefined),
       getObservedOperationHeads: () => [],

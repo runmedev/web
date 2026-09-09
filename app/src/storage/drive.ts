@@ -640,6 +640,8 @@ export type DriveUser = {
 }
 
 export type DriveReply = {
+  /** Read-only .runme anchor projection, absent on Google Drive replies. */
+  anchor?: string
   id?: string
   kind?: string
   createdTime?: string

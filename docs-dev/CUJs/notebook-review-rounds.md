@@ -20,7 +20,8 @@ authentication or Drive upload.
    end choices strictly extend the start's operation set.
 4. Select a section or heading range. Include descendant/body cells and exclude
    unrelated cells. The selected pair plus cell-ID scope defines ONE suggestion.
-5. Add a diff-source comment with exact quote, side, and UTF-16 range. Show it
+5. Add a diff-source comment with exact quote, side, and UTF-16 range through
+   the UI adapter; V2 stores an immutable code-point anchor, not a quote. Show it
    in the right gutter beside its cell, not below it or in the left panel. A blue
    right-edge marker focuses that cell's gutter; unannotated cells have no marker.
    The composer also opens in the gutter. The left panel has one suggestion-wide
@@ -49,6 +50,22 @@ authentication or Drive upload.
     reconstruct both original endpoints exactly, preserving comment offsets.
 
 ## Additional regression coverage
+
+For V2 notebooks, compare source selections before and after inserted prefixes,
+small edits, repeated passages, emoji/combining marks, and cell deletion. Check
+blue underlines on both diff sides and in rendered Markdown/source editors.
+Clicking a marker or underline must reopen the same thread, even with several
+notebook tabs mounted. Multiple anchors retain one conversation with separate
+location links. Unmatched anchors stay in the outdated/deleted gutter group;
+historical context shows the original revision and text. Budget exhaustion must
+not produce an arbitrary match. No test may silently migrate the user's notebook.
+
+Component tests in `NotebookReviewFlow.test.tsx` and `NotebookCommentsPanel.test.tsx`
+cover native multi-anchor rendering and historical context. Pure mapping tests
+cover deterministic limits, ambiguity, grapheme boundaries and independent sides.
+The browser journey also verifies the exact diff underline and native Markdown
+CSS range, then clicks each to reopen its existing thread. Monaco pointer
+interaction still needs separate real-browser verification.
 
 Each change card has a visible comment input instead of a "Comment on changes"
 link. Enter sends comments and replies; Shift+Enter preserves a newline. IME

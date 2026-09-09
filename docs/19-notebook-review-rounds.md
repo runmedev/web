@@ -166,12 +166,43 @@ context. Comparison scope and acceptance/undo feedback live on comments,
 not on a separate Review record.
 
 ```javascript
-const version = await revisions.checkpoint({ target, name: "Reviewed baseline" });
+const version = await revisions.create({ target, name: "Reviewed baseline" });
 await comments.add({
   target, content: "Please clarify this cell.",
   anchors: [{ kind: "cell", cell_id: "<cell-id>", version, surface: "source" }],
 });
 ```
+
+`revisions.create` captures an immutable snapshot and returns its revision
+`VersionRef`; it does not edit notebook content. Supply `snapshot_heads` to
+select a historical snapshot, or omit it to capture the current committed head.
+`revisions.label` names an existing version without changing its snapshot.
+Checkpoint remains a storage concept, not a separate public API method.
+
+### Comment locations in editor and comparison views
+
+Both views derive locations from immutable historical anchors. The comparison
+maps each anchor to the start and end independently and shows one conversation
+with links to its locations. Exact source selections get blue underlines;
+blue cell-edge markers reopen the comments gutter. Unmatched and deleted anchors
+remain accessible with their original revision and an expandable historical
+cell. Neither mapping nor accepting a change rewrites a comment anchor.
+
+Mapping is deliberately bounded: at most 20,000 code points per source and
+500,000 edit-matrix entries, then a 48-code-point fuzzy search window with a
+250,000-step budget. Fuzzy matching permits at most three edits, requires a
+clear contextual winner, and is disabled for selections shorter than eight
+code points. Ambiguity, grapheme splits, and budget exhaustion produce an
+outdated location, never a guessed highlight. Markdown syntax without an exact
+rendered-text mapping retains the cell marker rather than highlighting other text.
+
+Both gutters preserve drafts when collapsed. Enter submits and Shift+Enter
+adds a newline; IME composition does not submit. New editor comments capture
+the displayed committed snapshot at composition time, rejecting intervening
+changes during persistence. Replies may add historical anchors while retaining
+the original conversation and comparison. `.runme` comment API calls require an
+explicit notebook target. These native locations require V2 anchors; legacy
+notebooks remain readable and are never migrated automatically.
 
 The old `reviews` runtime namespace and Review writers are removed. A read-only
 V1 decoder remains so existing notebooks can still be opened. V1 files are not

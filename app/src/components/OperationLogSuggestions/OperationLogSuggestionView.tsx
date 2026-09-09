@@ -1,5 +1,9 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { commentAttributionLabel } from '../../lib/commentAttribution'
+import {
+  CommentedSourceRun,
+  type CommentSourceRange,
+} from '../CommentedSourceRun'
 
 import {
   CheckIcon,
@@ -68,9 +72,13 @@ function formatCommentTime(value?: string): string {
 function PlainCell({
   value,
   side,
+  ranges,
+  onSelect,
 }: {
   value: string
   side?: 'base' | 'head' | 'both'
+  ranges?: CommentSourceRange[]
+  onSelect?: (id: string) => void
 }) {
   return (
     <pre className="m-0 whitespace-pre-wrap break-words p-3 font-mono text-xs leading-5">
@@ -80,7 +88,13 @@ function PlainCell({
           data-base-offset={side === 'base' || side === 'both' ? 0 : undefined}
           data-head-offset={side === 'head' || side === 'both' ? 0 : undefined}
         >
-          {value}
+          <CommentedSourceRun
+            value={value}
+            base={side === 'base' || side === 'both' ? 0 : undefined}
+            head={side === 'head' || side === 'both' ? 0 : undefined}
+            ranges={ranges}
+            onSelect={onSelect}
+          />
         </span>
       ) : (
         <span className="text-nb-text-faint">Empty cell</span>
@@ -92,9 +106,13 @@ function PlainCell({
 export function ChangedCell({
   row,
   plainSide = 'both',
+  commentRanges = [],
+  onSelectComment,
 }: {
   row: CellDiff
   plainSide?: 'base' | 'head' | 'both'
+  commentRanges?: CommentSourceRange[]
+  onSelectComment?: (id: string) => void
 }) {
   const before = row.baseCell?.value ?? ''
   const after = row.compareCell?.value ?? ''
@@ -109,7 +127,12 @@ export function ChangedCell({
         id={`suggestion-cell-unchanged-${row.id}`}
         className="rounded-nb-sm border border-nb-border bg-white text-nb-text"
       >
-        <PlainCell value={after || before} side={plainSide} />
+        <PlainCell
+          value={after || before}
+          side={plainSide}
+          ranges={commentRanges}
+          onSelect={onSelectComment}
+        />
       </div>
     )
   }
@@ -121,7 +144,12 @@ export function ChangedCell({
         className="rounded-nb-sm border-2 border-emerald-400 bg-emerald-50 text-emerald-950"
         data-testid="suggestion-inserted-cell"
       >
-        <PlainCell value={after} side={nonText ? undefined : 'head'} />
+        <PlainCell
+          value={after}
+          side={nonText ? undefined : 'head'}
+          ranges={commentRanges}
+          onSelect={onSelectComment}
+        />
       </div>
     )
   }
@@ -132,7 +160,12 @@ export function ChangedCell({
         className="rounded-nb-sm border-2 border-red-400 bg-red-50 text-red-900 line-through decoration-red-600"
         data-testid="suggestion-deleted-cell"
       >
-        <PlainCell value={before} side={nonText ? undefined : 'base'} />
+        <PlainCell
+          value={before}
+          side={nonText ? undefined : 'base'}
+          ranges={commentRanges}
+          onSelect={onSelectComment}
+        />
       </div>
     )
   }
@@ -191,7 +224,13 @@ export function ChangedCell({
                   : 'text-nb-text'
             }
           >
-            {segment.value}
+            <CommentedSourceRun
+              value={segment.value}
+              base={segment.base}
+              head={segment.head}
+              ranges={commentRanges}
+              onSelect={onSelectComment}
+            />
           </span>
         ))}
       </pre>

@@ -1,5 +1,7 @@
-import { useEffect, useMemo, useState } from 'react'
+import { useEffect, useMemo, useRef, useState } from 'react'
 import { commentAttributionLabel } from '../lib/commentAttribution'
+import { CommentAnchorLocations } from './CommentAnchorLocations'
+import { isLocated } from '../lib/commentAnchorMapping'
 
 import type {
   CellCommentThread,
@@ -26,6 +28,7 @@ export function NotebookCommentsPanel({
   threads,
   cellLabels,
   activeCellId,
+  activeCommentId,
   draftTarget,
   draftContent,
   busy,
@@ -49,6 +52,7 @@ export function NotebookCommentsPanel({
   threads: CellCommentThread[]
   cellLabels: Map<string, string>
   activeCellId?: string | null
+  activeCommentId?: string | null
   draftTarget: CommentDraftTarget | null
   draftContent: string
   busy: boolean
@@ -73,6 +77,11 @@ export function NotebookCommentsPanel({
   const [draft, setDraft] = useState(draftContent)
   const [replyDrafts, setReplyDrafts] = useState<Record<string, string>>({})
   const [activeThreadKey, setActiveThreadKey] = useState<string | null>(null)
+  // React's busy prop may lag a second Enter event in the same render frame.
+  const sending = useRef(false)
+  useEffect(() => {
+    if (activeCommentId) setActiveThreadKey(`thread:${activeCommentId}`)
+  }, [activeCommentId])
 
   useEffect(() => {
     setDraft(draftContent)
@@ -114,7 +123,12 @@ export function NotebookCommentsPanel({
         !currentItem.orphaned
     )
     const nextActiveThreadKey =
-      (currentItemMatchesActiveCell ? activeThreadKey : activeCellThreadKey) ??
+      (activeCommentId &&
+      currentItem?.threads.some((t) => t.comment.id === activeCommentId)
+        ? activeThreadKey
+        : currentItemMatchesActiveCell
+          ? activeThreadKey
+          : activeCellThreadKey) ??
       (activeThreadKey && visibleKeys.has(activeThreadKey)
         ? activeThreadKey
         : firstThreadKey)
@@ -122,10 +136,16 @@ export function NotebookCommentsPanel({
     if (nextActiveThreadKey !== activeThreadKey) {
       setActiveThreadKey(nextActiveThreadKey)
     }
-  }, [activeCellId, activeCellThreadKey, activeThreadKey, panelItems])
+  }, [
+    activeCellId,
+    activeCellThreadKey,
+    activeThreadKey,
+    activeCommentId,
+    panelItems,
+  ])
 
   const submitDraft = () => {
-    if (!draftTarget) {
+    if (!draftTarget || busy || sending.current) {
       return
     }
     const content = draft.trim()
@@ -143,6 +163,7 @@ export function NotebookCommentsPanel({
             )
           )
         : null
+    sending.current = true
     const submit = targetCommentId
       ? onReply(targetCommentId, content).then(onCancelDraft)
       : onCreateComment(draftTarget, content)
@@ -152,14 +173,19 @@ export function NotebookCommentsPanel({
         onDraftContentChange('')
       })
       .catch(() => undefined)
+      .finally(() => {
+        sending.current = false
+      })
   }
 
   const submitThreadReply = (item: CommentsPanelItem) => {
+    if (busy || sending.current) return
     const content = (replyDrafts[item.key] ?? '').trim()
     if (!content) {
       return
     }
     const targetCommentId = findReplyTargetCommentId(item.threads)
+    sending.current = true
     const submit = targetCommentId
       ? onReply(targetCommentId, content)
       : item.cellId && !item.orphaned
@@ -170,6 +196,9 @@ export function NotebookCommentsPanel({
         setReplyDrafts((current) => ({ ...current, [item.key]: '' }))
       })
       .catch(() => undefined)
+      .finally(() => {
+        sending.current = false
+      })
   }
 
   const resolveThread = (item: CommentsPanelItem) => {
@@ -307,7 +336,7 @@ export function NotebookCommentsPanel({
           )}
         {status === 'available' && panelItems.length > 0 && (
           <div className="space-y-3">
-            {panelItems.map((item) => {
+            {panelItems.map((item, itemIndex) => {
               const openThreads = item.threads.filter(
                 (thread) => !thread.comment.resolved
               )
@@ -339,6 +368,7 @@ export function NotebookCommentsPanel({
 
               return (
                 <article
+                  id={`editor-comment-${item.threads[0]?.comment.id ?? item.key}`}
                   key={item.key}
                   role="button"
                   tabIndex={0}
@@ -372,6 +402,23 @@ export function NotebookCommentsPanel({
                     }
                   }}
                 >
+                  {isUnlocatedItem(item) &&
+                    (itemIndex === 0 ||
+                      !isUnlocatedItem(panelItems[itemIndex - 1]!)) && (
+                      <h3 className="mb-2 font-medium">
+                        Outdated anchors / Deleted cells
+                      </h3>
+                    )}
+                  {item.threads.map((thread) => (
+                    <CommentAnchorLocations
+                      key={thread.comment.id}
+                      locations={thread.locations ?? []}
+                      onSelect={(entry) => {
+                        if (entry.anchor.kind === 'cell')
+                          onSelectTarget({ cellId: entry.anchor.cell_id })
+                      }}
+                    />
+                  ))}
                   {isActiveThread && (
                     <div className="absolute bottom-3 left-0 top-3 w-1 rounded-r-full bg-nb-accent" />
                   )}
@@ -445,8 +492,11 @@ export function NotebookCommentsPanel({
                         }}
                         onKeyDown={(event) => {
                           if (
-                            (event.metaKey || event.ctrlKey) &&
-                            event.key === 'Enter'
+                            event.key === 'Enter' &&
+                            !event.shiftKey &&
+                            !event.nativeEvent.isComposing &&
+                            !event.repeat &&
+                            !busy
                           ) {
                             event.preventDefault()
                             submitDraft()
@@ -494,8 +544,11 @@ export function NotebookCommentsPanel({
                           }
                           onKeyDown={(event) => {
                             if (
-                              (event.metaKey || event.ctrlKey) &&
-                              event.key === 'Enter'
+                              event.key === 'Enter' &&
+                              !event.shiftKey &&
+                              !event.nativeEvent.isComposing &&
+                              !event.repeat &&
+                              !busy
                             ) {
                               event.preventDefault()
                               submitThreadReply(item)
@@ -644,15 +697,17 @@ function CommentMessage({
           </span>
         ) : null}
       </div>
-      {thread.anchor?.type === 'cell' && thread.anchor.quote && (
-        <blockquote className="mb-2 border-l-2 border-nb-accent pl-2 text-xs text-nb-text-muted">
-          {thread.anchor.diffTarget?.side === 'base'
-            ? 'Comparison start: '
-            : 'Commented revision: '}
-          {thread.anchor.quote}
-          {thread.location?.status === 'outdated' && ' (outdated context)'}
-        </blockquote>
-      )}
+      {!thread.locations?.length &&
+        thread.anchor?.type === 'cell' &&
+        thread.anchor.quote && (
+          <blockquote className="mb-2 border-l-2 border-nb-accent pl-2 text-xs text-nb-text-muted">
+            {thread.anchor.diffTarget?.side === 'base'
+              ? 'Comparison start: '
+              : 'Commented revision: '}
+            {thread.anchor.quote}
+            {thread.location?.status === 'outdated' && ' (outdated context)'}
+          </blockquote>
+        )}
       {thread.anchor?.type === 'cell-text' && (
         <div className="mb-2 rounded-nb-sm bg-nb-surface-2 px-2 py-1.5">
           <blockquote className="border-l-2 border-nb-accent pl-2 text-xs text-nb-text-muted">
@@ -760,6 +815,7 @@ function sortCommentPanelItems(
   sortedThreads.forEach((thread) => {
     if (
       thread.anchor?.type !== 'cell-text' &&
+      !thread.locations?.length &&
       thread.cellId &&
       !thread.orphaned
     ) {
@@ -831,6 +887,11 @@ function sortCommentPanelItems(
 }
 
 function threadGroup(thread: CellCommentThread): number {
+  if (
+    thread.locations?.length &&
+    !thread.locations.some((l) => isLocated(l.location))
+  )
+    return 1
   if (thread.cellId && !thread.orphaned) {
     return 0
   }
@@ -838,6 +899,14 @@ function threadGroup(thread: CellCommentThread): number {
     return 1
   }
   return 2
+}
+
+/** Unlocated native threads remain accessible without inventing a live target. */
+function isUnlocatedItem(item: CommentsPanelItem): boolean {
+  return item.threads.some(
+    (t) =>
+      t.locations?.length && !t.locations.some((l) => isLocated(l.location))
+  )
 }
 
 function cellIndex(cellLabels: Map<string, string>, cellId: string): number {

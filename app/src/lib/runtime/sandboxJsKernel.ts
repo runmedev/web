@@ -126,7 +126,7 @@ const DEFAULT_SANDBOX_ALLOWED_METHODS = [
   'comparisons.preview',
   'revisions.list',
   'revisions.label',
-  'revisions.checkpoint',
+  'revisions.create',
   'revisions.migrate',
   'revisions.help',
   'comparisons.help',
@@ -139,6 +139,7 @@ const DEFAULT_SANDBOX_ALLOWED_METHODS = [
   'comments.reply',
   'comments.resolve',
   'comments.reopen',
+  'comments.help',
   ...SANDBOX_NOTEBOOKS_API_METHODS,
   'notebooks.attach',
   'notebooks.createLocal',
@@ -430,17 +431,7 @@ export function buildSandboxSrcDoc(options: {
           reply: (args) => hostCall("comments.reply", [args]),
           resolve: (args) => hostCall("comments.resolve", [args]),
           reopen: (args) => hostCall("comments.reopen", [args]),
-          help: () => {
-            consoleProxy.log("await comments.list({ target?, status? })");
-            consoleProxy.log('await comments.add({ target:{uri}, content, reviewId?, suggestionId?, cellId?, side?: "base" | "head", sourceRange?: { start, end, unit: "utf-16" }, author? })');
-            consoleProxy.log("author: {displayName, kind:human|agent|service-account|unknown}; omitted/blank API author is unknown. Supplied labels are not verified identity. An edit reason is not a discussion comment.");
-            consoleProxy.log("await comments.parseAnchor(anchor)");
-            consoleProxy.log("await comments.resolveAnchor({ anchor, source })");
-            consoleProxy.log("await comments.reply({ target?, commentId, content, author? })");
-            consoleProxy.log("await comments.resolve({ target?, commentId })");
-            consoleProxy.log("await comments.reopen({ target?, commentId })");
-            consoleProxy.log("comments.list includes sync.status; .runme writes append to the operation log, while Drive writes reconcile asynchronously");
-          },
+          help: () => hostCall("comments.help", []),
         };
         const comparisons = {
           list: (args) => hostCall("comparisons.list", [args]),
@@ -453,7 +444,7 @@ export function buildSandboxSrcDoc(options: {
         const revisions = {
           list: (args) => hostCall("revisions.list", [args]),
           label: (args) => hostCall("revisions.label", [args]),
-          checkpoint: (args) => hostCall("revisions.checkpoint", [args]),
+          create: (args) => hostCall("revisions.create", [args]),
           migrate: (args) => hostCall("revisions.migrate", [args]),
           help: () => hostCall("revisions.help", []),
         };
@@ -571,12 +562,12 @@ export function buildSandboxSrcDoc(options: {
           consoleProxy.log("- documents.update(uri, content, { mimeType?, expectedVersion?, flush? })");
           consoleProxy.log("- await documentation.list()");
           consoleProxy.log("- await documentation.get(name)");
-          consoleProxy.log("- await comments.list({ target?, status? })");
+          consoleProxy.log("- await comments.list({ target, status? })");
           consoleProxy.log("- await comments.parseAnchor(anchor)");
           consoleProxy.log("- await comments.resolveAnchor({ anchor, source })");
-          consoleProxy.log("- await comments.reply({ target?, commentId, content })");
-          consoleProxy.log("- await comments.resolve({ target?, commentId })");
-          consoleProxy.log("- await comments.reopen({ target?, commentId })");
+          consoleProxy.log("- await comments.reply({ target, parent_comment_id, content, anchors?, author? })");
+          consoleProxy.log("- await comments.resolve({ target, thread_id })");
+          consoleProxy.log("- await comments.reopen({ target, thread_id })");
           consoleProxy.log("- comments.list includes sync.status; .runme writes append to the operation log, while Drive writes reconcile asynchronously");
           consoleProxy.log("- notebookDiff.listDriveRevisions([target])");
           consoleProxy.log("- notebookDiff.diffDriveRevision({ target?, revisionId, includeOutputs?, includeMetadata? })");
