@@ -1152,6 +1152,32 @@ describe('LocalNotebooks operation-log storage', () => {
     }
   )
 
+  it('uploads edits arriving during a filesystem header upgrade before acknowledging them', async () => {
+    const f = await createRecoveryFixture()
+    let upstream = upgradeOperationLogToV2(f.document([f.a]))
+    f.store.setFilesystemStore({
+      loadContent: async () => upstream,
+      saveContent: async (_uri: string, content: string) => {
+        upstream = content
+      },
+    } as never)
+    await f.store.files.update(f.uri, {
+      remoteId: 'fs://workspace/test/file/shared.runme',
+    })
+    const append = f.operationLogStorage.appendTransaction.bind(
+      f.operationLogStorage
+    )
+    vi.spyOn(f.operationLogStorage, 'appendTransaction').mockImplementationOnce(
+      async (ref, createRecords, options) => {
+        await append(ref, () => JSON.stringify(f.c) + '\n')
+        return append(ref, createRecords, options)
+      }
+    )
+    await f.store.sync(f.uri)
+    expect(f.ids(upstream)).toEqual([f.a.op_id, f.c.op_id].sort())
+    expect(f.ids(await f.store.loadContent(f.uri))).toEqual(f.ids(upstream))
+  })
+
   it('allocates unique actor sequences for concurrent editor and comment writes', async () => {
     const operationLogStorage = new MemoryOperationLogStorage()
     const store = createTestStore({}, { operationLogStorage })

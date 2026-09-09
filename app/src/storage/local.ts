@@ -5211,22 +5211,22 @@ export class LocalNotebooks extends Dexie {
       const mergedIds = new Set(
         mergedOperations.map((operation) => operation.op_id)
       )
+      const persistedLog = parseOperationLog(stored.document)
       if (
-        parseOperationLog(stored.document).operations.some(
+        persistedLog.operations.some(
           (operation) => !mergedIds.has(operation.op_id)
         )
       )
         continue
 
       const mergedDocument = serializeOperationLog(
-        parseOperationLog(stored.document).header,
+        persistedLog.header,
         mergedOperations,
         { canonicalOrder: true }
       )
       if (
         remoteWasEmpty ||
-        remoteLog.header.format_version <
-          parseOperationLog(stored.document).header.format_version ||
+        remoteLog.header.format_version < persistedLog.header.format_version ||
         mergedOperations.some((operation) => !remoteIds.has(operation.op_id))
       ) {
         // Reserve the last pass for verification after the eighth upload.
@@ -5498,15 +5498,19 @@ export class LocalNotebooks extends Dexie {
         }
       )
     }
+    // The locked upgrade/append may also observe another tab's edits. Upload
+    // the exact durable snapshot we acknowledge, not the earlier operation set.
+    const persistedLog = parseOperationLog(stored.document)
     const mergedDocument = serializeOperationLog(
-      parseOperationLog(stored.document).header,
-      mergedOperations,
+      persistedLog.header,
+      persistedLog.operations,
       { canonicalOrder: true }
     )
     if (
-      upstreamLog.header.format_version <
-        parseOperationLog(stored.document).header.format_version ||
-      mergedOperations.some((operation) => !upstreamIds.has(operation.op_id))
+      upstreamLog.header.format_version < persistedLog.header.format_version ||
+      persistedLog.operations.some(
+        (operation) => !upstreamIds.has(operation.op_id)
+      )
     ) {
       await upstreamStore.saveContent(record.remoteId, mergedDocument)
     }
