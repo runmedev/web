@@ -1,4 +1,5 @@
-export const RUNME_OPERATION_LOG_FORMAT_VERSION = 1 as const
+export const RUNME_OPERATION_LOG_FORMAT_VERSION = 2 as const
+export type OperationLogFormatVersion = 1 | 2
 
 export type JsonPrimitive = string | number | boolean | null
 export type JsonValue =
@@ -8,7 +9,7 @@ export type JsonValue =
 
 export interface NotebookLogHeader {
   record_type: 'runme.notebook'
-  format_version: typeof RUNME_OPERATION_LOG_FORMAT_VERSION
+  format_version: OperationLogFormatVersion
   notebook_id: string
   created_by: string
   created_at: string
@@ -105,6 +106,9 @@ export interface CommentBody {
 export interface CommentAuthor {
   principal_id: string
   display_name: string
+  kind?: 'human' | 'agent' | 'service-account' | 'unknown'
+  source?: 'google-drive'
+  authenticated_principal?: string
 }
 
 export interface CommentAnnotation {
@@ -155,13 +159,18 @@ export type KnownOperationKind =
   | 'comment.reply'
   | 'thread.set_status'
   | 'suggestion.review'
+  | 'review.create'
+  | 'review.submit'
+  | 'review.link_thread'
+  | 'review.cell_decision'
+  | 'revision.label'
 
 export interface RunmeOperation<
   Kind extends string = string,
   Payload = JsonValue,
 > {
   record_type: 'runme.operation'
-  format_version: typeof RUNME_OPERATION_LOG_FORMAT_VERSION
+  format_version: OperationLogFormatVersion
   op_id: string
   actor_id: string
   actor_seq: number

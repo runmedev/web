@@ -2,6 +2,7 @@ import { memo, useCallback, useEffect, useRef, useState } from "react";
 
 import MonacoEditor from "@monaco-editor/react";
 import useResizeObserver from "use-resize-observer";
+import type { CommentSourceRange } from "../CommentedSourceRun";
 
 const MARIMO_THEME = "marimo-light";
 let themeRegistered = false;
@@ -22,6 +23,8 @@ const Editor = memo(
     onChange,
     onEnter,
     onMount,
+    commentRanges = [],
+    onSelectComment,
   }: {
     id: string;
     value: string;
@@ -36,11 +39,49 @@ const Editor = memo(
     onChange: (value: string) => void;
     onEnter: () => void;
     onMount?: (editor: any, monaco: any) => void;
+    commentRanges?: readonly CommentSourceRange[];
+    onSelectComment?: (id: string) => void;
   }) => {
     // Store the latest onEnter in a ref to ensure late binding
     const onEnterRef = useRef(onEnter);
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
     const editorRef = useRef<any>(null);
+    const [mountVersion, setMountVersion] = useState(0);
+    // Monaco uses UTF-16 positions; immutable anchors are converted by the view.
+    useEffect(() => {
+      const editor = editorRef.current,
+        model = editor?.getModel?.();
+      if (!model || model.getValue() !== value) return;
+      const decorations =
+        editor.deltaDecorations?.(
+          [],
+          commentRanges.map((range) => {
+            const start = model.getPositionAt(range.start),
+              end = model.getPositionAt(range.end);
+            return {
+              range: {
+                startLineNumber: start.lineNumber,
+                startColumn: start.column,
+                endLineNumber: end.lineNumber,
+                endColumn: end.column,
+              },
+              options: { inlineClassName: "runme-source-comment-underline" },
+            };
+          })
+        ) ?? [];
+      const listener = editor.onMouseUp?.((event: any) => {
+        if (!editor.getSelection()?.isEmpty() || !event.target.position) return;
+        const offset = model.getOffsetAt(event.target.position);
+        const range = commentRanges.find(
+          (r) => r.start <= offset && offset < r.end
+        );
+        if (range) onSelectComment?.(range.threadId);
+      });
+      return () => {
+        listener?.dispose();
+        editor.deltaDecorations?.(decorations, []);
+      };
+    }, [commentRanges, onSelectComment, value, mountVersion]);
     // We keep track of the wrapping div so we can read its width. Monaco needs
     // explicit dimensions; without this the editor defaults to width/height 0.
     const containerRef = useRef<HTMLDivElement>(null);
@@ -64,7 +105,7 @@ const Editor = memo(
         containerRef.current = node;
         resizeRef(node);
       },
-      [resizeRef],
+      [resizeRef]
     );
 
     // Handle resize events
@@ -78,7 +119,7 @@ const Editor = memo(
       // the viewport height.
       const contentHeight = Math.max(
         120,
-        (editorRef.current.getContentHeight?.() ?? 120) + 20,
+        (editorRef.current.getContentHeight?.() ?? 120) + 20
       );
       const maxHeight = Math.max(200, window.innerHeight * 0.6);
       const desiredHeight = Math.min(contentHeight, maxHeight);
@@ -107,6 +148,7 @@ const Editor = memo(
 
     const editorDidMount = (editor: any, monaco: any) => {
       editorRef.current = editor;
+      setMountVersion((v) => v + 1);
 
       if (!monaco?.editor) {
         return;
@@ -243,7 +285,7 @@ const Editor = memo(
       prevProps.autoFocusWhenEmpty === nextProps.autoFocusWhenEmpty &&
       prevProps.shouldFocus === nextProps.shouldFocus
     );
-  },
+  }
 );
 
 export default Editor;

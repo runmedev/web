@@ -1,5 +1,12 @@
 import { canonicalJson } from './canonicalJson'
 import { operationMap, orderOperationSet } from './order'
+import { validateRecordShape } from './recordValidation'
+import {
+  type CommentRecord,
+  type RevisionRecord,
+  projectRecord,
+  serializedRecord,
+} from './records'
 import {
   type JsonValue,
   type NotebookLogHeader,
@@ -7,6 +14,7 @@ import {
   RUNME_OPERATION_LOG_FORMAT_VERSION,
   type RunmeOperation,
 } from './types'
+import { validateRecordReferences } from './versions'
 
 function requireObject(value: unknown, label: string): Record<string, unknown> {
   if (!value || typeof value !== 'object' || Array.isArray(value)) {
@@ -20,7 +28,11 @@ export function validateHeader(value: unknown): NotebookLogHeader {
   if (header.record_type !== 'runme.notebook') {
     throw new Error('First record must have record_type runme.notebook')
   }
-  if (header.format_version !== RUNME_OPERATION_LOG_FORMAT_VERSION) {
+  if (
+    ![1, RUNME_OPERATION_LOG_FORMAT_VERSION].includes(
+      header.format_version as number
+    )
+  ) {
     throw new Error(
       `Unsupported notebook log format_version ${String(header.format_version)}`
     )
@@ -34,11 +46,24 @@ export function validateHeader(value: unknown): NotebookLogHeader {
 }
 
 export function validateOperation(value: unknown): RunmeOperation {
-  const operation = requireObject(value, 'Operation')
+  let operation = requireObject(value, 'Operation')
+  if (
+    operation.record_type === 'runme.revision' ||
+    operation.record_type === 'runme.comment'
+  ) {
+    validateRecordShape(operation)
+    operation = projectRecord(
+      operation as unknown as RevisionRecord | CommentRecord
+    ) as unknown as Record<string, unknown>
+  }
   if (operation.record_type !== 'runme.operation') {
     throw new Error('Operation requires record_type runme.operation')
   }
-  if (operation.format_version !== RUNME_OPERATION_LOG_FORMAT_VERSION) {
+  if (
+    ![1, RUNME_OPERATION_LOG_FORMAT_VERSION].includes(
+      operation.format_version as number
+    )
+  ) {
     throw new Error(
       `Unsupported operation format_version ${String(operation.format_version)}`
     )
@@ -83,6 +108,13 @@ export function validateOperation(value: unknown): RunmeOperation {
       `Operation ${String(operation.op_id)} requires an object payload`
     )
   }
+  if (
+    operation.kind === 'revision.checkpoint' ||
+    operation.kind === 'comment.record'
+  )
+    validateRecordShape(
+      serializedRecord(operation as unknown as RunmeOperation)
+    )
   if (
     operation.transaction_id !== undefined &&
     (typeof operation.transaction_id !== 'string' ||
@@ -132,9 +164,24 @@ export function parseOperationLog(text: string): ParsedOperationLog {
     }
   })
   const header = validateHeader(values[0])
-  const operations = values.slice(1).map(validateOperation)
+  const operations = values.slice(1).map((value) => {
+    const record = requireObject(value, 'Operation')
+    if (
+      record.record_type === 'runme.operation' &&
+      ['revision.checkpoint', 'comment.record'].includes(record.kind as string)
+    )
+      throw new Error(
+        'Revision and comment entities must be serialized as first-class records'
+      )
+    return validateOperation(record)
+  })
+  if (operations.some((op) => op.format_version > header.format_version))
+    throw new Error(
+      'Record format exceeds notebook format; migrate the notebook explicitly'
+    )
   operationMap(operations)
   validateLamportValues(operations)
+  validateRecordReferences(operations)
   return { header, operations }
 }
 
@@ -166,8 +213,17 @@ export function serializeOperationLog(
 ): string {
   const validatedHeader = validateHeader(header)
   const validatedOperations = operations.map(validateOperation)
+  if (
+    validatedOperations.some(
+      (op) => op.format_version > validatedHeader.format_version
+    )
+  )
+    throw new Error(
+      'Record format exceeds notebook format; migrate the notebook explicitly'
+    )
   operationMap(validatedOperations)
   validateLamportValues(validatedOperations)
+  validateRecordReferences(validatedOperations)
   const ordered = options.canonicalOrder
     ? (() => {
         const result = orderOperationSet(validatedOperations)
@@ -176,9 +232,14 @@ export function serializeOperationLog(
     : validatedOperations
   return [
     canonicalJson(validatedHeader as unknown as JsonValue),
-    ...ordered.map((operation) =>
-      canonicalJson(operation as unknown as JsonValue)
-    ),
+    ...ordered.map((operation) => encodeOperation(operation)),
     '',
   ].join('\n')
+}
+
+/** Encode a single record for an append without leaking reducer-only fields. */
+export function encodeOperation(operation: RunmeOperation): string {
+  const record = serializedRecord(operation)
+  if (record.record_type !== 'runme.operation') validateRecordShape(record)
+  return canonicalJson(record as unknown as JsonValue)
 }

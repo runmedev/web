@@ -196,6 +196,13 @@ export class NotebookDataController {
 
     if (entry.operationLog) {
       this.operationLogUris.add(localUri)
+      const existing = this.notebooks.get(localUri)
+      // Opening/focusing an already-mounted editor is not a refresh. Replacing
+      // its store here can discard debounced edits before a review captures them.
+      if (existing?.loaded && !existing.data.isReadOnly()) {
+        entry = this.upsertOpenEntry({ ...entry, state: 'loaded', readOnly: false })
+        return { localUri, entry }
+      }
       const handle = this.ensureNotebookData({
         uri: localUri,
         name,
@@ -507,6 +514,9 @@ export class NotebookDataController {
           await this.localNotebooks.createOperationLogSaveStore(localUri)
         handle.data.loadNotebook(notebook, { persist: false })
         handle.data.setNotebookStore(store)
+        // Recover an undo whose append committed but whose editor reload failed.
+        handle.data.setReviewReloadRequired(false)
+        handle.data.setReviewPending(false)
         handle.data.setReadOnly(false)
         handle.loaded = true
         this.upsertOpenEntry({

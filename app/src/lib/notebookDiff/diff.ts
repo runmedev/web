@@ -13,6 +13,7 @@ import {
 } from "./model";
 
 const DEFAULT_OPTIONS: Required<NotebookDiffOptions> = {
+  matchCellIdsOnly: false,
   includeOutputs: true,
   includeMetadata: true,
   ignoreTransientMetadata: true,
@@ -61,7 +62,7 @@ export function computeNotebookDiff(
     cell,
     index,
   }));
-  const matches = matchCells(baseCells, compareCells);
+  const matches = matchCells(baseCells, compareCells, resolvedOptions.matchCellIdsOnly);
   const compareRefToMatch = new Map<string, CellMatch>();
   const baseRefToMatch = new Map<string, CellMatch>();
   for (const match of matches) {
@@ -107,6 +108,7 @@ export function computeNotebookDiff(
 function matchCells(
   baseCells: IndexedCell[],
   compareCells: IndexedCell[],
+  idsOnly: boolean,
 ): CellMatch[] {
   const matches: CellMatch[] = [];
   const usedBaseIndexes = new Set<number>();
@@ -124,6 +126,7 @@ function matchCells(
     usedCompareIndexes.add(compare.index);
   }
 
+  if (idsOnly) return matches.sort((a, b) => a.compare.index - b.compare.index);
   const exactBase = new Map<string, IndexedCell[]>();
   for (const base of baseCells) {
     if (usedBaseIndexes.has(base.index)) {
@@ -482,7 +485,8 @@ function sortValue(value: unknown): unknown {
   );
 }
 
-function summarize(rows: CellDiff[]): NotebookDiff["summary"] {
+/** Summarize only the visible rows, including filtered review scopes. */
+export function summarize(rows: CellDiff[]): NotebookDiff["summary"] {
   return rows.reduce<NotebookDiff["summary"]>(
     (summary, row) => {
       if (row.kind === "unchanged") {

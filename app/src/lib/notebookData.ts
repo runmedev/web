@@ -63,6 +63,7 @@ import { showToast } from './toast'
  * in the IndexedDB mirror before any upstream sync runs.
  */
 export interface NotebookSaveStore {
+  getObservedOperationHeads?(): string[]
   save(uri: string, notebook: parser_pb.Notebook): Promise<unknown>
 }
 
@@ -823,6 +824,11 @@ export class NotebookData {
     this.notebookStore = notebookStore
   }
 
+  /** Capture this editor's view, not concurrent changes it has never loaded. */
+  getObservedOperationHeads(): string[] | undefined {
+    return this.notebookStore?.getObservedOperationHeads?.()
+  }
+
   setReadOnly(readOnly: boolean): void {
     if (this.readOnly === readOnly) {
       return
@@ -878,6 +884,16 @@ export class NotebookData {
 
   isReviewReloadRequired(): boolean {
     return this.reviewReloadRequired
+  }
+
+  /** Review undo must not interrupt unrelated running notebook work. */
+  hasActiveExecutions(): boolean {
+    return (
+      this.activeStreams.size > 0 ||
+      this.activeJupyterSockets.size > 0 ||
+      this.pendingJupyterExecutions.size > 0 ||
+      this.activeAppKernelExecutions.size > 0
+    )
   }
 
   async cancelActiveExecutions(

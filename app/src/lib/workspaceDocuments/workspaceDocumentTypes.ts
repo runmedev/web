@@ -166,6 +166,7 @@ export function isDocumentationDocumentUri(
 export function isRestorableWorkspaceDocument(uri: string): boolean {
   return (
     isNotebookDocumentUri(uri) ||
+    isOperationLogSuggestionDocumentUri(uri) ||
     isDocumentationDocumentUri(uri) ||
     isOnboardingDocumentUri(uri)
   )

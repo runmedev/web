@@ -271,7 +271,7 @@ export async function encodeRunmeOperationLogSnapshot(
     : new Date().toISOString()
   const header: NotebookLogHeader = {
     record_type: 'runme.notebook',
-    format_version: 1,
+    format_version: 2,
     notebook_id: `notebook_${seed}`,
     created_by: `actor_${seed}`,
     created_at: createdAt,
@@ -415,7 +415,7 @@ export function createInitialNotebookFile(fileName: string): string {
     const id = globalThis.crypto?.randomUUID?.() ?? `${Date.now()}`
     const header: NotebookLogHeader = {
       record_type: 'runme.notebook',
-      format_version: 1,
+      format_version: 2,
       notebook_id: `notebook_${id}`,
       created_by: 'runme-web',
       created_at: new Date().toISOString(),

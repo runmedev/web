@@ -13,7 +13,8 @@
 3. Switch between the editor and suggestion tabs. Confirm each preserves its
    view state and reopening **Review suggestions** focuses the existing review
    tab instead of creating a duplicate.
-4. Confirm the left review panel shows the current suggestion, total count,
+4. Select **Individual suggestions · accept/reject** in the left review panel.
+   Confirm it shows the current suggestion, total count,
    summary, decision actions, and discussion thread.
 5. Use previous and next in the left panel to move between suggestions while the
    notebook diff remains in the independently scrolling right canvas.

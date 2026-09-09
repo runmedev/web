@@ -1,5 +1,11 @@
 import type { DriveComment } from '../storage/drive'
 import {
+  type LocatedAnchor,
+  historicalAnchors,
+  isLocated,
+  locateComment,
+} from './commentAnchorMapping'
+import {
   RENDERED_MARKDOWN_PROJECTION_NAME,
   RENDERED_MARKDOWN_PROJECTION_VERSION,
   type RenderedMarkdownSelectionDraft,
@@ -10,6 +16,10 @@ import {
   sha256Text,
   sliceByCodePoint,
 } from './markdown/renderedMarkdownProjection'
+import {
+  type DiffCommentTarget,
+  parseDiffCommentTarget,
+} from './operationLog/diffCommentAnchor'
 
 const RUNME_COMMENT_ANCHOR_VERSION = 2
 
@@ -18,6 +28,9 @@ export type CellCommentAnchor = {
   cellId: string
   version: 1 | 2
   clientCommentId?: string
+  /** Historical source context from a diff; never reinterpret as rendered offsets. */
+  quote?: string
+  diffTarget?: DiffCommentTarget
 }
 
 export type CellTextCommentAnchor = {
@@ -67,6 +80,8 @@ type RunmeCommentAnchorPayload = {
     sourceHints?: unknown
     clientCommentId?: unknown
     clientOperationId?: unknown
+    reviewId?: unknown
+    suggestionId?: unknown
   }
 }
 
@@ -80,6 +95,7 @@ export type CommentLocationState =
     }
 
 export type CellCommentThread = {
+  locations?: LocatedAnchor[]
   comment: DriveComment
   anchor: CommentAnchor | null
   cellId: string | null
@@ -245,7 +261,26 @@ export function parseCommentAnchor(
       return null
     }
 
-    if (anchorType === 'cell') {
+    // Diff comments belong to the same durable cell discussion in the editor.
+    // Keep the raw comparison anchor on DriveComment; this is only its UI projection.
+    if (
+      anchorType === 'cell' ||
+      anchorType === 'review' ||
+      anchorType === 'suggestion'
+    ) {
+      const historical = parsed.runme as typeof runme & { quote?: string }
+      if (anchorType !== 'cell') {
+        const comparisonId =
+          anchorType === 'review' ? runme.reviewId : runme.suggestionId
+        if (
+          version !== 1 ||
+          typeof comparisonId !== 'string' ||
+          !comparisonId.trim()
+        )
+          return null
+      }
+      const diffTarget = parseDiffCommentTarget(anchor)
+      if (diffTarget && diffTarget.cellId !== runme.cellId) return null
       const clientCommentId =
         typeof runme.clientCommentId === 'string'
           ? runme.clientCommentId
@@ -257,6 +292,10 @@ export function parseCommentAnchor(
         cellId: runme.cellId,
         version,
         ...(clientCommentId ? { clientCommentId } : {}),
+        ...(typeof historical?.quote === 'string'
+          ? { quote: historical.quote }
+          : {}),
+        ...(diffTarget ? { diffTarget } : {}),
       }
     }
 
@@ -320,6 +359,18 @@ export function groupCommentsByCell(
     if (comment.deleted || comment.resolved) {
       return
     }
+    const historical = historicalAnchors(comment)
+    if (historical.length) {
+      const ids = new Set(
+        historical.flatMap((a) =>
+          a.anchor.kind === 'cell' ? [a.anchor.cell_id] : []
+        )
+      )
+      for (const id of ids)
+        if (identities.some((c) => c.refId === id))
+          byCell.set(id, [...(byCell.get(id) ?? []), comment])
+      return
+    }
     const anchor = parseCommentAnchor(comment.anchor)
     if (!anchor) {
       return
@@ -344,6 +395,25 @@ export function toCellCommentThreads(
     .filter((comment) => !comment.deleted)
     .map((comment) => {
       const anchor = parseCommentAnchor(comment.anchor)
+      const locations = locateComment(comment, identities)
+      if (locations.length) {
+        const primary =
+          locations.find((l) => isLocated(l.location)) ?? locations[0]!
+        const cellId =
+          primary.anchor.kind === 'cell' ? primary.anchor.cell_id : null
+        return {
+          comment,
+          anchor,
+          cellId,
+          locations,
+          orphaned: locations.every((l) => l.location.status === 'deleted'),
+          location: {
+            status: locations.some((l) => isLocated(l.location))
+              ? ('cell' as const)
+              : ('outdated' as const),
+          },
+        }
+      }
       if (!anchor) {
         return {
           comment,
@@ -362,12 +432,13 @@ export function toCellCommentThreads(
         anchor,
         cellId: resolution.cellId,
         orphaned: resolution.orphaned,
-        location:
-          anchor.type === 'cell'
-            ? { status: 'cell' }
-            : resolution.orphaned
-              ? { status: 'cell-deleted' }
-              : resolveRenderedTextAnchor(anchor, cell?.value ?? ''),
+        location: resolution.orphaned
+          ? { status: 'cell-deleted' }
+          : anchor.type === 'cell'
+            ? anchor.quote && !cell?.value?.includes(anchor.quote)
+              ? { status: 'outdated' }
+              : { status: 'cell' }
+            : resolveRenderedTextAnchor(anchor, cell?.value ?? ''),
       }
     })
 }

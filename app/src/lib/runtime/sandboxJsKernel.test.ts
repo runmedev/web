@@ -1396,6 +1396,18 @@ describe('SandboxJSKernel', () => {
     expect(exitCode).toBe(0)
   })
 
+  it('exposes revisions.create in the sandbox helper and allowlist', () => {
+    const srcDoc = buildSandboxSrcDoc({ enableOpfs: true, enableNet: true })
+    expect(srcDoc).toContain(
+      'create: (args) => hostCall("revisions.create", [args])'
+    )
+    expect(srcDoc).not.toContain('revisions.checkpoint')
+    expect(CODE_MODE_SANDBOX_ALLOWED_METHODS).toContain('revisions.create')
+    expect(CODE_MODE_SANDBOX_ALLOWED_METHODS).not.toContain(
+      'revisions.checkpoint'
+    )
+  })
+
   it('supports linked-resource attachment through the notebooks sandbox helper', async () => {
     let stdout = ''
     let stderr = ''

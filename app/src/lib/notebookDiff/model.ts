@@ -38,6 +38,8 @@ export type CellDiffKind = 'unchanged' | 'inserted' | 'deleted' | 'modified'
 
 export interface CellDiff {
   id: string
+  /** Exact operation-log cell endpoints; independent of the document pair. */
+  reviewKey?: string
   kind: CellDiffKind
   baseIndex?: number
   compareIndex?: number
@@ -71,6 +73,8 @@ export interface NotebookDiff {
 }
 
 export interface NotebookDiffOptions {
+  /** Operation-log reviews use durable IDs, never content-based fallback matches. */
+  matchCellIdsOnly?: boolean
   includeOutputs?: boolean
   includeMetadata?: boolean
   ignoreTransientMetadata?: boolean

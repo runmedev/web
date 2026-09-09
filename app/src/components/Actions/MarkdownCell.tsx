@@ -50,6 +50,7 @@ import {
   registerRenderedMarkdownCommentHighlights,
   type RenderedMarkdownCommentRange,
 } from '../../lib/markdown/renderedMarkdownCommentHighlights'
+import type { CommentSourceRange } from '../CommentedSourceRun'
 import Editor from './Editor'
 import { fontSettings } from './CellConsole'
 
@@ -188,6 +189,8 @@ interface MarkdownCellProps {
   readOnly?: boolean
   /** Resolved open-comment ranges to keep visible in rendered Markdown. */
   commentRanges?: readonly RenderedMarkdownCommentRange[]
+  commentSourceRanges?: CommentSourceRange[]
+  onSelectComment?: (id: string) => void
   /** Open the cell context menu with a lazily captured rendered selection. */
   onRenderedSelectionContextMenu?: (request: {
     x: number
@@ -210,6 +213,7 @@ function sameCommentRanges(
       return (
         range.start === other?.start &&
         range.end === other?.end &&
+        range.onSelect === other?.onSelect &&
         Boolean(range.active) === Boolean(other?.active)
       )
     })
@@ -240,6 +244,8 @@ const MarkdownCell = memo(
     onLinkClick,
     readOnly = false,
     commentRanges = [],
+    commentSourceRanges = [],
+    onSelectComment,
     onRenderedSelectionContextMenu,
   }: MarkdownCellProps) => {
     // Subscribe to cell data changes using useSyncExternalStore for tearing-safe reads
@@ -604,6 +610,8 @@ const MarkdownCell = memo(
             data-cell-focus-role="editor"
           >
             <Editor
+              commentRanges={commentSourceRanges}
+              onSelectComment={onSelectComment}
               id={`md-editor-${cell.refId}`}
               value={value}
               language="markdown"
@@ -659,6 +667,8 @@ const MarkdownCell = memo(
       prevProps.onLinkClick === nextProps.onLinkClick &&
       prevProps.readOnly === nextProps.readOnly &&
       sameCommentRanges(prevProps.commentRanges, nextProps.commentRanges) &&
+      prevProps.commentSourceRanges === nextProps.commentSourceRanges &&
+      prevProps.onSelectComment === nextProps.onSelectComment &&
       prevProps.onRenderedSelectionContextMenu ===
         nextProps.onRenderedSelectionContextMenu
     )

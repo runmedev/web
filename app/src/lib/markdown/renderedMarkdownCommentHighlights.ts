@@ -7,6 +7,7 @@ export type RenderedMarkdownCommentRange = {
   start: number
   end: number
   active?: boolean
+  onSelect?: () => void
 }
 
 type HighlightRegistry = {
@@ -75,7 +76,7 @@ function applyFallback(
       const spanStart = Number(span.dataset.runmeProjectionStart)
       const spanEnd = Number(span.dataset.runmeProjectionEnd)
       const overlapping = ranges.filter(
-        (range) => spanEnd > range.start && spanStart < range.end
+        (range) => spanStart >= range.start && spanEnd <= range.end
       )
       if (overlapping.length === 0) {
         return
@@ -108,6 +109,29 @@ export function registerRenderedMarkdownCommentHighlights(
     ;(range.active ? active : regular).push(domRange)
   })
   owners.set(owner, { regular, active, root })
+  // Hit-test exact DOM ranges instead of making the entire Markdown node clickable.
+  const click = (event: MouseEvent) => {
+    if (root.ownerDocument.getSelection()?.isCollapsed === false) return
+    for (const item of ranges) {
+      const range = renderedMarkdownDomRange(root, item.start, item.end)
+      if (
+        item.onSelect &&
+        range &&
+        Array.from(range.getClientRects()).some(
+          (r) =>
+            event.clientX >= r.left &&
+            event.clientX <= r.right &&
+            event.clientY >= r.top &&
+            event.clientY <= r.bottom
+        )
+      ) {
+        event.stopPropagation()
+        item.onSelect()
+        return
+      }
+    }
+  }
+  root.addEventListener('click', click)
   const nativeHighlights = rebuildHighlights()
   if (nativeHighlights) {
     clearFallback(root)
@@ -126,6 +150,7 @@ export function registerRenderedMarkdownCommentHighlights(
   })
 
   return () => {
+    root.removeEventListener('click', click)
     if (frame !== undefined) {
       view?.cancelAnimationFrame(frame)
     }

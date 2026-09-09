@@ -195,6 +195,7 @@ describe('OperationLogSuggestionView', () => {
       content: 'One more thought.',
       anchor: createSuggestionCommentAnchor('suggestion:update'),
       motivation: 'suggesting',
+      author: { displayName: 'unknown', kind: 'unknown' },
     })
 
     fireEvent.change(screen.getByLabelText('Reply to comment comment-1'), {
@@ -205,7 +206,8 @@ describe('OperationLogSuggestionView', () => {
     expect(replyToOperationLogComment).toHaveBeenCalledWith(
       'local://file/test',
       'comment-1',
-      'Looks good to me.'
+      'Looks good to me.',
+      { author: { displayName: 'unknown', kind: 'unknown' } }
     )
 
     fireEvent.click(screen.getByRole('button', { name: 'Reject' }))

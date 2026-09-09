@@ -1296,6 +1296,9 @@ export function createAppJsGlobals({
     documents: documentsHelpers,
     documentation: documentationHelpers,
     comments: commentsHelpers,
+    comparisons: commentsApi.comparisons,
+    revisions: commentsApi.revisions,
+    suggestions: commentsApi.suggestions,
     notebookDiff: notebookDiffApi,
     opfs: {
       exists: (path: string) => {

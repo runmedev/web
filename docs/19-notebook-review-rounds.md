@@ -1,0 +1,226 @@
+---
+name: notebook-review-rounds
+title: Compare notebook revisions
+order: 19
+description: Comment on notebook changes immediately, select sections, and assess scoped suggestions.
+---
+
+# Compare notebook revisions
+
+Read and comment on a .runme notebook in the editor. Ask your collaborator to
+address the comments, edit the same cells, and reply in the existing threads.
+Then right-click the notebook tab and choose **Review suggestions**.
+The suggestion tab stays beside the editor.
+
+Choose start/end revisions and a scope. That selection defines **one suggestion**.
+The diff updates immediately and is immediately commentable: there is no
+Start review, draft, or Submit review step. Browsing does not create metadata.
+The first comment or assessment records the fixed pair and scope.
+
+Use the chevron beside **Compare changes** to collapse the left panel and give
+the diff more room. The remaining chevron expands it again. Your revision and
+scope selection and unsent comments are preserved while the panel is hidden.
+The independent **Hide comments** / **Show comments** control collapses the right
+gutter. A blue cell marker also reopens it. Unsent cell comments and replies stay
+intact; either panel can be hidden without hiding the other.
+
+Use **Good Enough** when that suggestion needs no further edits, or
+**Needs More Work** and leave feedback. These actions do not undo edits, change
+notebook contents, or resolve comments. Select another section to assess it
+independently. For the next iteration compare the previous response with the
+new response; earlier snapshots and feedback remain unchanged.
+
+## Pick versions and sections
+
+New comparisons default to the latest named revision before the latest revision,
+or **Empty notebook** when no such named revision exists. The end defaults to
+the latest revision. Existing selections stay fixed when new edits or labels arrive.
+
+Expand **Name a revision** to label a historical snapshot and describe it.
+The selector shows its name, description, and last content-change date in your
+local time zone. Labels and comments do not change that date.
+**Named revisions only** helps select the versions you intended to compare;
+the empty baseline stays available. End revisions must strictly extend the
+start's changes, not merely have a later timestamp.
+
+Select **Heading / section range** under Suggestion scope. **From heading**
+and **Through section** include descendant headings and body cells through the
+next equal-or-higher-level heading. The same heading in both selects one section.
+Multiple headings in a cell select the whole cell.
+
+**Outline from** chooses the end or start revision; use the start outline for
+deleted sections. Scope is a fixed set of cell IDs, not an expanding region.
+The API supports noncontiguous sets from either endpoint; each ID must exist in
+at least one endpoint. Omit cellIds for the whole document. An explicit set must
+be nonempty. Duplicate/reordered IDs identify the same suggestion.
+
+## Shared comments
+
+The left panel contains one suggestion-wide conversation, with no Whole/Cell
+target dropdown. Cell and selected-source threads appear in the right gutter
+beside their cells, including ordinary comments created in the editor. A blue
+bar on the cell's right edge marks attached threads; click it to focus the
+gutter. Selected-text comments retain their quote in the thread; precise text
+underlining is not yet provided. Return to the
+editor to see and reply to those same threads. Replies and resolve/reopen actions
+are shared, not copied into a separate discussion per view.
+
+Use the blue comment-bubble icon in the cell's upper-right corner, or right-click
+and choose **Comment on cell**. Select source and use **Comment on selection**
+in the right-click menu; it is disabled when there is no valid selection.
+There are no visible cell-number/status captions or comment-action text rows
+between cells. **Comment on previous cell** remains available in the context menu
+for modified cells. Removed text anchors to the start
+snapshot; added text to the end snapshot. Unchanged text defaults to the end.
+Select only one side and one cell at a time. Linked resources support whole-cell
+comments, not selection within the resource.
+
+Quotes, original comparison IDs, and optional UTF-16 source ranges remain in
+the .runme log. They are not rendered-Markdown offsets. Changed or deleted
+context is labeled rather than silently retargeted to today's text. The editor
+shows historical quotes without claiming an exact current source selection.
+Whole-suggestion feedback belongs to its original pair/scope; cell feedback
+remains visible in other comparisons containing that cell.
+
+## Accept or undo a cell's changes
+
+Type directly into the comment box in each change card; no extra click is
+needed to open a composer. Enter sends comments and replies; Shift+Enter adds
+a newline. Drafts survive hiding the gutter or a failed send.
+
+Each changed cell has checkmark and X controls in its right-hand discussion
+gutter. **Accept** keeps the content and stops showing that cell's diff. The
+decision follows the exact cell transition: accepting c0 → c1 also hides it
+when a later document revision changes only other cells. A new cell revision
+c2 is not covered by that acceptance. Accepted deletions have no source body;
+their discussion remains accessible.
+
+**Undo** restores only that cell to its start-revision state (including restoring
+a deleted cell or removing an inserted cell). It appends history; it does not
+erase operations. If that cell has changed since the reviewed endpoint, undo
+refuses to overwrite it. Refresh and choose a current comparison instead.
+Wait for running cells to finish before undoing; undo does not interrupt them.
+Accepted changes can still be undone. Neither action resolves comments.
+To request further changes, comment in the cell thread rather than pressing X.
+
+## Automation
+
+Discover live signatures with comments.help() and comparisons.help(). Use explicit
+notebook targets. Comparisons are read-only projections; comments and assessments
+freeze their revision endpoints when written. There is no create/submit workflow.
+
+```javascript
+const target = { uri: "local://file/<notebook-id>" };
+const versions = await revisions.list({ target });
+const start = versions[0];
+const end = versions.at(-1);
+const selection = { target, startRevisionId: start.id, endRevisionId: end.id };
+await revisions.label({ target, revisionId: end.id, name: "Codex response",
+  description: "Addressed setup comments", author: { displayName: "Codex", kind: "agent" } });
+const preview = await comparisons.preview(selection);
+const thread = await comparisons.comment({
+  ...selection, content: "The setup changes are clear.",
+  author: { displayName: "Codex", kind: "agent" },
+});
+await comments.reply({ target, parent_comment_id: thread.id, content: "Thanks." });
+await comparisons.assess({ ...selection, outcome: "good_enough" });
+await comparisons.decideCell({ ...selection, cellId: "<cell-id>", decision: "accept" });
+// Destructive: restores this cell to the start revision; guarded against later edits.
+// await comparisons.decideCell({ ...selection, cellId: "<cell-id>", decision: "undo" });
+```
+
+Supply cellIds in selection to scope feedback. Supply cellId and optionally
+side: "base" or "head" plus sourceRange: { start, end, unit: "utf-16" } to
+comparisons.comment to discuss part of a cell. The exclusive-end range is validated
+against the frozen snapshot; the quote is derived from it.
+
+Use comments.add with cellId for ordinary editor comments. Read comments.list
+with status: "all" and inspect anchors and comparison for the complete historical target.
+An edit's reason is not a discussion message. comments.resolve/reopen acts on
+thread_id (the root comment ID), not the comparison ID. The commentId spelling
+remains a UI adapter. Version-aware callers can use
+comparisons.preview({ target, start, end, cell_ids }) and
+revisions.label({ target, revision, name, description, author }) with VersionRefs;
+the picker-ID inputs above remain adapters, not stored revision arrays.
+
+API author labels are unverified attribution; missing/blank labels become
+unknown. UI submissions resolve the current Drive identity, preserving
+service-account identity rather than inferring an impersonating human.
+Replies retain their own authors. All .runme feedback is stored in the notebook,
+not in Google Drive's separate comments service.
+
+## Persisted model and compatibility
+
+Format V2 stores `runme.revision` and `runme.comment` as first-class JSONL
+records alongside cell operations. A revision stores a causal frontier
+(`snapshot_heads`), not a copied list of every operation. Its own `deps`
+record the writer's causal past; its snapshot heads select the fixed version
+being named, which may be older. A late-arriving concurrent operation cannot
+change that snapshot.
+
+Comments contain one or more version-bound notebook/cell anchors. Source ranges
+use half-open Unicode-code-point offsets and cannot split graphemes; UI UTF-16
+offsets are converted at the boundary. Quoted text is reconstructed from the
+historical source, never stored in the anchor. Replies inherit the root's
+context. Comparison scope and acceptance/undo feedback live on comments,
+not on a separate Review record.
+
+```javascript
+const version = await revisions.create({ target, name: "Reviewed baseline" });
+await comments.add({
+  target, content: "Please clarify this cell.",
+  anchors: [{ kind: "cell", cell_id: "<cell-id>", version, surface: "source" }],
+});
+```
+
+`revisions.create` captures an immutable snapshot and returns its revision
+`VersionRef`; it does not edit notebook content. Supply `snapshot_heads` to
+select a historical snapshot, or omit it to capture the current committed head.
+`revisions.label` names an existing version without changing its snapshot.
+Checkpoint remains a storage concept, not a separate public API method.
+
+### Comment locations in editor and comparison views
+
+Both views derive locations from immutable historical anchors. The comparison
+maps each anchor to the start and end independently and shows one conversation
+with links to its locations. Exact source selections get blue underlines;
+blue cell-edge markers reopen the comments gutter. Unmatched and deleted anchors
+remain accessible with their original revision and an expandable historical
+cell. Neither mapping nor accepting a change rewrites a comment anchor.
+
+Mapping is deliberately bounded: at most 20,000 code points per source and
+500,000 edit-matrix entries, then a 48-code-point fuzzy search window with a
+250,000-step budget. Fuzzy matching permits at most three edits, requires a
+clear contextual winner, and is disabled for selections shorter than eight
+code points. Ambiguity, grapheme splits, and budget exhaustion produce an
+outdated location, never a guessed highlight. Markdown syntax without an exact
+rendered-text mapping retains the cell marker rather than highlighting other text.
+
+Both gutters preserve drafts when collapsed. Enter submits and Shift+Enter
+adds a newline; IME composition does not submit. New editor comments capture
+the displayed committed snapshot at composition time, rejecting intervening
+changes during persistence. Replies may add historical anchors while retaining
+the original conversation and comparison. `.runme` comment API calls require an
+explicit notebook target. These native locations require V2 anchors; legacy
+notebooks remain readable and are never migrated automatically.
+
+The old `reviews` runtime namespace and Review writers are removed. A read-only
+V1 decoder remains so existing notebooks can still be opened. V1 files are not
+silently upgraded or rewritten. To opt in:
+
+```javascript
+const migration = await revisions.migrate({
+  target, name: "review-flow-v2.runme",
+});
+// Inspect migration.warnings; migration.uri exists only on successful conversion.
+```
+
+This creates a new local notebook with a new identity, preserves original
+operations, and maps labels, comments, replies, resolved states, and assessments.
+It validates legacy quotes and converts supported UTF-16/rendered selections.
+If any target cannot be converted reliably, it reports the comment IDs and
+does not create a lossy copy. The source and its Drive file are untouched.
+The new copy is not automatically uploaded.
+
+`suggestions.list` is the earlier per-operation suggestion projection, not a
+stored Review entity. Historical readers are isolated in `legacyReviews.ts`.

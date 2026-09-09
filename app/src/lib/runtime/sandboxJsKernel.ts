@@ -121,11 +121,25 @@ const DEFAULT_SANDBOX_ALLOWED_METHODS = [
   'documentation.list',
   'documentation.get',
   'comments.list',
+  'comments.add',
+  'comparisons.list',
+  'comparisons.preview',
+  'revisions.list',
+  'revisions.label',
+  'revisions.create',
+  'revisions.migrate',
+  'revisions.help',
+  'comparisons.help',
+  'comparisons.comment',
+  'comparisons.assess',
+  'comparisons.decideCell',
+  'suggestions.list',
   'comments.parseAnchor',
   'comments.resolveAnchor',
   'comments.reply',
   'comments.resolve',
   'comments.reopen',
+  'comments.help',
   ...SANDBOX_NOTEBOOKS_API_METHODS,
   'notebooks.attach',
   'notebooks.createLocal',
@@ -410,22 +424,31 @@ export function buildSandboxSrcDoc(options: {
           },
         };
         const comments = {
+          add: (args) => hostCall("comments.add", [args]),
           list: (args) => hostCall("comments.list", [args]),
           parseAnchor: (anchor) => hostCall("comments.parseAnchor", [anchor]),
           resolveAnchor: (args) => hostCall("comments.resolveAnchor", [args]),
           reply: (args) => hostCall("comments.reply", [args]),
           resolve: (args) => hostCall("comments.resolve", [args]),
           reopen: (args) => hostCall("comments.reopen", [args]),
-          help: () => {
-            consoleProxy.log("await comments.list({ target?, status? })");
-            consoleProxy.log("await comments.parseAnchor(anchor)");
-            consoleProxy.log("await comments.resolveAnchor({ anchor, source })");
-            consoleProxy.log("await comments.reply({ target?, commentId, content })");
-            consoleProxy.log("await comments.resolve({ target?, commentId })");
-            consoleProxy.log("await comments.reopen({ target?, commentId })");
-            consoleProxy.log("comments.list includes sync.status; .runme writes append to the operation log, while Drive writes reconcile asynchronously");
-          },
+          help: () => hostCall("comments.help", []),
         };
+        const comparisons = {
+          list: (args) => hostCall("comparisons.list", [args]),
+          preview: (args) => hostCall("comparisons.preview", [args]),
+          comment: (args) => hostCall("comparisons.comment", [args]),
+          assess: (args) => hostCall("comparisons.assess", [args]),
+          decideCell: (args) => hostCall("comparisons.decideCell", [args]),
+          help: () => hostCall("comparisons.help", []),
+        };
+        const revisions = {
+          list: (args) => hostCall("revisions.list", [args]),
+          label: (args) => hostCall("revisions.label", [args]),
+          create: (args) => hostCall("revisions.create", [args]),
+          migrate: (args) => hostCall("revisions.migrate", [args]),
+          help: () => hostCall("revisions.help", []),
+        };
+        const suggestions = { list: (args) => hostCall("suggestions.list", [args]) };
         const notebookDiff = {
           listDriveRevisions: (target) => hostCall("notebookDiff.listDriveRevisions", [target]),
           diffDriveRevision: (args) => hostCall("notebookDiff.diffDriveRevision", [args]),
@@ -539,12 +562,12 @@ export function buildSandboxSrcDoc(options: {
           consoleProxy.log("- documents.update(uri, content, { mimeType?, expectedVersion?, flush? })");
           consoleProxy.log("- await documentation.list()");
           consoleProxy.log("- await documentation.get(name)");
-          consoleProxy.log("- await comments.list({ target?, status? })");
+          consoleProxy.log("- await comments.list({ target, status? })");
           consoleProxy.log("- await comments.parseAnchor(anchor)");
           consoleProxy.log("- await comments.resolveAnchor({ anchor, source })");
-          consoleProxy.log("- await comments.reply({ target?, commentId, content })");
-          consoleProxy.log("- await comments.resolve({ target?, commentId })");
-          consoleProxy.log("- await comments.reopen({ target?, commentId })");
+          consoleProxy.log("- await comments.reply({ target, parent_comment_id, content, anchors?, author? })");
+          consoleProxy.log("- await comments.resolve({ target, thread_id })");
+          consoleProxy.log("- await comments.reopen({ target, thread_id })");
           consoleProxy.log("- comments.list includes sync.status; .runme writes append to the operation log, while Drive writes reconcile asynchronously");
           consoleProxy.log("- notebookDiff.listDriveRevisions([target])");
           consoleProxy.log("- notebookDiff.diffDriveRevision({ target?, revisionId, includeOutputs?, includeMetadata? })");
@@ -584,6 +607,9 @@ export function buildSandboxSrcDoc(options: {
               "documents",
               "documentation",
               "comments",
+              "comparisons",
+              "revisions",
+              "suggestions",
               "notebookDiff",
               "app",
               "runmeRunners",
@@ -593,7 +619,7 @@ export function buildSandboxSrcDoc(options: {
               "help",
               '"use strict"; return (async () => {\\n' + code + '\\n})();',
             );
-            await runner(consoleProxy, runme, tour, ui, opfs, net, embed, notebooks, documents, documentation, comments, notebookDiff, app, runmeRunners, explorer, credentials, drive, help);
+            await runner(consoleProxy, runme, tour, ui, opfs, net, embed, notebooks, documents, documentation, comments, comparisons, revisions, suggestions, notebookDiff, app, runmeRunners, explorer, credentials, drive, help);
           } catch (error) {
             exitCode = 1;
             post({ type: "stderr", data: String(error) + "\\n" });
