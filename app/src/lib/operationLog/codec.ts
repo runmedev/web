@@ -206,6 +206,20 @@ export function validateLamportValues(operations: RunmeOperation[]): void {
   }
 }
 
+/** V2 accepts V1 operations unchanged. Promote only the header so existing
+ * notebook identity, operation IDs, revision boundaries and comments survive.
+ * Call under the storage writer lock when saving an existing document.
+ */
+export function upgradeOperationLogToV2(document: string): string {
+  const { header } = parseOperationLog(document)
+  if (header.format_version === 2) return document
+  const upgraded =
+    canonicalJson({ ...header, format_version: 2 } as unknown as JsonValue) +
+    document.slice(document.indexOf('\n'))
+  parseOperationLog(upgraded)
+  return upgraded
+}
+
 export function serializeOperationLog(
   header: NotebookLogHeader,
   operations: RunmeOperation[],

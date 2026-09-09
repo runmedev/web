@@ -28,6 +28,7 @@ import {
 } from '../lib/operationLog'
 import * as actorIdentity from '../lib/operationLog/actorIdentity'
 import { cellDecisionFor } from '../lib/operationLog/cellReview'
+import { upgradeOperationLogToV2 } from '../lib/operationLog/codec'
 import { decideComparisonCell } from '../lib/operationLog/comparisonFeedback'
 import { buildComparisons } from '../lib/operationLog/comparisons'
 import '../lib/operationLog/legacyReviews'
@@ -1025,6 +1026,131 @@ describe('LocalNotebooks operation-log storage', () => {
     ).resolves.toEqual(third)
     actor.mockRestore()
   })
+
+  it('upgrades V1 atomically on save, preserving identity, history and legacy threads', async () => {
+    const actor = vi
+      .spyOn(actorIdentity, 'getNotebookActorId')
+      .mockResolvedValue('upgrade_writer')
+    const operationLogStorage = new MemoryOperationLogStorage()
+    const store = createTestStore({}, { operationLogStorage })
+    const uri = 'local://file/v1-autosave'
+    const header: NotebookLogHeader = {
+      record_type: 'runme.notebook',
+      format_version: 1,
+      notebook_id: 'preserve-identity',
+      created_by: 'seed',
+      created_at: '2026-09-09T00:00:00Z',
+    }
+    const legacy = createRunmeOperation({
+      actorId: 'seed',
+      actorSequence: 1,
+      dependencies: [],
+      knownOperations: [],
+      kind: 'comment.add',
+      payload: {
+        comment_id: 'legacy-comment',
+        thread_id: 'legacy-comment',
+        author: { principal_id: 'seed', display_name: 'User' },
+        body: { format: 'text/markdown', value: 'Keep this discussion' },
+        annotation: { motivation: 'commenting', targets: [] },
+      },
+    })
+    const document = serializeOperationLog(header, [legacy])
+    const stored = await operationLogStorage.initialize(uri, document)
+    await store.files.put({
+      id: uri,
+      name: 'old.runme',
+      remoteId: '',
+      doc: '',
+      lastRemoteChecksum: '',
+      lastSynced: '',
+      md5Checksum: stored.checksum,
+      operationLogRef: stored.ref,
+    })
+    const first = await store.createOperationLogSaveStore(uri)
+    const second = await store.createOperationLogSaveStore(uri)
+    const notebook = await store.loadOperationLogSnapshot(uri)
+    // A no-op save still persists and advertises the new header.
+    await first.save(uri, notebook)
+    expect(await store.loadContent(uri)).toBe(upgradeOperationLogToV2(document))
+    expect((await store.files.get(uri))?.md5Checksum).not.toBe(stored.checksum)
+    const version = await store.checkpointNotebookRevision(uri)
+    await Promise.all([
+      second.save(uri, notebook),
+      store.addAnchoredComment(uri, {
+        content: 'New discussion',
+        anchors: [{ kind: 'notebook', version }],
+      }),
+    ])
+    await store.replyToOperationLogComment(uri, 'legacy-comment', 'Still works')
+    await store.setOperationLogCommentResolved(uri, 'legacy-comment', true)
+    const parsed = parseOperationLog(await store.loadContent(uri))
+    expect(parsed.header).toEqual({ ...header, format_version: 2 })
+    expect(parsed.operations[0]).toEqual(legacy)
+    expect(await store.listOperationLogComments(uri)).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          id: 'legacy-comment',
+          resolved: true,
+          replies: [expect.objectContaining({ content: 'Still works' })],
+        }),
+        expect.objectContaining({ content: 'New discussion' }),
+      ])
+    )
+    actor.mockRestore()
+  })
+
+  it('upgrades a V1 file directly when creating its first revision record', async () => {
+    const actor = vi
+      .spyOn(actorIdentity, 'getNotebookActorId')
+      .mockResolvedValue('revision_writer')
+    const f = await createRecoveryFixture()
+    await expect(
+      f.store.checkpointNotebookRevision(f.uri, {
+        snapshot_heads: ['missing:1'],
+      })
+    ).rejects.toThrow()
+    expect(await f.store.loadContent(f.uri)).toBe(f.local.document)
+    const version = await f.store.checkpointNotebookRevision(f.uri)
+    const parsed = parseOperationLog(await f.store.loadContent(f.uri))
+    expect(parsed.header.format_version).toBe(2)
+    expect(parsed.operations[0]).toEqual(f.a)
+    expect(parsed.operations.at(-1)?.op_id).toBe(version.revision_id)
+    actor.mockRestore()
+  })
+
+  it.each(['local', 'upstream'])(
+    'synchronizes a header-only filesystem upgrade from %s',
+    async (side) => {
+      const f = await createRecoveryFixture()
+      let upstream = f.document([f.a])
+      if (side === 'upstream') upstream = upgradeOperationLogToV2(upstream)
+      else
+        await f.operationLogStorage.replace(
+          f.local.ref,
+          upgradeOperationLogToV2(upstream)
+        )
+      const filesystemStore = {
+        loadContent: vi.fn(async () => upstream),
+        saveContent: vi.fn(async (_uri: string, content: string) => {
+          upstream = content
+        }),
+      }
+      f.store.setFilesystemStore(filesystemStore as never)
+      await f.store.files.update(f.uri, {
+        remoteId: 'fs://workspace/test/file/shared.runme',
+      })
+      await f.store.sync(f.uri)
+      expect(parseOperationLog(upstream).header.format_version).toBe(2)
+      expect(
+        parseOperationLog(await f.store.loadContent(f.uri)).header
+          .format_version
+      ).toBe(2)
+      expect(filesystemStore.saveContent).toHaveBeenCalledTimes(
+        side === 'local' ? 1 : 0
+      )
+    }
+  )
 
   it('allocates unique actor sequences for concurrent editor and comment writes', async () => {
     const operationLogStorage = new MemoryOperationLogStorage()
@@ -3031,8 +3157,39 @@ async function createRecoveryFixture(formatVersion: 1 | 2 = 1) {
 }
 
 describe('Drive v3 operation-log revision recovery', () => {
+  it('uploads a header-only V2 upgrade and does not downgrade after a V1 writer syncs', async () => {
+    const f = await createRecoveryFixture()
+    f.write('same-ops', f.document([f.a]))
+    await f.operationLogStorage.replace(
+      f.local.ref,
+      upgradeOperationLogToV2(f.document([f.a]))
+    )
+    await f.store.reconcileDriveNotebook(f.uri)
+    expect(
+      parseOperationLog(f.history.get(f.head())!).header.format_version
+    ).toBe(2)
+    f.write('old-tab', f.document([f.a, f.b]))
+    await f.store.reconcileDriveNotebook(f.uri)
+    expect(
+      parseOperationLog(f.history.get(f.head())!).header.format_version
+    ).toBe(2)
+    expect(f.ids(f.history.get(f.head())!)).toEqual(
+      [f.a.op_id, f.b.op_id].sort()
+    )
+  })
+
+  it('promotes a local V1 header when upstream is V2 with identical operations', async () => {
+    const f = await createRecoveryFixture()
+    f.write('upgraded', upgradeOperationLogToV2(f.document([f.a])))
+    await f.store.reconcileDriveNotebook(f.uri)
+    expect(
+      parseOperationLog(await f.store.loadContent(f.uri)).header.format_version
+    ).toBe(2)
+    expect(f.drive.saveContentAfterVersionCheck).not.toHaveBeenCalled()
+  })
+
   it('preserves first-class V2 records recovered from an overwritten revision', async () => {
-    const f = await createRecoveryFixture(2)
+    const f = await createRecoveryFixture()
     const revision = projectRecord({
       record_type: 'runme.revision',
       format_version: 2,
@@ -3047,7 +3204,11 @@ describe('Drive v3 operation-log revision recovery', () => {
       author: { displayName: 'Reviewer', kind: 'human' },
     })
     f.beforeUpload(async () => {
-      f.write('hidden-review', f.document([f.a, revision]))
+      const header = parseOperationLog(f.document([])).header
+      f.write(
+        'hidden-review',
+        serializeOperationLog({ ...header, format_version: 2 }, [f.a, revision])
+      )
     })
     await f.store.reconcileDriveNotebook(f.uri)
     const local = await f.store.loadContent(f.uri)

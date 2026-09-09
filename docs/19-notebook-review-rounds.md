@@ -201,12 +201,22 @@ adds a newline; IME composition does not submit. New editor comments capture
 the displayed committed snapshot at composition time, rejecting intervening
 changes during persistence. Replies may add historical anchors while retaining
 the original conversation and comparison. `.runme` comment API calls require an
-explicit notebook target. These native locations require V2 anchors; legacy
-notebooks remain readable and are never migrated automatically.
+explicit notebook target. These native locations use V2 anchors.
 
 The old `reviews` runtime namespace and Review writers are removed. A read-only
-V1 decoder remains so existing notebooks can still be opened. V1 files are not
-silently upgraded or rewritten. To opt in:
+V1 decoder remains so existing notebooks can still be opened. Saving a V1
+notebook, creating a revision, or writing a comment upgrades its header to V2
+under the same OPFS writer lock as the new records. The notebook identity,
+existing operation IDs, and legacy comments are preserved. Even a save without
+content changes persists the header upgrade. Opening a notebook alone does not
+upgrade it. Drive and filesystem sync propagate the newer header, including
+when both replicas contain identical operation sets. Old V1-only app builds
+must be refreshed before editing an upgraded file.
+
+Header promotion does not convert legacy comment anchors. Existing threads keep
+their legacy reply records; new native comments use version-bound V2 records.
+To explicitly convert legacy labels, comments and assessments in an untouched
+V1 notebook into native V2 records in a separate copy:
 
 ```javascript
 const migration = await revisions.migrate({
