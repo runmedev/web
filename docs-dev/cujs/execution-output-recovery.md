@@ -21,6 +21,11 @@ and run the affected cell again.
    reload retains that result. A late finish from the old run cannot restore the
    diagnostic or overwrite the new output.
 
+6. Explicitly clear the recovered outputs and reload. They remain cleared while
+   the original finish records remain in history.
+7. Export to IPYNB, legacy JSON, or Markdown. Display-only diagnostics are omitted;
+   valid sibling outputs remain. Exporting must not change the editable model.
+
 ## Regression coverage
 
 - `app/src/lib/operationLog/executionRecovery.test.ts` exercises causal ordering,

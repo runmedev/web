@@ -8,6 +8,10 @@ import {
   RunmeMetadataKey,
   parser_pb,
 } from '../../runme/client'
+import { encodeDerivedIpynb } from '../derivedIpynb'
+import { encodeIpynb } from '../ipynb'
+import { serializeNotebookToMarkdown } from '../markdown/serializeNotebookToMarkdown'
+import { encodeRunmeNotebook } from '../notebookFormat'
 import { buildOperationLogDiff, cloneNotebook } from './editorJournal'
 import { materializeOperationLog } from './materialize'
 import { causalHeads, createRunmeOperation } from './mutations'
@@ -271,6 +275,59 @@ describe('execution output recovery', () => {
     ;(finish.payload as unknown as ExecutionFinishPayload).outputs =
       null as unknown as JsonValue[]
     expect(outputText(reopen(f.operations))).toContain('completion records')
+  })
+
+  it('keeps user-cleared recovery-only outputs cleared after reopening', async () => {
+    const f = fixture()
+    f.finish('left', [f.start.op_id])
+    f.finish('right', [f.start.op_id])
+    const previous = reopen(f.operations)
+    const next = cloneNotebook(previous)
+    next.cells[0]!.outputs = []
+    delete next.cells[0]!.metadata[RunmeMetadataKey.LastRunID]
+    delete next.cells[0]!.metadata[RunmeMetadataKey.ExecutionState]
+    const changes = await buildOperationLogDiff({
+      previous,
+      next,
+      observedOperations: f.operations,
+      actorId: 'clear',
+      firstActorSequence: 1,
+    })
+    expect(changes.some((op) => op.kind === 'cell.clear_outputs')).toBe(true)
+    f.operations.push(...changes)
+    expect(reopen(f.operations).cells[0]!.outputs).toEqual([])
+    expect(
+      f.operations.filter((op) => op.kind === 'execution.finish')
+    ).toHaveLength(2)
+  })
+
+  it('omits recovery diagnostics from IPYNB, JSON, and Markdown exports without changing the model', () => {
+    const f = fixture()
+    const finish = f.finish('valid sibling')
+    ;(finish.payload as unknown as ExecutionFinishPayload).outputs.push(null)
+    const notebook = reopen(f.operations)
+    expect(outputText(notebook)).toContain('corrupt saved output')
+    const exports = [
+      encodeIpynb(notebook).text,
+      encodeRunmeNotebook(notebook),
+      serializeNotebookToMarkdown(notebook),
+      encodeDerivedIpynb(notebook, {
+        version: 1,
+        uri: 'https://drive.google.com/file/d/source/view',
+        notebookId: 'test',
+        generatedAt: '2026-09-10T00:00:00Z',
+        operationIds: f.operations.map((op) => op.op_id),
+      }),
+    ]
+    for (const exported of exports) {
+      expect(exported).not.toContain('corrupt saved output')
+      expect(exported).not.toContain(RECOVERED_OUTPUT_KEY)
+    }
+    const ipynb = JSON.parse(exports[0]!)
+    expect(ipynb.cells[0].outputs).toHaveLength(1)
+    expect(JSON.stringify(ipynb.cells[0].outputs)).toContain('valid sibling')
+    expect(outputText(notebook)).toContain('corrupt saved output')
+    expect(notebook.cells[0]!.outputs).toHaveLength(2)
   })
 
   it('keeps recovered source editable through save/reopen and never journals the diagnostic', async () => {

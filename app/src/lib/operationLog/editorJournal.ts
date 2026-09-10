@@ -5,9 +5,9 @@ import {
   RunmeMetadataKey,
   parser_pb,
 } from '../../runme/client'
+import { isRecoveredOutput } from '../recoveredOutputs'
 import { materializeOperationLog } from './materialize'
 import { causalHeads, createRunmeOperation } from './mutations'
-import { RECOVERED_OUTPUT_KEY } from './notebook'
 import { allocatePositionBetween } from './positions'
 import type {
   JsonValue,
@@ -91,7 +91,7 @@ async function sha256(value: string): Promise<string> {
 function outputJson(cell: parser_pb.Cell): JsonValue[] {
   // Recovery diagnostics belong to the display, never to execution history.
   return cell.outputs
-    .filter((output) => output.metadata?.[RECOVERED_OUTPUT_KEY] !== 'true')
+    .filter((output) => !isRecoveredOutput(output))
     .map((output) => {
       const normalized = create(parser_pb.CellOutputSchema, {
         ...output,
@@ -284,8 +284,10 @@ export async function buildOperationLogDiff({
     if (
       previousCell &&
       !nextRunId &&
-      previousOutputs.length > 0 &&
-      nextOutputs.length === 0
+      // A user clear also removes recovery-only output. Compare the visible
+      // snapshots here, before filtering diagnostics out of saved results.
+      previousCell.outputs.length > 0 &&
+      cell.outputs.length === 0
     ) {
       append('cell.clear_outputs', {
         cell_id: cell.refId,

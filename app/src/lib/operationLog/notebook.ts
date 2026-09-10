@@ -1,11 +1,12 @@
 import { create, fromJson } from '@bufbuild/protobuf'
 
 import { MimeType, parser_pb } from '../../runme/client'
+import { RECOVERED_OUTPUT_KEY } from '../recoveredOutputs'
 import { canonicalJson } from './canonicalJson'
 import type { MaterializedOperationLog } from './materialize'
 import type { JsonValue } from './types'
 
-export const RECOVERED_OUTPUT_KEY = 'runme.dev/recovered-output'
+export { RECOVERED_OUTPUT_KEY } from '../recoveredOutputs'
 
 /** A transient stderr output uses the normal renderer and is cleared on execution. */
 function recoveryOutput(message: string): parser_pb.CellOutput {
