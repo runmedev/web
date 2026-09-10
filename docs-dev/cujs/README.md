@@ -8,6 +8,9 @@ from `docs-dev/cujs/`.
 
 ## Current CUJs
 
+- [horizontal-rendering.md](../CUJs/horizontal-rendering.md) — viewport-bounded prose with locally scrolling wide
+  tables/code and wrapping outputs; verified at normal and narrow widths.
+
 - `hello-world-local-notebook.md` — baseline notebook flow:
   - configure local runner,
   - open local notebook,

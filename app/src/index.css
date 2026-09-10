@@ -1,6 +1,28 @@
 @import url("https://fonts.googleapis.com/css2?family=PT+Sans:wght@400;700&family=Fira+Mono:wght@400;500&display=swap");
 @import "tailwindcss";
 
+/* Notebook width belongs to the viewport, never to the widest descendant.
+   Radix Themes gives its generated content wrapper width: fit-content; even a
+   locally scrollable table/output can then widen every sibling cell. Override
+   that wrapper only for notebook panes, leaving other ScrollAreas unchanged.
+   Keep this outside Tailwind layers so the unlayered Radix rule cannot win.
+   Wide blocks own their horizontal scrolling inside the bounded notebook. */
+.notebook-scroll-area .rt-ScrollAreaViewport > div {
+  width: 100%;
+  max-width: 100%;
+}
+
+/* Unlike break-word, anywhere also reduces intrinsic minimum width. This is
+   for prose/inline code/links; fenced code retains whitespace and scrolls. */
+.notebook-markdown {
+  overflow-wrap: anywhere;
+}
+
+.notebook-markdown pre,
+.notebook-markdown table {
+  overflow-wrap: normal;
+}
+
 /* ═══════════════════════════════════════════════════════════════════
    1. Breakpoints (build-time only — no CSS vars emitted)
    ═══════════════════════════════════════════════════════════════════ */

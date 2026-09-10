@@ -108,7 +108,7 @@ const markdownComponents: Components = {
     }
     return (
       <code
-        className={`block bg-nb-surface-2 p-3 rounded-md text-[12.6px] font-mono overflow-x-auto ${className}`}
+        className={`block text-[12.6px] font-mono ${className}`}
         {...props}
       >
         {children}
@@ -118,6 +118,8 @@ const markdownComponents: Components = {
   pre: ({ children, ...props }) => (
     <pre
       className="bg-nb-surface-2 p-3 rounded-md overflow-x-auto mb-3"
+      tabIndex={0}
+      aria-label="Scrollable code block"
       {...props}
     >
       {children}
@@ -132,7 +134,12 @@ const markdownComponents: Components = {
     </blockquote>
   ),
   table: ({ children, ...props }) => (
-    <div className="overflow-x-auto mb-3">
+    <div
+      className="overflow-x-auto mb-3"
+      tabIndex={0}
+      role="region"
+      aria-label="Scrollable table"
+    >
       <table className="min-w-full border border-nb-border-strong" {...props}>
         {children}
       </table>
@@ -562,7 +569,7 @@ const MarkdownCell = memo(
           // Rendered markdown view - double-click or keyboard to edit
           <div
             id={`markdown-rendered-${cell.refId}`}
-            className="cursor-text rounded-nb-md border border-transparent p-4 transition-[border-color,background-color,box-shadow] duration-200 hover:border-nb-border hover:bg-nb-surface-2/60 hover:shadow-nb-xs"
+            className="notebook-markdown cursor-text rounded-nb-md border border-transparent p-4 transition-[border-color,background-color,box-shadow] duration-200 hover:border-nb-border hover:bg-nb-surface-2/60 hover:shadow-nb-xs"
             onDoubleClick={canOpenSource ? handleDoubleClick : undefined}
             onKeyDown={canOpenSource ? handleRenderedKeyDown : undefined}
             ref={renderedRef}
