@@ -108,7 +108,7 @@ function ActionOutputItemView({
     )
   } else {
     content = (
-      <pre className="whitespace-pre-wrap break-words text-xs leading-relaxed text-nb-text">
+      <pre className="whitespace-pre-wrap [overflow-wrap:anywhere] text-xs leading-relaxed text-nb-text">
         {text}
       </pre>
     )

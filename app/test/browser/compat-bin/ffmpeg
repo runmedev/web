@@ -1,0 +1,20 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+# agent-browser 0.21.2 disables buffering and probes only 32 bytes of its
+# streamed JPEG input. Ubuntu's FFmpeg 6 can then exit before discovering the
+# image dimensions. Use FFmpeg's normal input buffering/probing for this exact
+# recorder signature. Preserve every other argument, output, and exit status.
+# Remove this shim when the pinned recorder no longer emits these flags.
+args=("$@")
+if [[ " ${*} " == *" -f image2pipe -c:v mjpeg "* ]]; then
+  args=()
+  while (($#)); do
+    case "$1:${2-}" in
+      -avioflags:direct|-fpsprobesize:0|-probesize:32|-analyzeduration:0)
+        shift 2 ;;
+      *) args+=("$1"); shift ;;
+    esac
+  done
+fi
+exec "${CUJ_FFMPEG_REAL:?Set CUJ_FFMPEG_REAL to the system ffmpeg}" "${args[@]}"

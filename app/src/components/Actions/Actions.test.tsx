@@ -1333,7 +1333,7 @@ describe('Actions tabs', () => {
     })
   })
 
-  it('enables horizontal scrolling for wide notebook content', () => {
+  it('bounds the notebook scroll area so wide blocks scroll within cells', () => {
     const uri = 'local://file/wide-table.runme.md'
     contextMocks.currentDoc = uri
     contextMocks.workspaceDocuments = [
@@ -1361,9 +1361,9 @@ describe('Actions tabs', () => {
 
     expect(scrollViewport).toBeTruthy()
     expect(scrollRoot).toBeTruthy()
-    expect(scrollRoot?.className).not.toContain('overflow-x-hidden')
+    expect(scrollRoot?.className).toContain('notebook-scroll-area')
     expect((scrollViewport as HTMLElement | undefined)?.style.overflowX).toBe(
-      'scroll'
+      'hidden'
     )
   })
 

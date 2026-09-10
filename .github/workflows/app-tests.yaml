@@ -146,6 +146,11 @@ jobs:
           sudo apt-get update
           sudo apt-get install -y ffmpeg
           ffmpeg -version
+          # Keep video assertions enabled while avoiding agent-browser 0.21.2's
+          # undersized JPEG probe on Ubuntu FFmpeg 6 (see the compatibility shim).
+          echo "CUJ_FFMPEG_REAL=$(command -v ffmpeg)" >> "$GITHUB_ENV"
+          chmod +x app/test/browser/compat-bin/ffmpeg
+          echo "$GITHUB_WORKSPACE/app/test/browser/compat-bin" >> "$GITHUB_PATH"
 
       - name: Checkout Runme (direct Jupyter bridge)
         uses: actions/checkout@v4

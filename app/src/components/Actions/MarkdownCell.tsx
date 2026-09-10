@@ -108,7 +108,7 @@ const markdownComponents: Components = {
     }
     return (
       <code
-        className={`block bg-nb-surface-2 p-3 rounded-md text-[12.6px] font-mono overflow-x-auto ${className}`}
+        className={`block text-[12.6px] font-mono ${className}`}
         {...props}
       >
         {children}
@@ -118,6 +118,8 @@ const markdownComponents: Components = {
   pre: ({ children, ...props }) => (
     <pre
       className="bg-nb-surface-2 p-3 rounded-md overflow-x-auto mb-3"
+      tabIndex={0}
+      aria-label="Scrollable code block"
       {...props}
     >
       {children}
@@ -132,7 +134,12 @@ const markdownComponents: Components = {
     </blockquote>
   ),
   table: ({ children, ...props }) => (
-    <div className="overflow-x-auto mb-3">
+    <div
+      className="overflow-x-auto mb-3"
+      tabIndex={0}
+      role="region"
+      aria-label="Scrollable table"
+    >
       <table className="min-w-full border border-nb-border-strong" {...props}>
         {children}
       </table>
@@ -283,6 +290,18 @@ const MarkdownCell = memo(
     const shouldOwnFocus = isActiveCell && isWindowFocused
     const tracksActiveCell = Boolean(onFocusRoleChange)
 
+    /**
+     * Activating a cell also runs focus restoration. Preserve focus already
+     * inside it, so a newly focused table, code scroller, or link receives
+     * the user's next key instead of losing focus to the rendered wrapper.
+     */
+    const restoreRenderedFocus = useCallback(() => {
+      const root = renderedRef.current
+      if (root && !root.contains(root.ownerDocument.activeElement)) {
+        root.focus({ preventScroll: true })
+      }
+    }, [])
+
     // Enforce invariant: empty cells must be in edit mode.
     // This handles external changes (undo/redo, sync) that clear the value.
     useEffect(() => {
@@ -327,15 +346,22 @@ const MarkdownCell = memo(
         return
       }
       setRendered(true)
-      renderedRef.current?.focus({ preventScroll: true })
-    }, [activeFocusRole, canOpenSource, readOnly, shouldOwnFocus, value])
+      restoreRenderedFocus()
+    }, [
+      activeFocusRole,
+      canOpenSource,
+      readOnly,
+      restoreRenderedFocus,
+      shouldOwnFocus,
+      value,
+    ])
 
     useEffect(() => {
       if (!shouldOwnFocus || activeFocusRole !== 'rendered' || !rendered) {
         return
       }
-      renderedRef.current?.focus({ preventScroll: true })
-    }, [activeFocusRole, rendered, shouldOwnFocus])
+      restoreRenderedFocus()
+    }, [activeFocusRole, rendered, restoreRenderedFocus, shouldOwnFocus])
 
     useEffect(() => {
       if (!tracksActiveCell || isActiveCell || rendered || !value.trim()) {
@@ -562,7 +588,7 @@ const MarkdownCell = memo(
           // Rendered markdown view - double-click or keyboard to edit
           <div
             id={`markdown-rendered-${cell.refId}`}
-            className="cursor-text rounded-nb-md border border-transparent p-4 transition-[border-color,background-color,box-shadow] duration-200 hover:border-nb-border hover:bg-nb-surface-2/60 hover:shadow-nb-xs"
+            className="notebook-markdown cursor-text rounded-nb-md border border-transparent p-4 transition-[border-color,background-color,box-shadow] duration-200 hover:border-nb-border hover:bg-nb-surface-2/60 hover:shadow-nb-xs"
             onDoubleClick={canOpenSource ? handleDoubleClick : undefined}
             onKeyDown={canOpenSource ? handleRenderedKeyDown : undefined}
             ref={renderedRef}
