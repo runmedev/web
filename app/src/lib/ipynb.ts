@@ -8,6 +8,7 @@ import {
   uniqueCanonicalCellId,
 } from './cellIdentity'
 import { DERIVED_NOTEBOOK_KEY, parseDerivedSource } from './derivedNotebook'
+import { withoutRecoveredOutputs } from './recoveredOutputs'
 
 export const IPYNB_MIME_TYPE = 'application/x-ipynb+json'
 export const IPYNB_RAW_CELL_METADATA_KEY = 'runme.dev/ipynbRawCell'
@@ -559,6 +560,7 @@ export function encodeIpynb(
   shadowText?: string,
   previousState?: Partial<IpynbMergeState>
 ): EncodedIpynb {
+  notebook = withoutRecoveredOutputs(notebook)
   assertCanonicalNotebookCellIds(notebook)
   const shadow = shadowText
     ? validateNotebook(JSON.parse(shadowText))

@@ -5,6 +5,7 @@ import {
   linkedResourceMarkdown,
   parseLinkedResource,
 } from '../linkedResource'
+import { isRecoveredOutput } from '../recoveredOutputs'
 
 const IOPUB_MIME_TYPE = 'application/vnd.jupyter.iopub+json'
 
@@ -49,7 +50,9 @@ function serializeCell(cell: parser_pb.Cell): string {
   const body = isAuthoredContentCell(cell)
     ? normalizeContentCell(cell.value)
     : renderFencedBlock(cell.value, normalizeCodeFenceLanguage(cell.languageId))
-  const outputs = serializeCellOutputs(cell.outputs ?? [])
+  const outputs = serializeCellOutputs(
+    (cell.outputs ?? []).filter((output) => !isRecoveredOutput(output))
+  )
   return [body, outputs].filter(Boolean).join('\n\n')
 }
 
