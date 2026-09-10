@@ -7,7 +7,7 @@ export interface ExecutionFinishRecord {
 }
 
 /** Follow dependencies, not timestamps or file order, to identify output updates. */
-function observes(
+export function operationObserves(
   operation: RunmeOperation,
   ancestorId: string,
   operations: Map<string, RunmeOperation>
@@ -32,7 +32,7 @@ export function advanceExecutionFinishes(
 ): ExecutionFinishRecord[] {
   return [
     ...previous.filter(
-      (finish) => !observes(operation, finish.operationId, operations)
+      (finish) => !operationObserves(operation, finish.operationId, operations)
     ),
     {
       payload: operation.payload as unknown as ExecutionFinishPayload,
@@ -46,6 +46,13 @@ export function executionFinishError(
   finishes: ExecutionFinishRecord[]
 ): string | undefined {
   const first = finishes[0]!.payload
+  const executionIds = [
+    ...new Set(finishes.map(({ payload }) => payload.execution_id)),
+  ]
+  const subject =
+    executionIds.length === 1
+      ? `Execution ${first.execution_id} has`
+      : `Concurrent executions ${executionIds.join(', ')} have`
   const result = (payload: ExecutionFinishPayload): JsonValue => ({
     status: payload.status,
     outputs: payload.outputs,
@@ -63,7 +70,7 @@ export function executionFinishError(
           !canonicalJsonEqual(result(first), result(payload))
       )
     ) {
-      return `Execution ${first.execution_id} has conflicting or invalid completion records. Its saved output cannot be determined. Run this cell again to replace this error with new output.`
+      return `${subject} conflicting or invalid completion records. The saved output cannot be determined. Run this cell again to replace this error with new output.`
     }
   } catch {
     return `Execution ${first.execution_id} has invalid saved output. Run this cell again to replace this error with new output.`

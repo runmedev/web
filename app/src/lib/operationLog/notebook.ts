@@ -57,19 +57,17 @@ export function materializedLogToNotebook(
       result.value = cell.value
       result.metadata = stringRecord(cell.metadata)
       // Bad execution output must never prevent access to the editable source.
-      try {
-        result.outputs = cell.output_error
-          ? [recoveryOutput(cell.output_error)]
-          : cell.outputs.map((output) =>
-              fromJson(parser_pb.CellOutputSchema, output)
-            )
-      } catch {
-        result.outputs = [
-          recoveryOutput(
-            'This cell has corrupt saved output. Run this cell again to replace this error with new output.'
-          ),
-        ]
-      }
+      result.outputs = cell.output_error
+        ? [recoveryOutput(cell.output_error)]
+        : cell.outputs.map((output, index) => {
+            try {
+              return fromJson(parser_pb.CellOutputSchema, output)
+            } catch {
+              return recoveryOutput(
+                `This cell has corrupt saved output (item ${index + 1}). Run this cell again to replace this error with new output.`
+              )
+            }
+          })
       return result
     }),
   })

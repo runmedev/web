@@ -2,6 +2,7 @@ import {
   type ExecutionFinishRecord,
   advanceExecutionFinishes,
   executionFinishError,
+  operationObserves,
 } from './executionRecovery'
 import { committedOperationIds, orderOperationSet } from './order'
 import { comparePositionIds, validatePositionId } from './positions'
@@ -129,8 +130,8 @@ export function materializeOperationLog(
     { payload: ExecutionStartPayload; operationId: string }
   >()
   const executionFinishes = new Map<string, ExecutionFinishRecord[]>()
-  // A late finish from an old run must not overwrite output from a rerun.
-  const activeExecutions = new Map<string, string>()
+  // Keep concurrent starts; only a causally later start supersedes an old run.
+  const activeExecutions = new Map<string, RunmeOperation[]>()
   const comments: MaterializedComment[] = []
   const historicalSources = new Map<string, string>()
   const migratedComments = new Set(
@@ -207,6 +208,30 @@ export function materializeOperationLog(
     const created: CellRegisters = {}
     cells.set(cellId, created)
     return created
+  }
+
+  /** Project all live runs together without letting actor sort order hide results. */
+  const updateExecutionOutputs = (cellId: string, operationId: string) => {
+    const finishes = (activeExecutions.get(cellId) ?? []).flatMap(
+      (start) =>
+        executionFinishes.get(
+          (start.payload as unknown as ExecutionStartPayload).execution_id
+        ) ?? []
+    )
+    const error = finishes.length ? executionFinishError(finishes) : undefined
+    const finish = finishes.at(-1)
+    const start = finish
+      ? executionStarts.get(finish.payload.execution_id)
+      : undefined
+    registersFor(cellId).outputs = {
+      value: {
+        outputs: error ? [] : (finish?.payload.outputs ?? []),
+        error,
+        executionId: finish?.payload.execution_id,
+        sourceOperationId: start?.payload.source_op_id,
+      },
+      operationId,
+    }
   }
 
   for (const operation of ordered.ordered) {
@@ -307,12 +332,13 @@ export function materializeOperationLog(
           payload,
           operationId: operation.op_id,
         })
-        activeExecutions.set(payload.cell_id, payload.execution_id)
-        const registers = registersFor(payload.cell_id)
-        registers.outputs = {
-          value: { outputs: [] },
-          operationId: operation.op_id,
-        }
+        activeExecutions.set(payload.cell_id, [
+          ...(activeExecutions.get(payload.cell_id) ?? []).filter(
+            (start) => !operationObserves(operation, start.op_id, operationById)
+          ),
+          operation,
+        ])
+        updateExecutionOutputs(payload.cell_id, operation.op_id)
         break
       }
       case 'execution.finish': {
@@ -330,19 +356,13 @@ export function materializeOperationLog(
         )
         executionFinishes.set(payload.execution_id, finishes)
         if (
-          activeExecutions.get(start.payload.cell_id) !== payload.execution_id
+          (activeExecutions.get(start.payload.cell_id) ?? []).some(
+            (active) =>
+              (active.payload as unknown as ExecutionStartPayload)
+                .execution_id === payload.execution_id
+          )
         )
-          break
-        const error = executionFinishError(finishes)
-        registersFor(start.payload.cell_id).outputs = {
-          value: {
-            outputs: error ? [] : payload.outputs,
-            error,
-            executionId: payload.execution_id,
-            sourceOperationId: start.payload.source_op_id,
-          },
-          operationId: operation.op_id,
-        }
+          updateExecutionOutputs(start.payload.cell_id, operation.op_id)
         break
       }
       case 'comment.add': {

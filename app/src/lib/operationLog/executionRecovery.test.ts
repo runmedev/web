@@ -103,6 +103,70 @@ function outputText(notebook: parser_pb.Notebook) {
 }
 
 describe('execution output recovery', () => {
+  it('preserves the only completed result when another tab concurrently starts a run', () => {
+    const f = fixture()
+    f.append(
+      'execution.start',
+      {
+        ...(f.start.payload as object),
+        execution_id: 'concurrent-run',
+      } as JsonValue,
+      f.start.deps
+    )
+    f.finish('available output', [f.start.op_id])
+    expect(outputText(reopen(f.operations))).toBe('available output')
+    expect(outputText(reopen([...f.operations].reverse()))).toBe(
+      'available output'
+    )
+  })
+
+  it('shows conflicting concurrent runs until a causally later rerun replaces both', () => {
+    const f = fixture()
+    const concurrent = f.append(
+      'execution.start',
+      {
+        ...(f.start.payload as object),
+        execution_id: 'concurrent-run',
+      } as JsonValue,
+      f.start.deps
+    )
+    f.finish('left', [f.start.op_id])
+    f.finish('right', [concurrent.op_id], 'concurrent-run')
+    expect(outputText(reopen(f.operations))).toContain('Concurrent executions')
+    expect(outputText(reopen([...f.operations].reverse()))).toBe(
+      outputText(reopen(f.operations))
+    )
+    f.append('execution.start', {
+      ...(f.start.payload as object),
+      execution_id: 'rerun',
+    } as JsonValue)
+    expect(reopen(f.operations).cells[0]!.outputs).toEqual([])
+    f.finish('fresh output', undefined, 'rerun')
+    expect(outputText(reopen(f.operations))).toBe('fresh output')
+  })
+
+  it('retains valid output siblings when one output fails protobuf decoding', () => {
+    const f = fixture()
+    const finish = f.finish('valid stdout')
+    const payload = finish.payload as unknown as ExecutionFinishPayload
+    payload.outputs = [
+      payload.outputs[0]!,
+      null,
+      { items: [{ mime: 'text/plain', data: 'dmFsaWQgcmlnaHQ=' }] },
+    ]
+    const notebook = reopen(f.operations)
+    expect(notebook.cells[0]!.outputs).toHaveLength(3)
+    expect(
+      new TextDecoder().decode(notebook.cells[0]!.outputs[0]!.items[0]!.data)
+    ).toBe('valid stdout')
+    expect(
+      new TextDecoder().decode(notebook.cells[0]!.outputs[1]!.items[0]!.data)
+    ).toContain('corrupt saved output (item 2)')
+    expect(
+      new TextDecoder().decode(notebook.cells[0]!.outputs[2]!.items[0]!.data)
+    ).toBe('valid right')
+  })
+
   it('uses a causally later completion to retain late output, regardless of timestamp', () => {
     const f = fixture()
     f.finish('first chunk')
