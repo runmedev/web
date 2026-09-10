@@ -274,9 +274,17 @@ export async function buildOperationLogDiff({
     const persistedRunId = cell.metadata?.[RunmeMetadataKey.LastRunID]
     const previousOutputs = previousCell ? outputJson(previousCell) : []
     const nextOutputs = outputJson(cell)
+    // A failed setup attempt has output but no backend run ID. Give a
+    // replacement for recovered output a durable execution identity so reopening
+    // cannot restore the old diagnostic. Unchanged snapshots emit no new run.
+    const replacedRecovery = Boolean(
+      previousCell?.outputs.some(isRecoveredOutput) &&
+        !cell.outputs.some(isRecoveredOutput) &&
+        nextOutputs.length > 0
+    )
     const nextRunId =
       persistedRunId ??
-      (!previousCell && nextOutputs.length > 0
+      ((!previousCell || replacedRecovery) && nextOutputs.length > 0
         ? `${actorId}:imported-execution:${actorSequence}`
         : undefined)
     const outputsChanged =

@@ -277,6 +277,52 @@ describe('execution output recovery', () => {
     expect(outputText(reopen(f.operations))).toContain('completion records')
   })
 
+  it('persists a failed setup attempt that replaces recovered output without a backend run ID', async () => {
+    const f = fixture()
+    f.finish('left', [f.start.op_id])
+    f.finish('right', [f.start.op_id])
+    const previous = reopen(f.operations)
+    const next = cloneNotebook(previous)
+    delete next.cells[0]!.metadata[RunmeMetadataKey.LastRunID]
+    next.cells[0]!.metadata[RunmeMetadataKey.ExecutionState] =
+      RunmeExecutionState.Completed
+    next.cells[0]!.metadata[RunmeMetadataKey.ExitCode] = '1'
+    next.cells[0]!.outputs = [
+      create(parser_pb.CellOutputSchema, {
+        items: [
+          create(parser_pb.CellOutputItemSchema, {
+            mime: MimeType.VSCodeNotebookStdErr,
+            type: 'Buffer',
+            data: new TextEncoder().encode('Runner backend unavailable'),
+          }),
+        ],
+      }),
+    ]
+    const changes = await buildOperationLogDiff({
+      previous,
+      next,
+      observedOperations: f.operations,
+      actorId: 'failed-rerun',
+      firstActorSequence: 1,
+    })
+    f.operations.push(...changes)
+    expect(outputText(reopen(f.operations))).toBe('Runner backend unavailable')
+    expect(
+      (
+        changes.find((op) => op.kind === 'execution.finish')!
+          .payload as unknown as ExecutionFinishPayload
+      ).status
+    ).toBe('failed')
+    const unchanged = await buildOperationLogDiff({
+      previous: next,
+      next,
+      observedOperations: f.operations,
+      actorId: 'failed-rerun',
+      firstActorSequence: changes.length + 1,
+    })
+    expect(unchanged).toEqual([])
+  })
+
   it('keeps user-cleared recovery-only outputs cleared after reopening', async () => {
     const f = fixture()
     f.finish('left', [f.start.op_id])
