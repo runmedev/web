@@ -1,3 +1,8 @@
+import {
+  type ExecutionFinishRecord,
+  advanceExecutionFinishes,
+  executionFinishError,
+} from './executionRecovery'
 import { committedOperationIds, orderOperationSet } from './order'
 import { comparePositionIds, validatePositionId } from './positions'
 import { type CommentRecord, serializedRecord } from './records'
@@ -35,6 +40,7 @@ interface CellRegisters {
     outputs: JsonValue[]
     executionId?: string
     sourceOperationId?: string
+    error?: string
   }>
 }
 
@@ -45,6 +51,7 @@ export interface MaterializedCell extends OperationCell {
   outputs: JsonValue[]
   output_execution_id?: string
   outputs_stale: boolean
+  output_error?: string
 }
 
 export interface MaterializedExecution {
@@ -53,6 +60,7 @@ export interface MaterializedExecution {
   finish?: ExecutionFinishPayload
   start_operation_id: string
   finish_operation_id?: string
+  finish_error?: string
 }
 
 export interface MaterializedComment {
@@ -120,10 +128,9 @@ export function materializeOperationLog(
     string,
     { payload: ExecutionStartPayload; operationId: string }
   >()
-  const executionFinishes = new Map<
-    string,
-    { payload: ExecutionFinishPayload; operationId: string }
-  >()
+  const executionFinishes = new Map<string, ExecutionFinishRecord[]>()
+  // A late finish from an old run must not overwrite output from a rerun.
+  const activeExecutions = new Map<string, string>()
   const comments: MaterializedComment[] = []
   const historicalSources = new Map<string, string>()
   const migratedComments = new Set(
@@ -300,28 +307,37 @@ export function materializeOperationLog(
           payload,
           operationId: operation.op_id,
         })
+        activeExecutions.set(payload.cell_id, payload.execution_id)
+        const registers = registersFor(payload.cell_id)
+        registers.outputs = {
+          value: { outputs: [] },
+          operationId: operation.op_id,
+        }
         break
       }
       case 'execution.finish': {
         const payload = operation.payload as unknown as ExecutionFinishPayload
-        if (executionFinishes.has(payload.execution_id)) {
-          throw new Error(
-            `Execution ${payload.execution_id} has more than one finish`
-          )
-        }
         const start = executionStarts.get(payload.execution_id)
         if (!start) {
           throw new Error(
             `Execution ${payload.execution_id} finished before its start`
           )
         }
-        executionFinishes.set(payload.execution_id, {
-          payload,
-          operationId: operation.op_id,
-        })
+        const finishes = advanceExecutionFinishes(
+          executionFinishes.get(payload.execution_id) ?? [],
+          operation,
+          operationById
+        )
+        executionFinishes.set(payload.execution_id, finishes)
+        if (
+          activeExecutions.get(start.payload.cell_id) !== payload.execution_id
+        )
+          break
+        const error = executionFinishError(finishes)
         registersFor(start.payload.cell_id).outputs = {
           value: {
-            outputs: payload.outputs,
+            outputs: error ? [] : payload.outputs,
+            error,
             executionId: payload.execution_id,
             sourceOperationId: start.payload.source_op_id,
           },
@@ -488,6 +504,7 @@ export function materializeOperationLog(
       outputs: output.outputs,
       output_execution_id: output.executionId,
       outputs_stale: stale,
+      output_error: output.error,
     })
   }
   visibleCells.sort((left, right) => {
@@ -503,13 +520,16 @@ export function materializeOperationLog(
 
   const executions: MaterializedExecution[] = [...executionStarts].map(
     ([executionId, start]) => {
-      const finish = executionFinishes.get(executionId)
+      const finishes = executionFinishes.get(executionId)
+      const error = finishes ? executionFinishError(finishes) : undefined
+      const finish = error ? undefined : finishes?.at(-1)
       return {
         execution_id: executionId,
         start: start.payload,
         finish: finish?.payload,
         start_operation_id: start.operationId,
         finish_operation_id: finish?.operationId,
+        finish_error: error,
       }
     }
   )

@@ -32,6 +32,8 @@ from `docs-dev/cujs/`.
     deterministic convergence,
   - exercise operation-log comment lifecycle and durable reload.
 
+- execution-output-recovery.md — open, edit, save, reload, and rerun notebooks with conflicting execution results; retain history and replace ambiguous output with a cell-level diagnostic.
+
 ## How CUJs are executed
 
 - Scripted runner(s) live under `app/test/browser/`.

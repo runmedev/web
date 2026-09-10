@@ -7,6 +7,7 @@ import {
 } from '../../runme/client'
 import { materializeOperationLog } from './materialize'
 import { causalHeads, createRunmeOperation } from './mutations'
+import { RECOVERED_OUTPUT_KEY } from './notebook'
 import { allocatePositionBetween } from './positions'
 import type {
   JsonValue,
@@ -88,23 +89,28 @@ async function sha256(value: string): Promise<string> {
 }
 
 function outputJson(cell: parser_pb.Cell): JsonValue[] {
-  return cell.outputs.map((output) => {
-    const normalized = create(parser_pb.CellOutputSchema, {
-      ...output,
-      items: output.items.map((item) =>
-        create(parser_pb.CellOutputItemSchema, {
-          ...item,
-          data:
-            item.data instanceof Uint8Array
-              ? item.data
-              : new Uint8Array(
-                  Object.values(item.data as unknown as Record<string, number>)
-                ),
-        })
-      ),
+  // Recovery diagnostics belong to the display, never to execution history.
+  return cell.outputs
+    .filter((output) => output.metadata?.[RECOVERED_OUTPUT_KEY] !== 'true')
+    .map((output) => {
+      const normalized = create(parser_pb.CellOutputSchema, {
+        ...output,
+        items: output.items.map((item) =>
+          create(parser_pb.CellOutputItemSchema, {
+            ...item,
+            data:
+              item.data instanceof Uint8Array
+                ? item.data
+                : new Uint8Array(
+                    Object.values(
+                      item.data as unknown as Record<string, number>
+                    )
+                  ),
+          })
+        ),
+      })
+      return protobufJson(parser_pb.CellOutputSchema, normalized)
     })
-    return protobufJson(parser_pb.CellOutputSchema, normalized)
-  })
 }
 
 /** Convert one debounced editor snapshot change into append-only operations. */

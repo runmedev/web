@@ -56,6 +56,10 @@ When you open a follow-up PR that fixes an issue, include an issue-closing refer
 - Use one of GitHub's auto-close keywords with an issue number, for example: `Fixes #123`, `Closes #123`, or `Resolves #123`.
 - Put this in the PR body (not just a comment) so the issue is linked and automatically closed when the PR merges.
 
+## Corrupt notebook recovery
+
+Corrupt notebook files and inconsistent history must degrade gracefully: keep recovered content openable, editable, and saveable. Preserve the original bytes/history, isolate errors to affected content, and verify save/reopen/rerun behavior. Follow the detailed recovery and review requirements in app/AGENTS.md.
+
 ## Architecture
 
 This is a pnpm workspace monorepo with two publishable packages and one app:

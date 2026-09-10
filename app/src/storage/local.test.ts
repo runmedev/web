@@ -8027,3 +8027,103 @@ describe('LocalNotebooks markdown sidecar sync', () => {
     })
   })
 })
+
+it('opens, edits, saves and reruns a .runme notebook with conflicting execution finishes', async () => {
+  const operationLogStorage = new MemoryOperationLogStorage()
+  const store = createTestStore({}, { operationLogStorage })
+  await store.folders.put({
+    id: LOCAL_FOLDER_URI,
+    name: 'Local Notebooks',
+    remoteId: '',
+    children: [],
+    lastSynced: '',
+  })
+  const file = await store.create(LOCAL_FOLDER_URI, 'recovered.runme')
+  const initialWriter = await store.createOperationLogSaveStore(file.uri, {
+    actorId: 'initial',
+  })
+  const output = (text: string) =>
+    create(parser_pb.CellOutputSchema, {
+      items: [
+        create(parser_pb.CellOutputItemSchema, {
+          mime: MimeType.VSCodeNotebookStdOut,
+          type: 'Buffer',
+          data: new TextEncoder().encode(text),
+        }),
+      ],
+    })
+  const notebook = create(parser_pb.NotebookSchema, {
+    cells: [
+      create(parser_pb.CellSchema, {
+        refId: 'recovery-cell',
+        kind: parser_pb.CellKind.CODE,
+        languageId: 'javascript',
+        value: 'console.log("original")',
+        metadata: {
+          [RunmeMetadataKey.LastRunID]: 'run-1',
+          [RunmeMetadataKey.ExecutionState]: 'completed',
+        },
+        outputs: [output('left')],
+      }),
+    ],
+  })
+  await initialWriter.save(file.uri, notebook)
+  const original = parseOperationLog(await store.loadContent(file.uri))
+  const start = original.operations.find((op) => op.kind === 'execution.start')!
+  const finish = original.operations.find(
+    (op) => op.kind === 'execution.finish'
+  )!
+  const conflict = createRunmeOperation({
+    actorId: 'concurrent',
+    actorSequence: 1,
+    dependencies: [start.op_id],
+    knownOperations: original.operations,
+    kind: 'execution.finish',
+    payload: {
+      ...(finish.payload as object),
+      outputs: [
+        JSON.parse(toJsonString(parser_pb.CellOutputSchema, output('right'))),
+      ],
+    },
+  })
+  const record = (await store.files.get(file.uri))!
+  await operationLogStorage.appendTransaction(
+    record.operationLogRef!,
+    async () => `${JSON.stringify(conflict)}\n`
+  )
+
+  const reopened = await store.load(file.uri)
+  const text = (nb: parser_pb.Notebook) =>
+    nb.cells[0]!.outputs.flatMap((o) =>
+      o.items.map((i) => new TextDecoder().decode(i.data))
+    ).join('')
+  expect(text(reopened)).toContain('conflicting')
+  const writer = await store.createOperationLogSaveStore(file.uri, {
+    actorId: 'recovery-editor',
+  })
+  reopened.cells[0]!.value = 'console.log("edited")'
+  await writer.save(file.uri, reopened)
+  const saved = await store.load(file.uri)
+  expect(saved.cells[0]!.value).toBe('console.log("edited")')
+  expect(text(saved)).toContain('conflicting')
+  const history = parseOperationLog(await store.loadContent(file.uri))
+  expect(history.operations).toEqual(
+    expect.arrayContaining([...original.operations, conflict])
+  )
+  expect(
+    history.operations.filter((op) => op.kind === 'execution.finish')
+  ).toHaveLength(2)
+  expect(JSON.stringify(history.operations)).not.toContain(
+    'conflicting or invalid'
+  )
+
+  saved.cells[0]!.metadata[RunmeMetadataKey.LastRunID] = 'run-2'
+  saved.cells[0]!.metadata[RunmeMetadataKey.ExecutionState] = 'running'
+  saved.cells[0]!.outputs = []
+  await writer.save(file.uri, saved)
+  expect((await store.load(file.uri)).cells[0]!.outputs).toEqual([])
+  saved.cells[0]!.metadata[RunmeMetadataKey.ExecutionState] = 'completed'
+  saved.cells[0]!.outputs = [output('fresh output')]
+  await writer.save(file.uri, saved)
+  expect(text(await store.load(file.uri))).toBe('fresh output')
+})
