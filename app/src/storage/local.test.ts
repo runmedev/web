@@ -264,6 +264,59 @@ function notebookJson(value: string): string {
 }
 
 describe('LocalNotebooks operation-log storage', () => {
+  it('retries failed V2 exports on reconnect even when the source is already synced', async () => {
+    vi.useFakeTimers()
+    try {
+      const store = createTestStore({})
+      const exportCopy = vi.spyOn(store, 'syncIpynbFile').mockResolvedValue()
+      const syncSource = vi.fn(async () => {})
+      Object.assign(store, { syncFile: syncSource })
+      const record = {
+        id: 'local://file/saved-export',
+        name: 'source.runme',
+        remoteId: 'https://drive.google.com/file/d/source/view',
+        doc: '',
+        lastSynced: '',
+        md5Checksum: 'saved',
+        lastRemoteChecksum: 'saved',
+        operationLogRef: { path: 'source.runme' },
+        ipynbExportError: 'Error: Unsupported notebook log format_version 2',
+      }
+      await store.files.put(record as any)
+      await store.files.put({
+        ...record,
+        id: 'local://file/claim',
+        ipynbExportPendingClaim: 'pending',
+      } as any)
+      await store.files.put({
+        ...record,
+        id: 'local://file/conflict',
+        conflict: {},
+      } as any)
+      await store.files.put({
+        ...record,
+        id: 'local://file/local',
+        remoteId: '',
+      } as any)
+      await store.files.put({
+        ...record,
+        id: 'local://file/success',
+        ipynbExportError: undefined,
+      } as any)
+      expect(await store.listDriveBackedFilesNeedingSync()).toEqual([])
+      expect(await store.enqueueDriveBackedFilesNeedingSync()).toEqual([
+        record.id,
+      ])
+      expect(exportCopy).not.toHaveBeenCalled()
+      await vi.advanceTimersByTimeAsync(20_000)
+      expect(exportCopy).toHaveBeenCalledTimes(1)
+      expect(exportCopy).toHaveBeenCalledWith(record.id)
+      expect(syncSource).not.toHaveBeenCalled()
+    } finally {
+      vi.useRealTimers()
+    }
+  })
+
   it('clears only the recorded unconfirmed claim before an explicit retry', async () => {
     const source = 'https://drive.google.com/file/d/source/view'
     const updateDerivedCopyClaimAfterCheck = vi.fn(async () => false)
@@ -371,7 +424,19 @@ describe('LocalNotebooks operation-log storage', () => {
         'true'
       )
       expect(drive.saveContent).not.toHaveBeenCalled()
+      // An old client can leave this error persisted after a V2 upgrade.
+      // The current exporter must parse the saved V2 log and clear it on success.
+      expect(
+        parseOperationLog(await store.loadContent(created.uri)).header
+          .format_version
+      ).toBe(2)
+      await store.files.update(created.uri, {
+        ipynbExportError: 'Error: Unsupported notebook log format_version 2',
+      })
       await store.syncIpynbFile(created.uri)
+      expect(
+        (await store.getIpynbExportState(created.uri)).error
+      ).toBeUndefined()
       await store.syncIpynbFile(created.uri)
       expect(drive.create).toHaveBeenCalledTimes(1)
       expect(drive.saveContent).toHaveBeenCalledTimes(2)

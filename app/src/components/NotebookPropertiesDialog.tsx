@@ -24,6 +24,8 @@ export function NotebookPropertiesDialog({
   }>({})
   const [error, setError] = useState('')
   const [saving, setSaving] = useState(false)
+  const [retrying, setRetrying] = useState(false)
+  const [retryError, setRetryError] = useState('')
   useEffect(() => {
     let active = true
     const refresh = () => {
@@ -115,6 +117,26 @@ export function NotebookPropertiesDialog({
                   Drive sync.
                 </p>
               )}
+              {enabled && status.error && !status.needsCreateRecovery && (
+                <Button
+                  disabled={retrying || saving || !store || snapshot?.readOnly}
+                  onClick={() => {
+                    if (!store) return
+                    setRetrying(true)
+                    setRetryError('')
+                    // Retry the committed snapshot without modifying the notebook.
+                    void store
+                      .syncIpynbFile(uri)
+                      .catch((err) => setRetryError(String(err)))
+                      .finally(() => setRetrying(false))
+                  }}
+                >
+                  {retrying ? 'Retrying export…' : 'Retry Colab export'}
+                </Button>
+              )}
+              {enabled && status.error && retryError && (
+                <p role="alert">Export retry failed: {retryError}</p>
+              )}
               {enabled && status.needsCreateRecovery && !snapshot?.readOnly && (
                 <Button
                   disabled={saving}
@@ -136,7 +158,7 @@ export function NotebookPropertiesDialog({
                   Retry unconfirmed creation
                 </Button>
               )}
-              {enabled && !status.uri && (
+              {enabled && !status.uri && !status.error && (
                 <p className="text-nb-text-muted">
                   Waiting for the next background export and a Google Drive
                   connection.

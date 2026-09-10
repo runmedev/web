@@ -32,6 +32,8 @@ from `docs-dev/cujs/`.
     deterministic convergence,
   - exercise operation-log comment lifecycle and durable reload.
 
+- `colab-export-recovery.md` — retry a failed derived copy after Drive reconnects or from Notebook properties without editing its saved source.
+
 ## How CUJs are executed
 
 - Scripted runner(s) live under `app/test/browser/`.
