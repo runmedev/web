@@ -11,6 +11,8 @@ import (
 	"fmt"
 	"io"
 	"log"
+	"mime"
+	"mime/multipart"
 	"net/http"
 	"os"
 	"regexp"
@@ -39,6 +41,7 @@ type driveFile struct {
 	Owners        []driveUser       `json:"owners,omitempty"`
 	Capabilities  driveCapabilities `json:"capabilities"`
 	AppProperties map[string]string `json:"appProperties,omitempty"`
+	Properties    map[string]string `json:"properties,omitempty"`
 	Content       string            `json:"-"`
 	Version       int               `json:"version,string"`
 	HeadRev       string            `json:"headRevisionId"`
@@ -154,6 +157,7 @@ func (s *driveStore) create(resource map[string]any) (*driveFile, bool) {
 		MimeType:      stringValue(resource["mimeType"], notebookJSONMime),
 		Parents:       stringSlice(resource["parents"]),
 		AppProperties: stringMap(resource["appProperties"]),
+		Properties:    stringMap(resource["properties"]),
 		OwnedByMe:     true,
 		Owners:        []driveUser{{DisplayName: "Fake Drive User", EmailAddress: "viewer@acme.example", PermissionID: "viewer-acme-1", Me: true}},
 		Capabilities:  driveCapabilities{CanDownload: true},
@@ -185,6 +189,20 @@ func (s *driveStore) updateMetadata(id string, resource map[string]any, addParen
 	}
 	if appProperties, ok := resource["appProperties"]; ok {
 		file.AppProperties = stringMap(appProperties)
+	}
+	// Drive public properties are patched by key; null removes only that key.
+	// Colab exporters coordinate their source claim through this API.
+	if properties, ok := resource["properties"].(map[string]any); ok {
+		if file.Properties == nil {
+			file.Properties = make(map[string]string)
+		}
+		for key, value := range properties {
+			if value == nil {
+				delete(file.Properties, key)
+			} else if text, ok := value.(string); ok {
+				file.Properties[key] = text
+			}
+		}
 	}
 	if addParents != "" && !containsString(file.Parents, addParents) {
 		file.Parents = append(file.Parents, addParents)
@@ -324,6 +342,10 @@ func cloneFile(file *driveFile) *driveFile {
 	for key, value := range file.AppProperties {
 		appProperties[key] = value
 	}
+	properties := make(map[string]string, len(file.Properties))
+	for key, value := range file.Properties {
+		properties[key] = value
+	}
 	return &driveFile{
 		ID:            file.ID,
 		Name:          file.Name,
@@ -334,6 +356,7 @@ func cloneFile(file *driveFile) *driveFile {
 		Owners:        owners,
 		Capabilities:  file.Capabilities,
 		AppProperties: appProperties,
+		Properties:    properties,
 		Content:       file.Content,
 		Version:       file.Version,
 		HeadRev:       file.HeadRev,
@@ -567,6 +590,36 @@ func newDriveHandler(store *driveStore) http.Handler {
 		if err != nil {
 			http.Error(w, "failed to read body", http.StatusBadRequest)
 			return
+		}
+		// Colab publishes metadata and notebook bytes in one multipart update.
+		// Keep MIME framing out of the saved file, just as Drive does.
+		if r.URL.Query().Get("uploadType") == "multipart" {
+			_, params, parseErr := mime.ParseMediaType(r.Header.Get("Content-Type"))
+			if parseErr != nil || params["boundary"] == "" {
+				http.Error(w, "invalid multipart content type", http.StatusBadRequest)
+				return
+			}
+			reader := multipart.NewReader(strings.NewReader(string(body)), params["boundary"])
+			metadataPart, parseErr := reader.NextPart()
+			var resource map[string]any
+			if parseErr != nil || json.NewDecoder(metadataPart).Decode(&resource) != nil {
+				http.Error(w, "invalid multipart metadata", http.StatusBadRequest)
+				return
+			}
+			mediaPart, parseErr := reader.NextPart()
+			if parseErr != nil {
+				http.Error(w, "missing multipart media", http.StatusBadRequest)
+				return
+			}
+			body, parseErr = io.ReadAll(mediaPart)
+			if parseErr != nil {
+				http.Error(w, "invalid multipart media", http.StatusBadRequest)
+				return
+			}
+			if _, ok := store.updateMetadata(id, resource, r.URL.Query().Get("addParents"), r.URL.Query().Get("removeParents")); !ok {
+				http.NotFound(w, r)
+				return
+			}
 		}
 		file, ok := store.setContent(id, string(body))
 		if !ok {

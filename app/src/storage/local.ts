@@ -4074,8 +4074,10 @@ export class LocalNotebooks extends Dexie {
   }
 
   /**
-   * Enqueue sync for every Drive-backed file that appears locally modified.
-   * Returns the list of enqueued local URIs.
+   * Resume source saves and failed exports when Drive becomes available.
+   * Export failures are independent of source dirtiness: a saved notebook can
+   * still need its derived copy retried after an app upgrade or auth recovery.
+   * Returns the list of local URIs queued for either kind of work.
    */
   async enqueueDriveBackedFilesNeedingSync(): Promise<string[]> {
     const pending = await this.listDriveBackedFilesNeedingSync()
@@ -4098,7 +4100,23 @@ export class LocalNotebooks extends Dexie {
       this.enqueueSync(uri)
       this.enqueueMarkdownSync(uri)
     }
-    return pending
+    const failedExports = await this.files
+      .filter(
+        (record) =>
+          isDriveUri(record.remoteId) &&
+          Boolean(record.operationLogRef && record.ipynbExportError) &&
+          !record.conflict &&
+          !record.ipynbExportPendingClaim
+      )
+      .toArray()
+    for (const record of failedExports) {
+      // Unconfirmed creates retain their separate, explicit recovery flow.
+      // syncIpynbFile rechecks the saved option before touching Drive.
+      if (!pending.includes(record.id)) this.enqueueIpynbSync(record.id)
+    }
+    return [
+      ...new Set([...pending, ...failedExports.map((record) => record.id)]),
+    ]
   }
 
   private enqueueSync(uri: string): void {

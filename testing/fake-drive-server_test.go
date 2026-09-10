@@ -10,6 +10,76 @@ import (
 	"testing"
 )
 
+func TestPublicPropertiesPatchReadbackAndRemoval(t *testing.T) {
+	server := httptest.NewServer(newDriveHandler(newDriveStore()))
+	defer server.Close()
+	for _, patch := range []string{
+		`{"properties":{"unrelated":"keep","runmeColabCopy":"pending"}}`,
+		`{"properties":{"runmeColabCopy":"confirmed"}}`,
+		`{"properties":{"runmeColabCopy":null}}`,
+	} {
+		request, err := http.NewRequest(http.MethodPatch, server.URL+"/drive/v3/files/"+seedFileID, bytes.NewBufferString(patch))
+		if err != nil {
+			t.Fatal(err)
+		}
+		response, err := http.DefaultClient.Do(request)
+		if err != nil {
+			t.Fatal(err)
+		}
+		response.Body.Close()
+		if response.StatusCode != http.StatusOK {
+			t.Fatalf("patch returned %s", response.Status)
+		}
+		response, err = http.Get(server.URL + "/drive/v3/files/" + seedFileID)
+		if err != nil {
+			t.Fatal(err)
+		}
+		var file driveFile
+		if err := json.NewDecoder(response.Body).Decode(&file); err != nil {
+			t.Fatal(err)
+		}
+		response.Body.Close()
+		var resource struct {
+			Properties map[string]*string `json:"properties"`
+		}
+		if err := json.Unmarshal([]byte(patch), &resource); err != nil {
+			t.Fatal(err)
+		}
+		expected := ""
+		if value := resource.Properties["runmeColabCopy"]; value != nil {
+			expected = *value
+		}
+		if file.Properties["runmeColabCopy"] != expected || file.Properties["unrelated"] != "keep" {
+			t.Fatalf("unexpected public properties after %s: %#v", patch, file.Properties)
+		}
+	}
+}
+
+func TestMultipartUpdateStoresNotebookBytesAndMetadata(t *testing.T) {
+	store := newDriveStore()
+	server := httptest.NewServer(newDriveHandler(store))
+	defer server.Close()
+	content := `{"nbformat":4,"cells":[]}`
+	body := "--test-boundary\r\nContent-Type: application/json\r\n\r\n{\"name\":\"copy.ipynb\"}\r\n--test-boundary\r\nContent-Type: application/x-ipynb+json\r\n\r\n" + content + "\r\n--test-boundary--\r\n"
+	request, err := http.NewRequest(http.MethodPatch, server.URL+"/upload/drive/v3/files/"+seedFileID+"?uploadType=multipart", bytes.NewBufferString(body))
+	if err != nil {
+		t.Fatal(err)
+	}
+	request.Header.Set("Content-Type", "multipart/related; boundary=test-boundary")
+	response, err := http.DefaultClient.Do(request)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer response.Body.Close()
+	if response.StatusCode != http.StatusOK {
+		t.Fatalf("upload returned %s", response.Status)
+	}
+	file, ok := store.get(seedFileID)
+	if !ok || file.Content != content || file.Name != "copy.ipynb" {
+		t.Fatalf("unexpected saved multipart file: %#v", file)
+	}
+}
+
 func TestGeneratedIDCreateAndOperationSearch(t *testing.T) {
 	server := httptest.NewServer(newDriveHandler(newDriveStore()))
 	defer server.Close()
