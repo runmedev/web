@@ -659,6 +659,29 @@ function CommentMessage({
   separated: boolean
 }) {
   const { comment } = thread
+  // Historical sources in the read projection are derived from each anchor's
+  // immutable revision. Join each selected fragment without bridging Markdown
+  // syntax between discontiguous source ranges.
+  const firstRange = thread.locations?.find(
+    ({ anchor }) => anchor.kind === 'cell' && anchor.range
+  )
+  const selectedQuote = thread.locations
+    ?.flatMap(({ anchor, source }) =>
+      firstRange?.anchor.kind === 'cell' &&
+      anchor.kind === 'cell' &&
+      anchor.range &&
+      anchor.cell_id === firstRange.anchor.cell_id &&
+      JSON.stringify(anchor.version) ===
+        JSON.stringify(firstRange.anchor.version) &&
+      source !== undefined
+        ? [
+            Array.from(source)
+              .slice(anchor.range.start_index, anchor.range.end_index)
+              .join(''),
+          ]
+        : []
+    )
+    .join('')
   return (
     <div
       className={separated ? 'border-t border-nb-border pt-3' : ''}
@@ -708,6 +731,11 @@ function CommentMessage({
             {thread.location?.status === 'outdated' && ' (outdated context)'}
           </blockquote>
         )}
+      {selectedQuote && (
+        <blockquote className="mb-2 border-l-2 border-nb-accent pl-2 text-xs text-nb-text-muted">
+          Commented revision: {selectedQuote}
+        </blockquote>
+      )}
       {thread.anchor?.type === 'cell-text' && (
         <div className="mb-2 rounded-nb-sm bg-nb-surface-2 px-2 py-1.5">
           <blockquote className="border-l-2 border-nb-accent pl-2 text-xs text-nb-text-muted">
