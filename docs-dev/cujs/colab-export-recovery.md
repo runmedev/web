@@ -29,5 +29,11 @@ meaningless source edit to retry an old export failure.
 clearing an old error, and reuse of the derived copy.
 `app/src/components/NotebookPropertiesDialog.test.tsx` covers direct retry,
 retry failure, source immutability during export retry, and unconfirmed-create
-isolation. These are unit regressions; this journey has no dedicated browser
-script yet.
+isolation.
+
+`app/test/browser/test-scenario-colab-export-recovery.ts` is registered in the
+canonical scenario suite. It exercises real IndexedDB, OPFS, Drive reconnect,
+and the Notebook properties retry button against the Go Drive fake. It verifies
+the exported cell content, source identity, copy reuse, and unchanged source
+history, and writes assertions, error/success screenshots, and a walkthrough
+video under `app/test/browser/test-output/`.
