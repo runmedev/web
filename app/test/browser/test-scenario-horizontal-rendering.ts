@@ -1,4 +1,4 @@
-/** CUJ: docs-dev/CUJs/horizontal-rendering.md.
+/** CUJ: docs-dev/cujs/horizontal-rendering.md.
  * Use stored output and synthetic Markdown: no runner or authenticated service
  * is needed. Layout must be checked in Chromium; jsdom has no layout engine.
  */
@@ -10,7 +10,7 @@ import { fileURLToPath } from 'node:url'
 const here = dirname(fileURLToPath(import.meta.url))
 const dir = here.endsWith('/.generated') ? dirname(here) : here
 const output = join(dir, 'test-output')
-const url = process.env.FRONTEND_URL ?? 'http://127.0.0.1:5173'
+const url = process.env.CUJ_FRONTEND_URL ?? 'http://localhost:5173'
 const session = `horizontal-rendering-${Date.now()}`
 const uri = 'local://file/horizontal-rendering-regression'
 const fixture = JSON.parse(
