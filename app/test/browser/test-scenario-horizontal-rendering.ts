@@ -144,14 +144,52 @@ try {
       'screenshot',
       join(output, `scenario-horizontal-rendering-${width}.png`)
     )
+    // Capture the blocks the geometry checks cover, not just the first screen.
+    // Pressing Right must move each local scroll region; focusability alone
+    // would miss keyboard handlers that accidentally swallow navigation.
+    for (const [name, selector] of [
+      ['code', '#markdown-rendered-markup_horizontal_rendering pre'],
+      [
+        'table',
+        '#markdown-rendered-markup_horizontal_rendering [role="region"]:has(th:nth-child(12))',
+      ],
+    ]) {
+      browser('scrollintoview', selector)
+      browser('focus', selector)
+      browser('press', 'ArrowRight')
+      browser(
+        'wait',
+        '--fn',
+        `document.querySelector(${JSON.stringify(selector)}).scrollLeft > 0`
+      )
+      check(`${width}: ${name} scrolls with the keyboard`, true)
+      browser(
+        'screenshot',
+        join(output, `scenario-horizontal-rendering-${width}-${name}.png`)
+      )
+    }
+    browser('scrollintoview', '[data-testid="cell-output-item"]')
+    browser(
+      'screenshot',
+      join(output, `scenario-horizontal-rendering-${width}-output.png`)
+    )
+    browser('scrollintoview', '#markdown-rendered-markup_horizontal_sibling')
+    browser(
+      'screenshot',
+      join(output, `scenario-horizontal-rendering-${width}-sibling.png`)
+    )
+    browser(
+      'scrollintoview',
+      '#markdown-rendered-markup_horizontal_rendering h1'
+    )
   }
 } catch (error) {
   check(String(error), false)
 } finally {
   try {
     browser('record', 'stop')
-  } catch {
-    /* The first failure is reported above. */
+  } catch (error) {
+    check(`Could not finalize browser recording: ${error}`, false)
   }
   try {
     browser('close')

@@ -7,7 +7,7 @@
    that wrapper only for notebook panes, leaving other ScrollAreas unchanged.
    Keep this outside Tailwind layers so the unlayered Radix rule cannot win.
    Wide blocks own their horizontal scrolling inside the bounded notebook. */
-.notebook-scroll-area .rt-ScrollAreaViewport > div {
+.notebook-scroll-area > .rt-ScrollAreaViewport > div {
   width: 100%;
   max-width: 100%;
 }
