@@ -290,6 +290,18 @@ const MarkdownCell = memo(
     const shouldOwnFocus = isActiveCell && isWindowFocused
     const tracksActiveCell = Boolean(onFocusRoleChange)
 
+    /**
+     * Activating a cell also runs focus restoration. Preserve focus already
+     * inside it, so a newly focused table, code scroller, or link receives
+     * the user's next key instead of losing focus to the rendered wrapper.
+     */
+    const restoreRenderedFocus = useCallback(() => {
+      const root = renderedRef.current
+      if (root && !root.contains(root.ownerDocument.activeElement)) {
+        root.focus({ preventScroll: true })
+      }
+    }, [])
+
     // Enforce invariant: empty cells must be in edit mode.
     // This handles external changes (undo/redo, sync) that clear the value.
     useEffect(() => {
@@ -334,15 +346,22 @@ const MarkdownCell = memo(
         return
       }
       setRendered(true)
-      renderedRef.current?.focus({ preventScroll: true })
-    }, [activeFocusRole, canOpenSource, readOnly, shouldOwnFocus, value])
+      restoreRenderedFocus()
+    }, [
+      activeFocusRole,
+      canOpenSource,
+      readOnly,
+      restoreRenderedFocus,
+      shouldOwnFocus,
+      value,
+    ])
 
     useEffect(() => {
       if (!shouldOwnFocus || activeFocusRole !== 'rendered' || !rendered) {
         return
       }
-      renderedRef.current?.focus({ preventScroll: true })
-    }, [activeFocusRole, rendered, shouldOwnFocus])
+      restoreRenderedFocus()
+    }, [activeFocusRole, rendered, restoreRenderedFocus, shouldOwnFocus])
 
     useEffect(() => {
       if (!tracksActiveCell || isActiveCell || rendered || !value.trim()) {

@@ -83,6 +83,41 @@ function renderMarkdownCell(
 }
 
 describe("MarkdownCell", () => {
+  it.each(["Scrollable code block", "Scrollable table"])(
+    "preserves focus on %s when its cell becomes active",
+    async (label) => {
+      const stub = new StubCellData(
+        create(parser_pb.CellSchema, {
+          refId: "md-nested-scroll-focus",
+          kind: parser_pb.CellKind.MARKUP,
+          languageId: "markdown",
+          value: "```sh\necho hello\n```\n\n| Column |\n| --- |\n| value |",
+        }),
+      );
+      /** Model the parent activation caused by a descendant's focus event. */
+      function ActivatingCell() {
+        const [active, setActive] = React.useState(false);
+        return (
+          <MarkdownCell
+            cellData={stub as unknown as CellData}
+            selectedLanguage="markdown"
+            languageSelectId="lang-nested-focus"
+            languageOptions={[{ label: "Markdown", value: "markdown" }]}
+            onLanguageChange={() => {}}
+            isActiveCell={active}
+            activeFocusRole="rendered"
+            isWindowFocused
+            onFocusRoleChange={() => setActive(true)}
+          />
+        );
+      }
+      render(<ActivatingCell />);
+      const scroller = screen.getByLabelText(label);
+      await act(async () => scroller.focus());
+      expect(document.activeElement).toBe(scroller);
+    },
+  );
+
   it("starts markdown cells in editor mode when persisted focus target is editor", () => {
     const cell = create(parser_pb.CellSchema, {
       refId: "md-active-editor",

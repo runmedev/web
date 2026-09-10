@@ -17,6 +17,9 @@ wrapper and makes every paragraph wrap beyond the visible pane.
   scroller, owns overflow. Do not clip content to conceal a sizing regression.
 - Scope the unlayered CSS override to notebook panes; other Radix scroll areas,
   including the tab rail and review panels, keep their existing behavior.
+- Restoring active-cell focus must preserve a focused descendant. Otherwise
+  activating a cell steals focus from its table/code scroller and prevents
+  the first keyboard scroll. Test this with a previously inactive cell.
 
 Full design and before/after evidence:
 [20260910_horizontal_rendering.runme](https://runme.gateway.unified-0.internal.api.openai.org/?doc=https%3A%2F%2Fdrive.google.com%2Ffile%2Fd%2F1m4Zx1EPXjrrXKYdzgXBhTatI5nYLj-ES%2Fview).
