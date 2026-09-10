@@ -11,6 +11,10 @@ import {
 } from '../lib/googleDriveRuntime'
 import { IPYNB_MIME_TYPE } from '../lib/ipynb'
 import { appLogger } from '../lib/logging/runtime'
+import {
+  buildRenderedMarkdownProjection,
+  sourceRangesForProjectionRange,
+} from '../lib/markdown/renderedMarkdownProjection'
 import { createCellCommentAnchor } from '../lib/notebookComments'
 import {
   RUNME_OPERATION_LOG_MIME_TYPE,
@@ -1422,6 +1426,143 @@ describe('LocalNotebooks operation-log storage', () => {
         (op) => (op.payload as any).cell?.value === 'Unseen change in B'
       )
     ).toBe(false)
+    actor.mockRestore()
+  })
+
+  it('persists discontiguous rendered Markdown source anchors at the captured revision', async () => {
+    const actor = vi
+      .spyOn(actorIdentity, 'getNotebookActorId')
+      .mockResolvedValue('selection-actor')
+    const store = createTestStore({})
+    await store.folders.put({
+      id: LOCAL_FOLDER_URI,
+      name: 'Local',
+      remoteId: '',
+      children: [],
+      lastSynced: '',
+    })
+    const { uri } = await store.create(LOCAL_FOLDER_URI, 'selected.runme')
+    const save = await store.createOperationLogSaveStore(uri)
+    const source =
+      'Read **the [migration guide](https://example.com)** today 😀👍🏽.'
+    const notebook = create(parser_pb.NotebookSchema, {
+      cells: [
+        create(parser_pb.CellSchema, {
+          refId: 'selected',
+          kind: parser_pb.CellKind.MARKUP,
+          value: source,
+        }),
+      ],
+    })
+    await save.save(uri, notebook)
+    const projection = buildRenderedMarkdownProjection(source)
+    const ranges = sourceRangesForProjectionRange(projection, source, 5, 24)
+    expect(ranges).toEqual([
+      { start: 7, end: 11 },
+      { start: 12, end: 27 },
+    ])
+    const anchors = await store.bindOperationLogCommentAnchors(uri, {
+      snapshot_heads: save.getObservedOperationHeads(),
+      cellId: 'selected',
+      source,
+      ranges,
+    })
+    notebook.cells[0].value = 'Remote edit replaces the selected words'
+    await save.save(uri, notebook)
+    const comment = await store.addAnchoredComment(uri, {
+      content: 'Clarify this link',
+      anchors,
+    })
+    const reloaded = await store.listOperationLogComments(uri)
+    expect(reloaded.find((item) => item.id === comment.id)?.content).toBe(
+      'Clarify this link'
+    )
+    const view = JSON.parse(comment.anchor!).runme
+    expect(view.anchors).toEqual(anchors)
+    expect(view.anchorSources).toEqual(
+      anchors.map((anchor) => ({ anchor, source }))
+    )
+    expect(view.quote).toBe('the ')
+    const records = parseOperationLog(
+      await store.loadContent(uri)
+    ).operations.filter((op) => op.kind === 'comment.record')
+    expect(JSON.stringify(records)).not.toContain('migration guide')
+    expect((await store.load(uri)).cells[0].value).toBe(notebook.cells[0].value)
+    actor.mockRestore()
+  })
+
+  it('rejects a stale displayed selection and invalid Unicode source ranges before binding', async () => {
+    const actor = vi
+      .spyOn(actorIdentity, 'getNotebookActorId')
+      .mockResolvedValue('unicode-actor')
+    const store = createTestStore({})
+    await store.folders.put({
+      id: LOCAL_FOLDER_URI,
+      name: 'Local',
+      remoteId: '',
+      children: [],
+      lastSynced: '',
+    })
+    const { uri } = await store.create(LOCAL_FOLDER_URI, 'unicode.runme')
+    const save = await store.createOperationLogSaveStore(uri)
+    const source = 'A😀👍🏽B'
+    await save.save(
+      uri,
+      create(parser_pb.NotebookSchema, {
+        cells: [
+          create(parser_pb.CellSchema, {
+            refId: 'unicode',
+            kind: parser_pb.CellKind.MARKUP,
+            value: source,
+          }),
+        ],
+      })
+    )
+    const heads = save.getObservedOperationHeads()
+    await expect(
+      store.bindOperationLogCommentAnchors(uri, {
+        snapshot_heads: heads,
+        cellId: 'unicode',
+        source: 'other',
+        ranges: [{ start: 1, end: 3 }],
+      })
+    ).rejects.toThrow('does not match')
+    await expect(
+      store.bindOperationLogCommentAnchors(uri, {
+        snapshot_heads: heads,
+        cellId: 'unicode',
+        source,
+        ranges: [{ start: 2, end: 3 }],
+      })
+    ).rejects.toThrow('surrogate pair')
+    await expect(
+      store.bindOperationLogCommentAnchors(uri, {
+        snapshot_heads: heads,
+        cellId: 'unicode',
+        source,
+        ranges: [{ start: 3, end: 5 }],
+      })
+    ).rejects.toThrow('grapheme')
+    expect(
+      parseOperationLog(await store.loadContent(uri)).operations.some(
+        (operation) => operation.kind === 'revision.checkpoint'
+      )
+    ).toBe(false)
+    const anchors = await store.bindOperationLogCommentAnchors(uri, {
+      snapshot_heads: heads,
+      cellId: 'unicode',
+      source,
+      ranges: [
+        { start: 1, end: 3 },
+        { start: 3, end: 7 },
+      ],
+    })
+    expect(
+      anchors.map((anchor) => anchor.kind === 'cell' && anchor.range)
+    ).toEqual([
+      { start_index: 1, end_index: 2, unit: 'unicode-code-point' },
+      { start_index: 2, end_index: 4, unit: 'unicode-code-point' },
+    ])
     actor.mockRestore()
   })
 

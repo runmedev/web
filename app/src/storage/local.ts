@@ -73,7 +73,12 @@ import {
   buildNotebookRevisions,
   notebookRevisionForVersion,
 } from '../lib/operationLog/revisions'
-import { ancestorClosure, snapshotHeads } from '../lib/operationLog/versions'
+import {
+  ancestorClosure,
+  anchorSource,
+  codePointRange,
+  snapshotHeads,
+} from '../lib/operationLog/versions'
 import { captureCommittedRevision as captureReviewRevision } from '../lib/operationLog/versions'
 import { appState } from '../lib/runtime/AppState'
 import { RunmeMetadataKey, parser_pb } from '../runme/client'
@@ -1911,6 +1916,49 @@ export class LocalNotebooks extends Dexie {
       }
     )
     return { kind: 'revision' as const, revision_id: op.op_id }
+  }
+
+  /** Bind a displayed cell selection to historical source before composition can
+   * outlive subsequent edits. The source is used only to verify the visible
+   * snapshot; the saved anchors contain a revision and source offsets alone.
+   */
+  async bindOperationLogCommentAnchors(
+    uri: string,
+    input: {
+      snapshot_heads: string[]
+      cellId: string
+      source: string
+      ranges?: { start: number; end: number }[]
+    }
+  ): Promise<Anchor[]> {
+    const { parsed } = await this.readMaterializedOperationLog(uri)
+    const visible = ancestorClosure(parsed.operations, input.snapshot_heads)
+    const cell = materializeOperationLog(visible).notebook.cells.find(
+      (candidate) => candidate.cell_id === input.cellId
+    )
+    if (!cell || cell.value !== input.source)
+      throw new Error(
+        'The displayed cell does not match its captured revision. Select the text again.'
+      )
+    if (input.ranges && !input.ranges.length)
+      throw new Error('Rendered selection has no source mapping')
+    const ranges = input.ranges?.map(({ start, end }) =>
+      codePointRange(cell.value, start, end)
+    )
+    const version = await this.checkpointNotebookRevision(uri, {
+      snapshot_heads: input.snapshot_heads,
+    })
+    const anchors: Anchor[] = (ranges ?? [undefined]).map((range) => ({
+      kind: 'cell',
+      cell_id: input.cellId,
+      version,
+      surface: 'source',
+      ...(range ? { range } : {}),
+    }))
+    const updated = (await this.readMaterializedOperationLog(uri)).parsed
+      .operations
+    for (const anchor of anchors) anchorSource(updated, anchor)
+    return anchors
   }
 
   /** Explicit conversion exports a local copy and never changes the source/Drive file. */

@@ -305,6 +305,18 @@ export function codePointRange(source: string, start: number, end: number) {
   }
   if (!boundaries.has(start) || !boundaries.has(end))
     throw new Error('Range splits a surrogate pair')
+  const Segmenter = Intl.Segmenter
+  if (!Segmenter) throw new Error('Grapheme validation is unavailable')
+  const graphemeBoundaries = new Set<number>([0])
+  let graphemeOffset = 0
+  for (const { segment } of new Segmenter(undefined, {
+    granularity: 'grapheme',
+  }).segment(source)) {
+    graphemeOffset += segment.length
+    graphemeBoundaries.add(graphemeOffset)
+  }
+  if (!graphemeBoundaries.has(start) || !graphemeBoundaries.has(end))
+    throw new Error('Range splits a grapheme')
   return {
     start_index: Array.from(source.slice(0, start)).length,
     end_index: Array.from(source.slice(0, end)).length,

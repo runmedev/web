@@ -129,7 +129,6 @@ import { appState } from '../../lib/runtime/AppState'
 import {
   createCellCommentAnchor,
   createCellTextCommentAnchor,
-  createPendingCellTextCommentAnchor,
   groupCommentsByCell,
   toCellCommentThreads,
   type CommentDraftTarget,
@@ -138,8 +137,11 @@ import {
 import {
   buildRenderedMarkdownProjection,
   scrollRenderedMarkdownRangeIntoView,
+  sliceByCodePoint,
+  sourceRangesForProjectionRange,
   type RenderedMarkdownSelectionDraft,
 } from '../../lib/markdown/renderedMarkdownProjection'
+import type { Anchor } from '../../lib/operationLog/records'
 import type { RenderedMarkdownCommentRange } from '../../lib/markdown/renderedMarkdownCommentHighlights'
 import DriveLinkStatusTab from '../DriveLinkStatusTab'
 import DriveSyncStatusTab from '../DriveSyncStatusTab'
@@ -3136,23 +3138,81 @@ function NotebookTabContent({
     }
   }, [syncPendingComments])
 
-  // A draft retains its selection-time snapshot even if edits arrive before Send.
-  const draftSnapshots = useRef(
+  // Bind the rendered selection to immutable source while its displayed model
+  // and revision are still available. Sending later does not inspect the editor.
+  const draftAnchors = useRef(
     new WeakMap<
       CommentDraftTarget,
-      Promise<{ heads?: string[]; error?: unknown }>
+      Promise<{ anchors?: Anchor[]; error?: unknown }>
     >()
   )
   const startCommentDraft = useCallback(
     (target: CommentDraftTarget) => {
-      if (operationLogComments && notebookData)
-        draftSnapshots.current.set(
+      if (operationLogComments && notebookData && store) {
+        // Capture source and mapping synchronously, before the flush yields to
+        // another edit or a remote sync. The store verifies that same source
+        // against the captured causal revision before creating typed anchors.
+        const visible = notebookData
+          .getNotebook()
+          .cells.find((cell) => cell.refId === target.cellId)
+        const source = visible?.value
+        const projection =
+          target.type === 'cell-text'
+            ? buildRenderedMarkdownProjection(target.source)
+            : undefined
+        const ranges =
+          target.type === 'cell-text' && projection
+            ? sourceRangesForProjectionRange(
+                projection,
+                target.source,
+                target.selectors[0].start,
+                target.selectors[0].end
+              )
+            : undefined
+        const binding = (async () => {
+          if (
+            typeof source !== 'string' ||
+            (target.type === 'cell-text' && source !== target.source)
+          )
+            throw new Error(
+              'The displayed selection changed. Select the text again.'
+            )
+          if (target.type === 'cell-text') {
+            const [position, quote] = target.selectors
+            if (
+              projection?.text !== target.projection.text ||
+              !Number.isSafeInteger(position.start) ||
+              !Number.isSafeInteger(position.end) ||
+              position.start < 0 ||
+              position.end > Array.from(projection.text).length ||
+              position.end <= position.start ||
+              sliceByCodePoint(
+                target.projection.text,
+                position.start,
+                position.end
+              ) !== quote.exact ||
+              !ranges?.length
+            )
+              throw new Error(
+                'The rendered selection changed. Select the text again.'
+              )
+          }
+          const heads = await captureCommentSnapshot(notebookData)
+          return store.bindOperationLogCommentAnchors(docUri, {
+            snapshot_heads: heads,
+            cellId: target.cellId,
+            source,
+            ranges,
+          })
+        })()
+        draftAnchors.current.set(
           target,
-          captureCommentSnapshot(notebookData).then(
-            (heads) => ({ heads }),
+          binding.then(
+            (anchors) => ({ anchors }),
             (error) => ({ error })
           )
         )
+      }
       openCommentsPanel()
       setDraftTarget(target)
       setDraftContent('')
@@ -3184,6 +3244,7 @@ function NotebookTabContent({
       openCommentsPanel,
       operationLogComments,
       notebookData,
+      store,
     ]
   )
 
@@ -3231,23 +3292,17 @@ function NotebookTabContent({
       if (operationLogComments && store) {
         setCommentsBusy(true)
         try {
-          const captured = await draftSnapshots.current.get(target)
-          if (captured?.error) throw captured.error
-          const heads = captured
-            ? captured.heads
-            : notebookData
-              ? await captureCommentSnapshot(notebookData)
-              : undefined
-          const commentId = crypto.randomUUID()
-          const anchor =
-            target.type === 'cell'
-              ? createCellCommentAnchor(target.cellId, commentId)
-              : createPendingCellTextCommentAnchor(target, commentId)
-          await store.addOperationLogComment(docUri, {
+          const bound = draftAnchors.current.get(target)
+          if (!bound)
+            throw new Error(
+              'The comment selection is unavailable. Select it again.'
+            )
+          const { anchors, error } = await bound
+          if (error) throw error
+          if (!anchors) throw new Error('The comment selection is unavailable.')
+          await store.addAnchoredComment(docUri, {
             content,
-            anchor,
-            commentId,
-            snapshot_heads: heads,
+            anchors,
             author: await getCommentAuthor(),
           })
           setDraftTarget(null)
