@@ -33,6 +33,7 @@ from `docs-dev/cujs/`.
   - exercise operation-log comment lifecycle and durable reload.
 
 - `colab-export-recovery.md` — retry a failed derived copy after Drive reconnects or from Notebook properties without editing its saved source.
+- execution-output-recovery.md — open, edit, save, reload, and rerun notebooks with conflicting execution results; retain history and replace ambiguous output with a cell-level diagnostic.
 
 ## How CUJs are executed
 

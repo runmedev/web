@@ -19,6 +19,7 @@ import {
   parseOperationLog,
   serializeOperationLog,
 } from './operationLog'
+import { withoutRecoveredOutputs } from './recoveredOutputs'
 
 const NOTEBOOK_JSON_WRITE_OPTIONS = {
   emitDefaultValues: true,
@@ -390,7 +391,7 @@ export function decodeNotebookFile(
 export function encodeRunmeNotebook(notebook: parser_pb.Notebook): string {
   return toJsonString(
     parser_pb.NotebookSchema,
-    notebook,
+    withoutRecoveredOutputs(notebook),
     NOTEBOOK_JSON_WRITE_OPTIONS
   )
 }

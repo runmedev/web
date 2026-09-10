@@ -1,9 +1,20 @@
 import { useEffect, useState } from "react";
 
 import { loggingRuntime, type LogEvent, type LogLevel } from "../../lib/logging/runtime";
+import { showToast } from "../../lib/toast";
 
 const DEFAULT_LEVEL: LogLevel = "debug";
 const DEFAULT_LIMIT = 200;
+
+/** Copy the complete record, preserving its ISO timestamp and nested attributes. */
+async function copyLogEntry(event: LogEvent): Promise<void> {
+  try {
+    await navigator.clipboard.writeText(JSON.stringify(event, null, 2));
+    showToast({ message: "Log entry copied as JSON", tone: "success" });
+  } catch {
+    showToast({ message: "Failed to copy log entry to clipboard", tone: "error" });
+  }
+}
 
 /**
  * Renders a compact JSON string for log attributes. This keeps the pane simple
@@ -83,6 +94,15 @@ export default function LogsPane() {
                   <div id={`logs-pane-event-meta-${event.id}`} className="flex flex-wrap items-center gap-2">
                     <span className="text-slate-400">{new Date(event.ts).toLocaleTimeString()}</span>
                     <span className="rounded bg-slate-700/80 px-1 py-0.5 uppercase">{event.level}</span>
+                    <button
+                      type="button"
+                      aria-label="Copy log entry as JSON"
+                      title="Copy this log entry as JSON"
+                      className="ml-auto shrink-0 rounded border border-white/20 px-2 py-0.5 text-slate-300 hover:bg-white/10 hover:text-white focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-slate-300"
+                      onClick={() => void copyLogEntry(event)}
+                    >
+                      Copy JSON
+                    </button>
                   </div>
                   <div id={`logs-pane-event-message-${event.id}`} className="mt-1 text-slate-100">
                     {event.message}

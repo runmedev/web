@@ -5,6 +5,7 @@ import {
   RunmeMetadataKey,
   parser_pb,
 } from '../../runme/client'
+import { isRecoveredOutput } from '../recoveredOutputs'
 import { materializeOperationLog } from './materialize'
 import { causalHeads, createRunmeOperation } from './mutations'
 import { allocatePositionBetween } from './positions'
@@ -88,23 +89,28 @@ async function sha256(value: string): Promise<string> {
 }
 
 function outputJson(cell: parser_pb.Cell): JsonValue[] {
-  return cell.outputs.map((output) => {
-    const normalized = create(parser_pb.CellOutputSchema, {
-      ...output,
-      items: output.items.map((item) =>
-        create(parser_pb.CellOutputItemSchema, {
-          ...item,
-          data:
-            item.data instanceof Uint8Array
-              ? item.data
-              : new Uint8Array(
-                  Object.values(item.data as unknown as Record<string, number>)
-                ),
-        })
-      ),
+  // Recovery diagnostics belong to the display, never to execution history.
+  return cell.outputs
+    .filter((output) => !isRecoveredOutput(output))
+    .map((output) => {
+      const normalized = create(parser_pb.CellOutputSchema, {
+        ...output,
+        items: output.items.map((item) =>
+          create(parser_pb.CellOutputItemSchema, {
+            ...item,
+            data:
+              item.data instanceof Uint8Array
+                ? item.data
+                : new Uint8Array(
+                    Object.values(
+                      item.data as unknown as Record<string, number>
+                    )
+                  ),
+          })
+        ),
+      })
+      return protobufJson(parser_pb.CellOutputSchema, normalized)
     })
-    return protobufJson(parser_pb.CellOutputSchema, normalized)
-  })
 }
 
 /** Convert one debounced editor snapshot change into append-only operations. */
@@ -268,9 +274,17 @@ export async function buildOperationLogDiff({
     const persistedRunId = cell.metadata?.[RunmeMetadataKey.LastRunID]
     const previousOutputs = previousCell ? outputJson(previousCell) : []
     const nextOutputs = outputJson(cell)
+    // A failed setup attempt has output but no backend run ID. Give a
+    // replacement for recovered output a durable execution identity so reopening
+    // cannot restore the old diagnostic. Unchanged snapshots emit no new run.
+    const replacedRecovery = Boolean(
+      previousCell?.outputs.some(isRecoveredOutput) &&
+        !cell.outputs.some(isRecoveredOutput) &&
+        nextOutputs.length > 0
+    )
     const nextRunId =
       persistedRunId ??
-      (!previousCell && nextOutputs.length > 0
+      ((!previousCell || replacedRecovery) && nextOutputs.length > 0
         ? `${actorId}:imported-execution:${actorSequence}`
         : undefined)
     const outputsChanged =
@@ -278,8 +292,10 @@ export async function buildOperationLogDiff({
     if (
       previousCell &&
       !nextRunId &&
-      previousOutputs.length > 0 &&
-      nextOutputs.length === 0
+      // A user clear also removes recovery-only output. Compare the visible
+      // snapshots here, before filtering diagnostics out of saved results.
+      previousCell.outputs.length > 0 &&
+      cell.outputs.length === 0
     ) {
       append('cell.clear_outputs', {
         cell_id: cell.refId,

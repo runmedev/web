@@ -49,6 +49,14 @@ Here is an example of correct code.
 
 ## Review guidelines for app/
 
+### Graceful recovery from corrupt notebooks
+
+- Corrupt files or inconsistent saved history must not prevent a notebook from opening or make its recovered content read-only. Keep recoverable cells editable and ensure edits can be saved and reopened.
+- Isolate damage to the affected cell, output, or record. Preserve original bytes/history; never silently replace a damaged notebook with an empty one or delete conflicting records to make validation pass.
+- For ambiguous execution results, show a useful error in that cell's outputs. Clear the diagnostic when the cell runs again, and let the new execution supply fresh output. Do not serialize recovery diagnostics as real execution results.
+- Use explicit causal history to reconcile updates. Do not guess the correct output from wall-clock timestamps or arbitrary file order.
+- Review recovery changes with corrupt-input regression tests covering open, edit, save, reopen, and rerun. An error boundary or read-only fallback alone is not recovery.
+
 * Ensure code changes are consistent with the design, practices, and styles defined in `docs-dev/architecture.md`.
 * Ensure that tests are properly updated to verify bug fixes and prevent regressions, including adding new tests where needed.
   * Ensure CUJs as defined in `docs-dev/cujs` are updated if necessary.

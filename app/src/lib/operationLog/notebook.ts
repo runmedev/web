@@ -1,9 +1,26 @@
 import { create, fromJson } from '@bufbuild/protobuf'
 
-import { parser_pb } from '../../runme/client'
+import { MimeType, parser_pb } from '../../runme/client'
+import { RECOVERED_OUTPUT_KEY } from '../recoveredOutputs'
 import { canonicalJson } from './canonicalJson'
 import type { MaterializedOperationLog } from './materialize'
 import type { JsonValue } from './types'
+
+export { RECOVERED_OUTPUT_KEY } from '../recoveredOutputs'
+
+/** A transient stderr output uses the normal renderer and is cleared on execution. */
+function recoveryOutput(message: string): parser_pb.CellOutput {
+  return create(parser_pb.CellOutputSchema, {
+    metadata: { [RECOVERED_OUTPUT_KEY]: 'true' },
+    items: [
+      create(parser_pb.CellOutputItemSchema, {
+        mime: MimeType.VSCodeNotebookStdErr,
+        type: 'Buffer',
+        data: new TextEncoder().encode(message),
+      }),
+    ],
+  })
+}
 
 function stringValue(value: JsonValue): string {
   return typeof value === 'string' ? value : canonicalJson(value)
@@ -40,9 +57,18 @@ export function materializedLogToNotebook(
       result.languageId = cell.language_id
       result.value = cell.value
       result.metadata = stringRecord(cell.metadata)
-      result.outputs = cell.outputs.map((output) =>
-        fromJson(parser_pb.CellOutputSchema, output)
-      )
+      // Bad execution output must never prevent access to the editable source.
+      result.outputs = cell.output_error
+        ? [recoveryOutput(cell.output_error)]
+        : cell.outputs.map((output, index) => {
+            try {
+              return fromJson(parser_pb.CellOutputSchema, output)
+            } catch {
+              return recoveryOutput(
+                `This cell has corrupt saved output (item ${index + 1}). Run this cell again to replace this error with new output.`
+              )
+            }
+          })
       return result
     }),
   })
