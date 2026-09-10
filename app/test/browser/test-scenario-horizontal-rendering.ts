@@ -11,7 +11,13 @@ const here = dirname(fileURLToPath(import.meta.url))
 const dir = here.endsWith('/.generated') ? dirname(here) : here
 const output = join(dir, 'test-output')
 const url = process.env.CUJ_FRONTEND_URL ?? 'http://localhost:5173'
-const session = `horizontal-rendering-${Date.now()}`
+const session =
+  process.env.AGENT_BROWSER_SESSION?.trim() ||
+  `horizontal-rendering-${Date.now()}`
+const profile = process.env.AGENT_BROWSER_PROFILE?.trim()
+const headed = process.env.AGENT_BROWSER_HEADED?.toLowerCase() === 'true'
+const keepOpen = process.env.AGENT_BROWSER_KEEP_OPEN?.toLowerCase() === 'true'
+const movie = join(output, 'scenario-horizontal-rendering.webm')
 const uri = 'local://file/horizontal-rendering-regression'
 const fixture = JSON.parse(
   readFileSync(
@@ -25,7 +31,10 @@ let failed = 0
 
 /** Invoke the existing CUJ browser tool with argument boundaries preserved. */
 function browser(...args: string[]): string {
-  return execFileSync('agent-browser', ['--session', session, ...args], {
+  const options = ['--session', session]
+  if (profile) options.push('--profile', profile)
+  if (headed) options.push('--headed')
+  return execFileSync('agent-browser', [...options, ...args], {
     encoding: 'utf8',
     timeout: 30000,
     maxBuffer: 4 * 1024 * 1024,
@@ -89,7 +98,7 @@ function check(name: string, ok: boolean) {
 
 try {
   browser('open', url)
-  browser('record', 'start', join(output, 'scenario-horizontal-rendering.webm'))
+  browser('record', 'start', movie)
   // Recording may replace the context. Seed only after recording has started.
   browser('wait', '--fn', 'Boolean(window.app?.localNotebooks)')
   browser(
@@ -156,11 +165,17 @@ try {
     ]) {
       browser('scrollintoview', selector)
       browser('focus', selector)
+      const before = JSON.parse(
+        browser(
+          'eval',
+          `document.querySelector(${JSON.stringify(selector)}).scrollLeft`
+        )
+      )
       browser('press', 'ArrowRight')
       browser(
         'wait',
         '--fn',
-        `document.querySelector(${JSON.stringify(selector)}).scrollLeft > 0`
+        `document.querySelector(${JSON.stringify(selector)}).scrollLeft > ${Number(before)}`
       )
       check(`${width}: ${name} scrolls with the keyboard`, true)
       browser(
@@ -191,12 +206,15 @@ try {
   } catch (error) {
     check(`Could not finalize browser recording: ${error}`, false)
   }
-  try {
-    browser('close')
-  } catch {
-    /* Preserve test result during cleanup. */
+  if (!keepOpen) {
+    try {
+      browser('close')
+    } catch {
+      /* Preserve test result during cleanup. */
+    }
   }
 }
+console.log(`Movie: ${movie}`)
 console.log(
   `Assertions: ${passed + failed}, Passed: ${passed}, Failed: ${failed}`
 )
