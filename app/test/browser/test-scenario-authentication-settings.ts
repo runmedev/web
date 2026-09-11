@@ -84,6 +84,7 @@ try {
       [
         'oidcConfig',
         'googleClientConfig',
+        'runme/google-drive/runtime',
         'runme/app-config/prefer-local',
         'runme/app-login-configuration',
       ].map((key) => [key, localStorage.getItem(key)])

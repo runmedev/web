@@ -70,7 +70,10 @@ export class OidcConfigManager {
     return this.config.scope;
   }
 
-  setConfig(config: Partial<OidcConfig>): OidcConfig {
+  setConfig(
+    config: Partial<OidcConfig>,
+    options: { requirePersistence?: boolean } = {},
+  ): OidcConfig {
     const extraAuthParams = config.extraAuthParams
       ? this.sanitizeExtraAuthParams(config.extraAuthParams)
       : undefined;
@@ -78,12 +81,14 @@ export class OidcConfigManager {
       extraAuthParams && Object.keys(extraAuthParams).length > 0
         ? extraAuthParams
         : undefined;
-    this.config = {
+    const nextConfig = {
       ...this.config,
       ...config,
       extraAuthParams: normalizedExtraAuthParams ?? this.config.extraAuthParams,
     };
-    this.persistConfig(this.config);
+    if (options.requirePersistence) this.assertRequired(nextConfig);
+    this.persistConfig(nextConfig, options.requirePersistence);
+    this.config = nextConfig;
     this.assertRequired(this.config);
     return this.config;
   }
@@ -190,11 +195,12 @@ export class OidcConfigManager {
     }
   }
 
-  private persistConfig(config: OidcConfig): void {
-    if (typeof window === "undefined" || !window.localStorage) {
-      return;
-    }
+  private persistConfig(config: OidcConfig, requirePersistence = false): void {
     try {
+      if (typeof window === "undefined" || !window.localStorage) {
+        if (requirePersistence) throw new Error("Browser storage is unavailable");
+        return;
+      }
       window.localStorage.setItem(
         STORAGE_KEY,
         JSON.stringify({
@@ -207,6 +213,11 @@ export class OidcConfigManager {
         }),
       );
     } catch (error) {
+      if (requirePersistence) {
+        throw new Error(
+          "Could not save Runme OAuth settings. Browser storage is unavailable or full.",
+        );
+      }
       console.warn("Failed to persist OIDC config", error);
     }
   }

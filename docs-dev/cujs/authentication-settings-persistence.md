@@ -13,8 +13,11 @@ The settings panel previously saved the clients but did not enable local
 precedence, so the next preload silently replaced the saved scopes. Development
 already defaults to local precedence, hiding the production failure.
 
-A successful settings save now enables the existing local-precedence preference
-**after** both OAuth clients are saved. This preserves OIDC and Google Drive
+An explicit settings save, or authorization after editing OAuth fields, now enables
+the existing local-precedence preference **after** both OAuth clients are persisted.
+Signing in or connecting with unchanged OAuth fields leaves deployment precedence
+intact. Storage failures are surfaced in the panel and prevent a success toast or
+authorization; a failed write also leaves that manager’s in-memory state unchanged. This preserves OIDC and Google Drive
 configuration on automatic startup. Failed validation does not change precedence.
 Explicit config imports still apply immediately, and
 `app.enableConfigOverridesOnLoad()` restores deployment precedence. This uses the
@@ -33,5 +36,6 @@ compares the visible scope field with the OIDC runtime, and verifies that explic
 restoration of deployment defaults still works. It records a screenshot and movie,
 and restores its original storage keys without writing credentials to artifacts.
 
-Component tests cover successful and rejected saves. The startup test recreates
+Component and manager tests cover successful saves, unchanged and edited sign-ins,
+validation failures, and storage failures followed by a successful retry. The startup test recreates
 singleton managers from storage and invokes the actual async YAML preload.

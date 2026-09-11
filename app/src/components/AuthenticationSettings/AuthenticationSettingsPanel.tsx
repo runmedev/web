@@ -254,79 +254,97 @@ export default function AuthenticationSettingsPanel() {
     driveHumanIdentityValid &&
     requiredFieldsPresent
 
-  const saveSettings = useCallback((): boolean => {
-    if (!runmeServiceAccountValid || !driveServiceAccountValid) {
-      setErrorMessage('Enter a valid Google service-account identity.')
-      return false
-    }
-    if (!runmeHumanIdentityValid || !driveHumanIdentityValid) {
-      setErrorMessage(
-        'Enter the human identity that is allowed to impersonate the Google service account.'
-      )
-      return false
-    }
-    if (!requiredFieldsPresent) {
-      setErrorMessage(
-        'Enter a Google Web application client ID ending in .apps.googleusercontent.com and all required Runme OAuth fields.'
-      )
-      return false
-    }
-    try {
-      saveAppLoginConfiguration({
-        identitySharing,
-        mode: loginMode,
-        humanAccount,
-        serviceAccount,
-        driveMode: driveLoginMode,
-        driveHumanAccount,
-        driveServiceAccount,
-      })
-      setDriveAccount(effectiveDriveHumanAccount)
-      googleClientManager.setOAuthClient({
-        clientId: driveClientId.trim(),
-        clientSecret: driveClientSecret.trim() || undefined,
-        authFlow: driveAuthFlow,
-        authUxMode: driveAuthUxMode,
-      })
-      oidcConfigManager.setConfig({
-        discoveryUrl: runmeDiscoveryUrl.trim(),
-        clientId: runmeClientId.trim(),
-        clientSecret: runmeClientSecret.trim() || undefined,
-        scope: runmeScope.trim(),
-      })
-      // A successful save is an explicit local override. Production startup
-      // otherwise reapplies deployment defaults and silently erases these edits.
-      setLocalConfigPreferredOnLoad(true)
-      setErrorMessage(null)
-      return true
-    } catch (error) {
-      setErrorMessage(error instanceof Error ? error.message : String(error))
-      return false
-    }
-  }, [
-    driveAuthFlow,
-    driveAuthUxMode,
-    driveClientId,
-    driveClientSecret,
-    driveHumanAccount,
-    driveLoginMode,
-    driveServiceAccount,
-    driveServiceAccountValid,
-    driveHumanIdentityValid,
-    effectiveDriveHumanAccount,
-    humanAccount,
-    identitySharing,
-    loginMode,
-    requiredFieldsPresent,
-    runmeClientId,
-    runmeClientSecret,
-    runmeDiscoveryUrl,
-    runmeHumanIdentityValid,
-    runmeScope,
-    serviceAccount,
-    runmeServiceAccountValid,
-    setDriveAccount,
-  ])
+  const saveSettings = useCallback(
+    (explicitSave = false): boolean => {
+      if (!runmeServiceAccountValid || !driveServiceAccountValid) {
+        setErrorMessage('Enter a valid Google service-account identity.')
+        return false
+      }
+      if (!runmeHumanIdentityValid || !driveHumanIdentityValid) {
+        setErrorMessage(
+          'Enter the human identity that is allowed to impersonate the Google service account.'
+        )
+        return false
+      }
+      if (!requiredFieldsPresent) {
+        setErrorMessage(
+          'Enter a Google Web application client ID ending in .apps.googleusercontent.com and all required Runme OAuth fields.'
+        )
+        return false
+      }
+      try {
+        saveAppLoginConfiguration({
+          identitySharing,
+          mode: loginMode,
+          humanAccount,
+          serviceAccount,
+          driveMode: driveLoginMode,
+          driveHumanAccount,
+          driveServiceAccount,
+        })
+        setDriveAccount(effectiveDriveHumanAccount)
+        const driveOAuth = {
+          clientId: driveClientId.trim(),
+          clientSecret: driveClientSecret.trim() || undefined,
+          authFlow: driveAuthFlow,
+          authUxMode: driveAuthUxMode,
+        }
+        const runmeOAuth = {
+          discoveryUrl: runmeDiscoveryUrl.trim(),
+          clientId: runmeClientId.trim(),
+          clientSecret: runmeClientSecret.trim() || undefined,
+          scope: runmeScope.trim(),
+        }
+        const currentDrive = googleClientManager.getOAuthClient()
+        const currentRunme = oidcConfigManager.getConfigForEditing()
+        const oauthChanged =
+          Object.entries(driveOAuth).some(
+            ([key, value]) =>
+              currentDrive[key as keyof typeof driveOAuth] !== value
+          ) ||
+          Object.entries(runmeOAuth).some(
+            ([key, value]) =>
+              currentRunme[key as keyof typeof runmeOAuth] !== value
+          )
+        googleClientManager.setOAuthClient(driveOAuth, {
+          requirePersistence: true,
+        })
+        oidcConfigManager.setConfig(runmeOAuth, { requirePersistence: true })
+        // Preserve deliberate saves and OAuth edits before authorization redirects.
+        // Signing in with unchanged deployment defaults must not pin them locally.
+        if (explicitSave || oauthChanged) setLocalConfigPreferredOnLoad(true)
+        setErrorMessage(null)
+        return true
+      } catch (error) {
+        setErrorMessage(error instanceof Error ? error.message : String(error))
+        return false
+      }
+    },
+    [
+      driveAuthFlow,
+      driveAuthUxMode,
+      driveClientId,
+      driveClientSecret,
+      driveHumanAccount,
+      driveLoginMode,
+      driveServiceAccount,
+      driveServiceAccountValid,
+      driveHumanIdentityValid,
+      effectiveDriveHumanAccount,
+      humanAccount,
+      identitySharing,
+      loginMode,
+      requiredFieldsPresent,
+      runmeClientId,
+      runmeClientSecret,
+      runmeDiscoveryUrl,
+      runmeHumanIdentityValid,
+      runmeScope,
+      serviceAccount,
+      runmeServiceAccountValid,
+      setDriveAccount,
+    ]
+  )
 
   const authorizeServiceAccount = useCallback(
     async (
@@ -353,7 +371,7 @@ export default function AuthenticationSettingsPanel() {
 
   const handleSave = useCallback(() => {
     setBusyAction('save')
-    if (saveSettings()) {
+    if (saveSettings(true)) {
       showToast({ message: 'Authentication settings saved', tone: 'success' })
     }
     setBusyAction(null)

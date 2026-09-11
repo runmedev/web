@@ -114,10 +114,65 @@ describe('AuthenticationSettingsPanel', () => {
       screen.getByRole('button', { name: 'Save authentication settings' })
     )
     expect(mocks.setOidcConfig).toHaveBeenCalledWith(
-      expect.objectContaining({ scope: 'openid email profile' })
+      expect.objectContaining({ scope: 'openid email profile' }),
+      { requirePersistence: true }
     )
     expect(isLocalConfigPreferredOnLoad()).toBe(true)
   })
+
+  it.each(['Sign in to Runme', 'Connect or refresh'])(
+    'keeps deployment precedence for unchanged %s',
+    async (action) => {
+      setLocalConfigPreferredOnLoad(false)
+      render(<AuthenticationSettingsPanel />)
+      fireEvent.click(screen.getByRole('button', { name: action }))
+      await waitFor(() =>
+        expect(screen.getByRole('button', { name: action })).toHaveProperty(
+          'disabled',
+          false
+        )
+      )
+      expect(isLocalConfigPreferredOnLoad()).toBe(false)
+    }
+  )
+
+  it('preserves OAuth edits made directly before signing in', async () => {
+    setLocalConfigPreferredOnLoad(false)
+    render(<AuthenticationSettingsPanel />)
+    fireEvent.change(screen.getByLabelText('Runme OAuth scopes'), {
+      target: { value: 'openid email profile' },
+    })
+    fireEvent.click(screen.getByRole('button', { name: 'Sign in to Runme' }))
+    await waitFor(() => expect(mocks.loginWithRedirect).toHaveBeenCalled())
+    expect(isLocalConfigPreferredOnLoad()).toBe(true)
+  })
+
+  it.each(['setOidcConfig', 'setOAuthClient'] as const)(
+    'does not report success or authorize after %s fails to persist',
+    async (setter) => {
+      setLocalConfigPreferredOnLoad(false)
+      render(<AuthenticationSettingsPanel />)
+      const fail = () => {
+        throw new Error('Browser storage is full')
+      }
+      mocks[setter].mockImplementationOnce(fail)
+      fireEvent.click(
+        screen.getByRole('button', { name: 'Save authentication settings' })
+      )
+      expect(screen.getByText('Browser storage is full')).toBeTruthy()
+      expect(mocks.showToast).not.toHaveBeenCalled()
+      expect(isLocalConfigPreferredOnLoad()).toBe(false)
+      mocks[setter].mockImplementationOnce(fail)
+      fireEvent.click(screen.getByRole('button', { name: 'Sign in to Runme' }))
+      expect(mocks.loginWithRedirect).not.toHaveBeenCalled()
+      expect(isLocalConfigPreferredOnLoad()).toBe(false)
+      fireEvent.click(
+        screen.getByRole('button', { name: 'Save authentication settings' })
+      )
+      expect(mocks.showToast).toHaveBeenCalled()
+      expect(isLocalConfigPreferredOnLoad()).toBe(true)
+    }
+  )
 
   it('does not change startup precedence when authentication settings fail validation', () => {
     setLocalConfigPreferredOnLoad(false)
@@ -206,19 +261,25 @@ describe('AuthenticationSettingsPanel', () => {
       driveServiceAccount: '',
     })
     expect(mocks.setDriveAccount).toHaveBeenCalledWith('drive-user@example.com')
-    expect(mocks.setOAuthClient).toHaveBeenCalledWith({
-      clientId: 'drive-client-id.apps.googleusercontent.com',
-      clientSecret: 'drive-client-secret',
-      authFlow: 'pkce',
-      authUxMode: 'new_tab',
-    })
-    expect(mocks.setOidcConfig).toHaveBeenCalledWith({
-      discoveryUrl:
-        'https://accounts.google.com/.well-known/openid-configuration',
-      clientId: 'runme-client-id',
-      clientSecret: 'runme-client-secret',
-      scope: 'openid email',
-    })
+    expect(mocks.setOAuthClient).toHaveBeenCalledWith(
+      {
+        clientId: 'drive-client-id.apps.googleusercontent.com',
+        clientSecret: 'drive-client-secret',
+        authFlow: 'pkce',
+        authUxMode: 'new_tab',
+      },
+      { requirePersistence: true }
+    )
+    expect(mocks.setOidcConfig).toHaveBeenCalledWith(
+      {
+        discoveryUrl:
+          'https://accounts.google.com/.well-known/openid-configuration',
+        clientId: 'runme-client-id',
+        clientSecret: 'runme-client-secret',
+        scope: 'openid email',
+      },
+      { requirePersistence: true }
+    )
   })
 
   it('uses the saved direct-principal settings to connect Google Drive', async () => {

@@ -171,7 +171,8 @@ export class GoogleClientManager {
   }
 
   setOAuthClient(
-    config: Partial<GoogleOAuthClientConfig>
+    config: Partial<GoogleOAuthClientConfig>,
+    options: { requirePersistence?: boolean } = {}
   ): GoogleOAuthClientConfig {
     const requestedAuthFlow = config.authFlow
     if (requestedAuthFlow && !isGoogleDriveAuthFlow(requestedAuthFlow)) {
@@ -208,6 +209,7 @@ export class GoogleClientManager {
     } else {
       delete nextOAuthClient.serviceAccount
     }
+    this.persistOAuthClient(nextOAuthClient, options.requirePersistence)
     this.config.oauth = nextOAuthClient
     if (config.clientId !== undefined) {
       this.config.drivePicker = {
@@ -215,7 +217,6 @@ export class GoogleClientManager {
         clientId: config.clientId,
       }
     }
-    this.persistOAuthClient(this.config.oauth)
     return this.config.oauth
   }
 
@@ -463,11 +464,16 @@ export class GoogleClientManager {
     }
   }
 
-  private persistOAuthClient(config: GoogleOAuthClientConfig): void {
-    if (typeof window === 'undefined' || !window.localStorage) {
-      return
-    }
+  private persistOAuthClient(
+    config: GoogleOAuthClientConfig,
+    requirePersistence = false
+  ): void {
     try {
+      if (typeof window === 'undefined' || !window.localStorage) {
+        if (requirePersistence)
+          throw new Error('Browser storage is unavailable')
+        return
+      }
       const serviceAccount =
         config.authFlow === 'service_account' && config.serviceAccount
           ? serializeServiceAccountCredentials(config.serviceAccount)
@@ -483,6 +489,10 @@ export class GoogleClientManager {
         })
       )
     } catch (error) {
+      if (requirePersistence)
+        throw new Error(
+          'Could not save Google Drive OAuth settings. Browser storage is unavailable or full.'
+        )
       console.warn('Failed to persist Google OAuth client config', error)
     }
   }
