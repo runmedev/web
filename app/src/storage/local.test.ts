@@ -1466,6 +1466,7 @@ describe('LocalNotebooks operation-log storage', () => {
       cellId: 'selected',
       source,
       ranges,
+      selectionSurface: 'rendered-markdown',
     })
     notebook.cells[0].value = 'Remote edit replaces the selected words'
     await save.save(uri, notebook)
@@ -1479,6 +1480,11 @@ describe('LocalNotebooks operation-log storage', () => {
     )
     const view = JSON.parse(comment.anchor!).runme
     expect(view.anchors).toEqual(anchors)
+    expect(
+      view.anchors.every(
+        (anchor: any) => anchor.selection_surface === 'rendered-markdown'
+      )
+    ).toBe(true)
     expect(view.anchorSources).toEqual(
       anchors.map((anchor) => ({ anchor, source }))
     )

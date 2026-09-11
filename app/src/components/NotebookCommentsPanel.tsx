@@ -1,7 +1,7 @@
 import { useEffect, useMemo, useRef, useState } from 'react'
 import { commentAttributionLabel } from '../lib/commentAttribution'
 import { CommentAnchorLocations } from './CommentAnchorLocations'
-import { isLocated } from '../lib/commentAnchorMapping'
+import { isLocated, type LocatedAnchor } from '../lib/commentAnchorMapping'
 
 import type {
   CellCommentThread,
@@ -419,13 +419,7 @@ export function NotebookCommentsPanel({
                       onSelect={(entry) => {
                         if (entry.anchor.kind === 'cell') {
                           setActiveThreadKey(item.key)
-                          onSelectTarget({
-                            cellId: entry.anchor.cell_id,
-                            ...(entry.anchor.surface === 'source' &&
-                            entry.anchor.range
-                              ? { surface: 'source' as const }
-                              : {}),
-                          })
+                          onSelectTarget(navigationTargetForLocation(entry)!)
                         }
                       }}
                     />
@@ -1000,22 +994,43 @@ function isSourceRangeThread(thread: CellCommentThread): boolean {
   )
 }
 
+/** Older V2 selections originated in rendered Markdown. Only an explicit UI
+ * origin opens Monaco; the anchor's source surface describes storage coordinates.
+ */
+function navigationTargetForLocation(
+  entry: LocatedAnchor
+): CommentNavigationTarget | null {
+  if (entry.anchor.kind !== 'cell') return null
+  const cellId = entry.anchor.cell_id
+  if (entry.anchor.selection_surface === 'source')
+    return { cellId, surface: 'source' }
+  return {
+    cellId,
+    ...('start' in entry.location
+      ? {
+          sourceRange: { start: entry.location.start, end: entry.location.end },
+        }
+      : {}),
+  }
+}
+
 function navigationTargetForItem(
   item: CommentsPanelItem
 ): CommentNavigationTarget | null {
   if (!item.cellId || item.orphaned) {
     return null
   }
-  if (
-    item.draftTarget?.type === 'cell-source' ||
-    item.threads.some(isSourceRangeThread)
-  ) {
+  if (item.draftTarget?.type === 'cell-source') {
     return { cellId: item.cellId, surface: 'source' }
   }
   if (item.draftTarget?.type === 'cell-text') {
     const { start, end } = item.draftTarget.selectors[0]
     return { cellId: item.cellId, range: { start, end } }
   }
+  const located = item.threads.flatMap((thread) => thread.locations ?? [])
+  const primary =
+    located.find((entry) => isLocated(entry.location)) ?? located[0]
+  if (primary) return navigationTargetForLocation(primary)
   const rangeThread = item.threads.find(
     (thread) =>
       thread.anchor?.type === 'cell-text' &&

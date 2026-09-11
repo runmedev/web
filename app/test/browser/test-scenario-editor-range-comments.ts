@@ -255,6 +255,7 @@ try {
       `${content}: immutable Unicode source range`,
       anchor?.kind === 'cell' &&
         anchor.surface === 'source' &&
+        anchor.selection_surface === 'source' &&
         anchor.range?.unit === 'unicode-code-point' &&
         anchor.range.start_index === start &&
         anchor.range.end_index === Array.from(sources[index]).length &&
@@ -272,7 +273,9 @@ try {
     .locator('#markdown-rendered-editor-range-1')
     .first()
     .waitFor({ state: 'visible' })
-  await inputPage.locator(`#editor-comment-${current.id}`).click()
+  await inputPage
+    .getByText('Current Markdown selection comment', { exact: true })
+    .click()
   await inputPage.locator(markdownInput).first().waitFor({ state: 'visible' })
   await inputPage
     .locator('#markdown-action-editor-range-1 .runme-source-comment-underline')
@@ -298,6 +301,57 @@ try {
   browser(
     'screenshot',
     join(output, 'scenario-editor-range-comments-reloaded.png')
+  )
+  // Preserve rendered-origin navigation too: source coordinates alone do not
+  // identify which view the reader used when creating a comment.
+  await inputPage.locator(markdownInput).focus()
+  await inputPage.keyboard.press('Escape')
+  const rendered = inputPage.locator('#markdown-rendered-editor-range-1')
+  await rendered.waitFor({ state: 'visible' })
+  const heading = rendered.locator('h1')
+  const box = await heading.evaluate((element) => {
+    const range = document.createRange()
+    range.selectNodeContents(element)
+    const rect = range.getBoundingClientRect()
+    return { x: rect.x, y: rect.y + rect.height / 2, width: rect.width }
+  })
+  await inputPage.mouse.move(box.x + 1, box.y)
+  await inputPage.mouse.down()
+  await inputPage.mouse.move(box.x + box.width - 1, box.y, { steps: 12 })
+  await inputPage.mouse.up()
+  await heading.click({ button: 'right' })
+  await inputPage
+    .getByRole('button', { name: 'Comment on selected text', exact: true })
+    .click()
+  await submit('Rendered heading selection comment')
+  await inputPage.reload()
+  await inputPage
+    .getByText('Rendered heading selection comment', { exact: true })
+    .waitFor({ state: 'visible' })
+  await rendered.dblclick()
+  await inputPage.locator(markdownInput).first().waitFor({ state: 'visible' })
+  await inputPage
+    .getByText('Rendered heading selection comment', { exact: true })
+    .click()
+  await rendered.waitFor({ state: 'visible' })
+  check(
+    'Saved rendered selection returns to rendered Markdown from its editor',
+    true
+  )
+  check(
+    'Rendered navigation highlights the selected projected text',
+    await evaluate(`
+    const root = document.querySelector('#markdown-rendered-editor-range-1');
+    const active = [...(CSS.highlights?.get('runme-comment-range-active') ?? [])];
+    const fallback = [...root.querySelectorAll('[data-runme-comment-highlight=active]')];
+    return [...active.map(range => range.toString()), ...fallback.map(el => el.textContent)]
+      .includes('Changed after opening comment draft') &&
+      !document.querySelector('#markdown-action-editor-range-1 .monaco-editor');
+  `)
+  )
+  browser(
+    'screenshot',
+    join(output, 'scenario-editor-range-comments-rendered.png')
   )
 } catch (error) {
   failed++

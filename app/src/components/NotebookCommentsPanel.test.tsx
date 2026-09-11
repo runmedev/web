@@ -106,6 +106,7 @@ describe('NotebookCommentsPanel', () => {
           kind: 'cell',
           cell_id: 'cell-1',
           surface: 'source',
+          selection_surface: 'source',
           version: { kind: 'operation', op_id: 'old:1' },
           range: {
             start_index: index === 0 ? 0 : 6,
@@ -158,6 +159,56 @@ describe('NotebookCommentsPanel', () => {
       surface: 'source',
     })
   })
+
+  it.each([undefined, 'rendered-markdown'])(
+    'keeps saved rendered selections on their rendered surface (%s)',
+    (selectionSurface) => {
+      const source = '# Before **selected** after'
+      const anchor = {
+        kind: 'cell',
+        cell_id: 'cell-1',
+        surface: 'source',
+        selection_surface: selectionSurface,
+        version: { kind: 'revision', revision_id: 'revision-1' },
+        range: { start_index: 11, end_index: 19, unit: 'unicode-code-point' },
+      }
+      const threads = toCellCommentThreads(
+        [
+          {
+            id: 'rendered-range',
+            content: 'Rendered selection',
+            anchor: JSON.stringify({
+              runme: {
+                version: 1,
+                type: 'cell',
+                cellId: 'cell-1',
+                diffTarget: {
+                  cellId: 'cell-1',
+                  side: 'head',
+                  quote: 'selected',
+                  sourceRange: { start: 11, end: 19, unit: 'utf-16' },
+                },
+                anchorSources: [{ anchor, source }],
+              },
+            }),
+          },
+        ],
+        [{ refId: 'cell-1', value: source }]
+      )
+      const onSelectTarget = vi.fn()
+      renderPanel({
+        threads,
+        onSelectTarget,
+        cellLabels: new Map([['cell-1', 'Cell 1']]),
+      })
+      const card = screen.getByText('Rendered selection').closest('article')!
+      const expected = { cellId: 'cell-1', sourceRange: { start: 11, end: 19 } }
+      fireEvent.click(card)
+      expect(onSelectTarget).toHaveBeenLastCalledWith(expected)
+      fireEvent.click(within(card).getByRole('button', { name: /Located/ }))
+      expect(onSelectTarget).toHaveBeenLastCalledWith(expected)
+    }
+  )
 
   it('describes where comments are stored for each notebook format', () => {
     const view = renderPanel({ storage: 'runme-operation-log' })

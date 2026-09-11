@@ -72,6 +72,8 @@ export type CommentNavigationTarget = {
   /** Source anchors open Monaco; range below remains a rendered-text range. */
   surface?: 'source'
   range?: TextRange
+  /** Located source code points to project into the rendered view at navigation. */
+  sourceRange?: TextRange
 }
 
 export type CommentCellIdentity = {

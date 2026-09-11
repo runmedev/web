@@ -2538,7 +2538,16 @@ function NotebookTabContent({
         target.cellId,
         target.surface === 'source' ? 'editor' : undefined
       )
-      const range = target.range
+      const source =
+        commentCellIdentities.find((cell) => cell.refId === target.cellId)
+          ?.value ?? ''
+      const range = target.sourceRange
+        ? projectSourceCommentRange(
+            source,
+            target.sourceRange.start,
+            target.sourceRange.end
+          )[0]
+        : target.range
       setActiveCommentRange(range ? { cellId: target.cellId, ...range } : null)
 
       const scrollCellIntoView = () => {
@@ -2587,7 +2596,7 @@ function NotebookTabContent({
         scrollCellIntoView()
       }
     },
-    [findCellElement, focusCommentCell]
+    [findCellElement, focusCommentCell, commentCellIdentities]
   )
 
   useEffect(() => {
@@ -3231,6 +3240,8 @@ function NotebookTabContent({
             cellId: target.cellId,
             source,
             ranges,
+            selectionSurface:
+              target.type === 'cell-source' ? 'source' : 'rendered-markdown',
           })
         })()
         draftAnchors.current.set(

@@ -965,6 +965,13 @@ describe('Actions tabs', () => {
       )
       const [comment] = await store.listOperationLogComments(uri)
       const view = JSON.parse(comment.anchor!).runme
+      expect(
+        view.anchors.every(
+          (anchor: any) =>
+            anchor.selection_surface ===
+            (surface === 'rendered' ? 'rendered-markdown' : 'source')
+        )
+      ).toBe(true)
       if (surface === 'rendered') {
         expect(view.anchors.map((a: any) => a.range)).toEqual([
           { start_index: 7, end_index: 11, unit: 'unicode-code-point' },

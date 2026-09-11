@@ -29,6 +29,12 @@ history.
   from that revision, not from a captured quote or a checksum of current text.
 - Preserve source draft whitespace so newlines and indentation remain visible.
   Verify browser geometry and computed whitespace, not only `textContent`.
+- Store the optional `selection_surface` with typed anchors to preserve the UI
+  origin across reloads. `surface: source` always describes storage coordinates;
+  it must not be used to infer editor versus rendered navigation. Older V2
+  comments lack this hint and keep rendered navigation. Project mapped source
+  ranges into the current rendered text for scrolling; never use source offsets
+  directly as rendered offsets.
 - Persisted source ranges navigate to Monaco and activate only their own thread.
   A compatibility anchor shaped like a whole-cell comment still contains a typed
   source range; inspect those historical locations when grouping/activating cards.

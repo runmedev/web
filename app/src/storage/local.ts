@@ -1929,6 +1929,7 @@ export class LocalNotebooks extends Dexie {
       cellId: string
       source: string
       ranges?: { start: number; end: number }[]
+      selectionSurface?: 'source' | 'rendered-markdown'
     }
   ): Promise<Anchor[]> {
     const { parsed } = await this.readMaterializedOperationLog(uri)
@@ -1954,6 +1955,9 @@ export class LocalNotebooks extends Dexie {
       version,
       surface: 'source',
       ...(range ? { range } : {}),
+      ...(range && input.selectionSurface
+        ? { selection_surface: input.selectionSurface }
+        : {}),
     }))
     const updated = (await this.readMaterializedOperationLog(uri)).parsed
       .operations
