@@ -69,6 +69,8 @@ export type CommentDraftTarget =
 
 export type CommentNavigationTarget = {
   cellId: string
+  /** Source anchors open Monaco; range below remains a rendered-text range. */
+  surface?: 'source'
   range?: TextRange
 }
 

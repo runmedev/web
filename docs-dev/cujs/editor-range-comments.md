@@ -29,6 +29,9 @@ history.
   from that revision, not from a captured quote or a checksum of current text.
 - Preserve source draft whitespace so newlines and indentation remain visible.
   Verify browser geometry and computed whitespace, not only `textContent`.
+- Persisted source ranges navigate to Monaco and activate only their own thread.
+  A compatibility anchor shaped like a whole-cell comment still contains a typed
+  source range; inspect those historical locations when grouping/activating cards.
 - Source drafts retain the `editor` focus role even in a Markdown wrapper.
   Switching tabs or restoring window focus must return to source editing.
 - Register/dispose the Monaco action with its current callback and comment

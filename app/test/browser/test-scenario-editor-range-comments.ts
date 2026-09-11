@@ -217,6 +217,24 @@ try {
     join(output, 'scenario-editor-range-comments-saved.png')
   )
 
+  // Add another range on the same Markdown cell, this time on current source.
+  // The old range remains outdated; selecting either card must not activate both.
+  browser('focus', markdownInput)
+  for (const key of [
+    'ControlOrMeta+a',
+    'ArrowLeft',
+    'ArrowRight',
+    'ArrowRight',
+    'Shift+End',
+    'ControlOrMeta+Alt+m',
+  ])
+    await inputPage.keyboard.press(key)
+  browser(
+    'wait',
+    '[aria-label="Notebook comments"] textarea:not([placeholder])'
+  )
+  submit('Current Markdown selection comment')
+
   browser('reload')
   browser('wait', codeInput)
   browser(
@@ -227,13 +245,13 @@ try {
   const persisted = evaluate(`
     const db = window.app.localNotebooks;
     const comments = await db.listOperationLogComments(${JSON.stringify(fixture.uri)});
-    return comments.map(comment => ({content:comment.content,view:JSON.parse(comment.anchor).runme}));
+    return comments.map(comment => ({id:comment.id,content:comment.content,view:JSON.parse(comment.anchor).runme}));
   `)
   writeFileSync(
     join(output, 'scenario-editor-range-comments-anchors.json'),
     JSON.stringify(persisted, null, 2)
   )
-  check('Both comments survive reload', persisted.length === 2)
+  check('All three source comments survive reload', persisted.length === 3)
   for (const [index, content] of [
     'Code selection comment',
     'Markdown selection comment',
@@ -251,6 +269,31 @@ try {
         view.anchorSources[0].source === sources[index]
     )
   }
+  const current = persisted.find(
+    (entry: any) => entry.content === 'Current Markdown selection comment'
+  )
+  // Explicitly render the already-active Markdown cell before navigating back
+  // through the persisted comment card, as a reader does after reopening.
+  browser('focus', markdownInput)
+  await inputPage.keyboard.press('Escape')
+  browser('wait', '#markdown-rendered-editor-range-1')
+  browser('click', `#editor-comment-${current.id}`)
+  browser('wait', markdownInput)
+  browser(
+    'wait',
+    '#markdown-action-editor-range-1 .runme-source-comment-underline'
+  )
+  check(
+    'Saved Markdown range navigation opens its decorated source editor',
+    true
+  )
+  check(
+    'Only the selected saved range is active',
+    evaluate(`
+    const active = [...document.querySelectorAll('[aria-label="Notebook comments"] article[aria-current="true"]')];
+    return active.length === 1 && active[0].id === ${JSON.stringify('editor-comment-' + current.id)};
+  `)
+  )
   check(
     'Later Markdown edit does not retarget the comment',
     evaluate(

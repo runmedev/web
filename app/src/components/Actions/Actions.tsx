@@ -2534,7 +2534,10 @@ function NotebookTabContent({
 
   const selectCommentTarget = useCallback(
     (target: CommentNavigationTarget) => {
-      focusCommentCell(target.cellId)
+      focusCommentCell(
+        target.cellId,
+        target.surface === 'source' ? 'editor' : undefined
+      )
       const range = target.range
       setActiveCommentRange(range ? { cellId: target.cellId, ...range } : null)
 

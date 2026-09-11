@@ -138,6 +138,30 @@ describe("MarkdownCell", () => {
     expect(screen.queryByTestId("markdown-rendered")).toBeNull();
   });
 
+  it("opens source when comment navigation changes the role of an already active cell", () => {
+    const cell = create(parser_pb.CellSchema, {
+      refId: "md-comment-navigation",
+      kind: parser_pb.CellKind.MARKUP,
+      languageId: "markdown",
+      value: "first second",
+    });
+    const stub = new StubCellData(cell);
+    const props = {
+      cellData: stub as unknown as CellData,
+      selectedLanguage: "markdown",
+      languageSelectId: "lang-comment-navigation",
+      languageOptions: [{ label: "Markdown", value: "markdown" }],
+      onLanguageChange: () => {},
+      isActiveCell: true,
+      isWindowFocused: true,
+    };
+    const view = render(<MarkdownCell {...props} activeFocusRole="rendered" />);
+    expect(screen.getByTestId("markdown-rendered")).toBeTruthy();
+    view.rerender(<MarkdownCell {...props} activeFocusRole="editor" />);
+    expect(screen.getByTestId("markdown-editor")).toBeTruthy();
+    expect(screen.queryByTestId("markdown-rendered")).toBeNull();
+  });
+
   it("focuses the editor when the window regains focus", async () => {
     const cell = create(parser_pb.CellSchema, {
       refId: "md-focus-editor",

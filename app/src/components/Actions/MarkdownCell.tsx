@@ -280,6 +280,7 @@ const MarkdownCell = memo(
     const projectionRef = useRef<RenderedMarkdownProjection | null>(null)
     const commentHighlightOwnerRef = useRef<object>({})
     const previousShouldOwnFocusRef = useRef(false)
+    const previousFocusRoleRef = useRef(activeFocusRole)
     const [editorFocusIntent, setEditorFocusIntent] = useState(false)
     const [renderedFocusIntent, setRenderedFocusIntent] = useState(false)
 
@@ -334,7 +335,14 @@ const MarkdownCell = memo(
     useEffect(() => {
       const previouslyOwnedFocus = previousShouldOwnFocusRef.current
       previousShouldOwnFocusRef.current = shouldOwnFocus
-      if (!shouldOwnFocus || previouslyOwnedFocus) {
+      const previousRole = previousFocusRoleRef.current
+      previousFocusRoleRef.current = activeFocusRole
+      // Selecting a saved source comment changes the focus role even if this
+      // cell already owns focus. Honor that explicit navigation request.
+      if (
+        !shouldOwnFocus ||
+        (previouslyOwnedFocus && previousRole === activeFocusRole)
+      ) {
         return
       }
       if (

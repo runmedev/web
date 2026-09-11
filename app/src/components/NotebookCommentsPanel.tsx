@@ -347,7 +347,9 @@ export function NotebookCommentsPanel({
                 item.draftTarget?.type === 'cell-text' ||
                   item.draftTarget?.type === 'cell-source' ||
                   item.threads.some(
-                    (thread) => thread.anchor?.type === 'cell-text'
+                    (thread) =>
+                      thread.anchor?.type === 'cell-text' ||
+                      isSourceRangeThread(thread)
                   )
               )
               const isActiveThread =
@@ -415,8 +417,16 @@ export function NotebookCommentsPanel({
                       key={thread.comment.id}
                       locations={thread.locations ?? []}
                       onSelect={(entry) => {
-                        if (entry.anchor.kind === 'cell')
-                          onSelectTarget({ cellId: entry.anchor.cell_id })
+                        if (entry.anchor.kind === 'cell') {
+                          setActiveThreadKey(item.key)
+                          onSelectTarget({
+                            cellId: entry.anchor.cell_id,
+                            ...(entry.anchor.surface === 'source' &&
+                            entry.anchor.range
+                              ? { surface: 'source' as const }
+                              : {}),
+                          })
+                        }
                       }}
                     />
                   ))}
@@ -977,11 +987,30 @@ function getThreadKey(thread: CellCommentThread): string {
   )
 }
 
+/** V2 comments retain a cell-shaped compatibility anchor around typed ranges. */
+function isSourceRangeThread(thread: CellCommentThread): boolean {
+  return Boolean(
+    thread.anchor?.diffTarget?.sourceRange ||
+      thread.locations?.some(
+        (entry) =>
+          entry.anchor.kind === 'cell' &&
+          entry.anchor.surface === 'source' &&
+          entry.anchor.range
+      )
+  )
+}
+
 function navigationTargetForItem(
   item: CommentsPanelItem
 ): CommentNavigationTarget | null {
   if (!item.cellId || item.orphaned) {
     return null
+  }
+  if (
+    item.draftTarget?.type === 'cell-source' ||
+    item.threads.some(isSourceRangeThread)
+  ) {
+    return { cellId: item.cellId, surface: 'source' }
   }
   if (item.draftTarget?.type === 'cell-text') {
     const { start, end } = item.draftTarget.selectors[0]
