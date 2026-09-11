@@ -40,6 +40,14 @@ function check(message: string, valid: boolean) {
 }
 /** Reopen the same settings panel after a complete page reload. */
 async function showSettings() {
+  // Startup awaits deployment config before mounting React. Wait for the
+  // toolbar before deciding whether the persisted panel is already open.
+  await page!
+    .getByRole('button', {
+      name: 'Toggle Authentication Settings panel',
+      exact: true,
+    })
+    .waitFor({ state: 'visible' })
   const heading = page!.getByRole('heading', {
     name: 'Authentication Settings',
     exact: true,
