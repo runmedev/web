@@ -174,6 +174,27 @@ const commentsPanelMocks = vi.hoisted(() => ({
 }))
 
 // Minimal mocks for contexts Action consumes
+// Exercise the parent comment flow independently of Monaco's browser runtime.
+// Editor.test.tsx covers the actual Monaco action and UTF-16 selection capture.
+vi.mock('./Editor', () => ({
+  default: ({ value, onCommentSelection }: any) => (
+    <div>
+      {onCommentSelection && (
+        <button
+          onClick={() =>
+            onCommentSelection({
+              source: value,
+              range: { start: 1, end: value.length },
+            })
+          }
+        >
+          Mock editor selection comment
+        </button>
+      )}
+    </div>
+  ),
+}))
+
 vi.mock('../../contexts/OutputContext', () => ({
   useOutput: () => ({
     getRenderer: () => undefined,
@@ -757,231 +778,292 @@ describe('Actions tabs', () => {
     expect(screen.getByText(/Historical source/)).toBeTruthy()
   })
 
-  it('submits a rendered selection through real operation-log persistence after a pending flush and later edit', async () => {
-    const actor = vi
-      .spyOn(actorIdentity, 'getNotebookActorId')
-      .mockResolvedValue('ui-selection-actor')
-    const records = new Map<string, any>()
-    const table = () => ({
-      get: async (id: string) => records.get(id),
-      put: async (record: any) => {
-        records.set(record.id, record)
-        return record.id
-      },
-      update: async (id: string, changes: any) => {
-        records.set(id, { ...records.get(id), ...changes })
-        return 1
-      },
-      filter: (predicate: (record: any) => boolean) => ({
-        toArray: async () => [...records.values()].filter(predicate),
-      }),
-      toArray: async () => [...records.values()],
-    })
-    const store = Object.create(LocalNotebooks.prototype) as LocalNotebooks &
-      any
-    store.files = table()
-    store.folders = table()
-    store.driveStore = {}
-    store.driveSyncCoordinator = {
-      runExclusive: async (_key: string, operation: () => Promise<unknown>) =>
-        operation(),
-    }
-    store.filesystemStore = null
-    store.inFlightSyncs = new Map()
-    store.syncListeners = new Map()
-    store.syncSubjects = new Map()
-    store.markdownSyncSubjects = new Map()
-    store.ipynbSyncSubjects = new Map()
-    store.conflictDocStorage = new MemoryConflictDocStorage()
-    store.revisionDocStorage = new MemoryRevisionDocStorage()
-    store.ipynbShadowStorage = new MemoryIpynbShadowStorage()
-    store.operationLogStorage = new MemoryOperationLogStorage()
-    store.transaction = async (
-      _mode: unknown,
-      _table: unknown,
-      operation: () => Promise<unknown>
-    ) => operation()
-    store.getSyncState = vi.fn(async () => null)
-    store.getMetadata = vi.fn(async () => ({}))
-    store.subscribeSync = vi.fn(() => () => undefined)
-    await store.folders.put({
-      id: LOCAL_FOLDER_URI,
-      name: 'Local',
-      remoteId: '',
-      children: [],
-      lastSynced: '',
-    })
-    const { uri } = await store.create(LOCAL_FOLDER_URI, 'ui-selection.runme')
-    const save = await store.createOperationLogSaveStore(uri)
-    const source = 'Read **the [migration guide](https://example.com)** today.'
-    const cell = create(parser_pb.CellSchema, {
-      refId: 'selected',
-      kind: parser_pb.CellKind.MARKUP,
-      languageId: 'markdown',
-      value: source,
-    })
-    const notebook = create(parser_pb.NotebookSchema, { cells: [cell] })
-    const cellData = new StubCellData(cell)
-    const flush = vi.fn(async () => save.save(uri, notebook))
-    contextMocks.currentDoc = uri
-    contextMocks.openNotebooks = [
-      {
-        uri,
-        requestedUri: uri,
-        name: 'ui-selection.runme',
-        state: 'loaded',
-        operationLog: true,
-      },
-    ]
-    contextMocks.workspaceDocuments = [
-      { uri, title: 'ui-selection.runme', state: 'loaded' },
-    ]
-    contextMocks.notebookSnapshots.set(uri, { uri, loaded: true, notebook })
-    contextMocks.getNotebookData.mockReturnValue({
-      getCell: () => cellData,
-      getNotebook: () => notebook,
-      appendCell: vi.fn(),
-      flushPendingPersist: flush,
-      getObservedOperationHeads: () => save.getObservedOperationHeads(),
-    })
-    contextMocks.notebookStore = store
-    commentsPanelMocks.commentsPanelOpen = true
-    render(<Actions />)
-    await screen.findByTestId('markdown-rendered')
-    const start = screen.getByText('the')
-    const end = screen.getByText('migration guide')
-    const range = document.createRange()
-    range.setStart(start.firstChild!, 0)
-    range.setEnd(end.firstChild!, 'migration guide'.length)
-    Object.defineProperty(range, 'getBoundingClientRect', {
-      value: () => ({
-        top: 10,
-        bottom: 20,
-        left: 10,
-        right: 90,
-        width: 80,
-        height: 10,
-        x: 10,
-        y: 10,
-        toJSON: () => ({}),
-      }),
-    })
-    const selection = window.getSelection()!
-    selection.removeAllRanges()
-    selection.addRange(range)
-    fireEvent.contextMenu(screen.getByTestId('markdown-rendered'), {
-      clientX: 40,
-      clientY: 20,
-    })
-    fireEvent.click(
-      screen.getByRole('button', { name: 'Comment on selected text' })
-    )
-    await waitFor(() => expect(flush).toHaveBeenCalledOnce())
-    await waitFor(async () =>
+  it.each(['rendered', 'code', 'markdown-source'])(
+    'submits a %s selection through real operation-log persistence after a pending flush and later edit',
+    async (surface) => {
+      const actor = vi
+        .spyOn(actorIdentity, 'getNotebookActorId')
+        .mockResolvedValue('ui-selection-actor')
+      const records = new Map<string, any>()
+      const table = () => ({
+        get: async (id: string) => records.get(id),
+        put: async (record: any) => {
+          records.set(record.id, record)
+          return record.id
+        },
+        update: async (id: string, changes: any) => {
+          records.set(id, { ...records.get(id), ...changes })
+          return 1
+        },
+        filter: (predicate: (record: any) => boolean) => ({
+          toArray: async () => [...records.values()].filter(predicate),
+        }),
+        toArray: async () => [...records.values()],
+      })
+      const store = Object.create(LocalNotebooks.prototype) as LocalNotebooks &
+        any
+      store.files = table()
+      store.folders = table()
+      store.driveStore = {}
+      store.driveSyncCoordinator = {
+        runExclusive: async (_key: string, operation: () => Promise<unknown>) =>
+          operation(),
+      }
+      store.filesystemStore = null
+      store.inFlightSyncs = new Map()
+      store.syncListeners = new Map()
+      store.syncSubjects = new Map()
+      store.markdownSyncSubjects = new Map()
+      store.ipynbSyncSubjects = new Map()
+      store.conflictDocStorage = new MemoryConflictDocStorage()
+      store.revisionDocStorage = new MemoryRevisionDocStorage()
+      store.ipynbShadowStorage = new MemoryIpynbShadowStorage()
+      store.operationLogStorage = new MemoryOperationLogStorage()
+      store.transaction = async (
+        _mode: unknown,
+        _table: unknown,
+        operation: () => Promise<unknown>
+      ) => operation()
+      store.getSyncState = vi.fn(async () => null)
+      store.getMetadata = vi.fn(async () => ({}))
+      store.subscribeSync = vi.fn(() => () => undefined)
+      await store.folders.put({
+        id: LOCAL_FOLDER_URI,
+        name: 'Local',
+        remoteId: '',
+        children: [],
+        lastSynced: '',
+      })
+      const { uri } = await store.create(LOCAL_FOLDER_URI, 'ui-selection.runme')
+      const save = await store.createOperationLogSaveStore(uri)
+      const source =
+        surface === 'rendered'
+          ? 'Read **the [migration guide](https://example.com)** today.'
+          : 'a😀 **first**\nsecond'
+      const cell = create(parser_pb.CellSchema, {
+        refId: 'selected',
+        kind:
+          surface === 'code'
+            ? parser_pb.CellKind.CODE
+            : parser_pb.CellKind.MARKUP,
+        languageId: surface === 'code' ? 'python' : 'markdown',
+        value: source,
+      })
+      const notebook = create(parser_pb.NotebookSchema, { cells: [cell] })
+      const cellData = new StubCellData(cell)
+      const flush = vi.fn(async () => save.save(uri, notebook))
+      contextMocks.currentDoc = uri
+      contextMocks.openNotebooks = [
+        {
+          uri,
+          requestedUri: uri,
+          name: 'ui-selection.runme',
+          state: 'loaded',
+          operationLog: true,
+        },
+      ]
+      contextMocks.workspaceDocuments = [
+        { uri, title: 'ui-selection.runme', state: 'loaded' },
+      ]
+      contextMocks.notebookSnapshots.set(uri, { uri, loaded: true, notebook })
+      contextMocks.getNotebookData.mockReturnValue({
+        getCell: () => cellData,
+        getNotebook: () => notebook,
+        appendCell: vi.fn(),
+        flushPendingPersist: flush,
+        getObservedOperationHeads: () => save.getObservedOperationHeads(),
+      })
+      contextMocks.notebookStore = store
+      commentsPanelMocks.commentsPanelOpen = true
+      render(<Actions />)
+      const selection = window.getSelection()!
+      if (surface === 'rendered') {
+        await screen.findByTestId('markdown-rendered')
+        const start = screen.getByText('the')
+        const end = screen.getByText('migration guide')
+        const range = document.createRange()
+        range.setStart(start.firstChild!, 0)
+        range.setEnd(end.firstChild!, 'migration guide'.length)
+        Object.defineProperty(range, 'getBoundingClientRect', {
+          value: () => ({
+            top: 10,
+            bottom: 20,
+            left: 10,
+            right: 90,
+            width: 80,
+            height: 10,
+            x: 10,
+            y: 10,
+            toJSON: () => ({}),
+          }),
+        })
+        selection.removeAllRanges()
+        selection.addRange(range)
+        fireEvent.contextMenu(screen.getByTestId('markdown-rendered'), {
+          clientX: 40,
+          clientY: 20,
+        })
+        fireEvent.click(
+          screen.getByRole('button', { name: 'Comment on selected text' })
+        )
+      } else {
+        if (surface === 'markdown-source')
+          fireEvent.doubleClick(await screen.findByTestId('markdown-rendered'))
+        fireEvent.click(
+          await screen.findByRole('button', {
+            name: 'Mock editor selection comment',
+          })
+        )
+        expect(document.querySelector('blockquote')?.textContent).toBe(
+          source.slice(1)
+        )
+        expect(
+          JSON.parse(localStorage.getItem('runme/notebook-active-cells')!)[uri]
+            .focusRole
+        ).toBe('editor')
+        if (surface === 'markdown-source') {
+          const focused = vi.spyOn(document, 'hasFocus').mockReturnValue(false)
+          fireEvent.blur(window)
+          focused.mockReturnValue(true)
+          fireEvent.focus(window)
+          expect(screen.queryByTestId('markdown-rendered')).toBeNull()
+          expect(
+            screen.getByRole('button', {
+              name: 'Mock editor selection comment',
+            })
+          ).toBeTruthy()
+          focused.mockRestore()
+        }
+      }
+      await waitFor(() => expect(flush).toHaveBeenCalledOnce())
+      await waitFor(async () =>
+        expect(
+          parseOperationLog(await store.loadContent(uri)).operations.some(
+            (op) => op.kind === 'revision.checkpoint'
+          )
+        ).toBe(true)
+      )
+      const other = await store.createOperationLogSaveStore(uri)
+      const changed = create(parser_pb.NotebookSchema, {
+        cells: [
+          create(parser_pb.CellSchema, {
+            refId: 'selected',
+            kind: parser_pb.CellKind.MARKUP,
+            value: 'Changed by sync',
+          }),
+        ],
+      })
+      await other.save(uri, changed)
+      const draft = await screen.findByText('New comment on Cell 1')
+      const article = draft.closest('article') as HTMLElement
+      fireEvent.change(within(article).getByRole('textbox'), {
+        target: { value: 'Clarify this selection' },
+      })
+      fireEvent.click(within(article).getByRole('button', { name: 'Comment' }))
+      await waitFor(async () =>
+        expect((await store.listOperationLogComments(uri)).length).toBe(1)
+      )
+      const [comment] = await store.listOperationLogComments(uri)
+      const view = JSON.parse(comment.anchor!).runme
       expect(
-        parseOperationLog(await store.loadContent(uri)).operations.some(
-          (op) => op.kind === 'revision.checkpoint'
+        view.anchors.every(
+          (anchor: any) =>
+            anchor.selection_surface ===
+            (surface === 'rendered' ? 'rendered-markdown' : 'source')
         )
       ).toBe(true)
-    )
-    const other = await store.createOperationLogSaveStore(uri)
-    const changed = create(parser_pb.NotebookSchema, {
-      cells: [
-        create(parser_pb.CellSchema, {
-          refId: 'selected',
-          kind: parser_pb.CellKind.MARKUP,
-          value: 'Changed by sync',
-        }),
-      ],
-    })
-    await other.save(uri, changed)
-    const draft = await screen.findByText('New comment on Cell 1')
-    const article = draft.closest('article') as HTMLElement
-    fireEvent.change(within(article).getByRole('textbox'), {
-      target: { value: 'Clarify this selection' },
-    })
-    fireEvent.click(within(article).getByRole('button', { name: 'Comment' }))
-    await waitFor(async () =>
-      expect((await store.listOperationLogComments(uri)).length).toBe(1)
-    )
-    const [comment] = await store.listOperationLogComments(uri)
-    const view = JSON.parse(comment.anchor!).runme
-    expect(view.anchors.map((a: any) => a.range)).toEqual([
-      { start_index: 7, end_index: 11, unit: 'unicode-code-point' },
-      { start_index: 12, end_index: 27, unit: 'unicode-code-point' },
-    ])
-    expect(view.anchorSources.map((a: any) => a.source)).toEqual([
-      source,
-      source,
-    ])
-    expect(
-      await screen.findByText('Commented revision: the migration guide')
-    ).toBeTruthy()
-    expect((await store.load(uri)).cells[0].value).toBe('Changed by sync')
-    expect(
-      ancestorClosure(
-        parseOperationLog(await store.loadContent(uri)).operations,
-        [view.anchors[0].version.revision_id]
-      ).some((op) => (op.payload as any).cell?.value === 'Changed by sync')
-    ).toBe(false)
-    expect(toastMocks.showToast).not.toHaveBeenCalledWith(
-      expect.objectContaining({ tone: 'error' })
-    )
-    selection.removeAllRanges()
-    // A failed bind must leave the user's typed draft available for retry.
-    vi.spyOn(store, 'bindOperationLogCommentAnchors').mockRejectedValueOnce(
-      new Error('Snapshot unavailable')
-    )
-    const retryRange = document.createRange()
-    const rendered = screen.getByTestId('markdown-rendered')
-    retryRange.setStart(within(rendered).getByText('the').firstChild!, 0)
-    retryRange.setEnd(
-      within(rendered).getByText('migration guide').firstChild!,
-      15
-    )
-    Object.defineProperty(retryRange, 'getBoundingClientRect', {
-      value: () => ({
-        top: 10,
-        bottom: 20,
-        left: 10,
-        right: 90,
-        width: 80,
-        height: 10,
-        x: 10,
-        y: 10,
-        toJSON: () => ({}),
-      }),
-    })
-    selection.addRange(retryRange)
-    fireEvent.contextMenu(screen.getByTestId('markdown-rendered'), {
-      clientX: 40,
-      clientY: 20,
-    })
-    fireEvent.click(
-      screen.getByRole('button', { name: 'Comment on selected text' })
-    )
-    const retryDraft = await screen.findByText('New comment on Cell 1')
-    const retryArticle = retryDraft.closest('article') as HTMLElement
-    const retryText = within(retryArticle).getByRole(
-      'textbox'
-    ) as HTMLTextAreaElement
-    fireEvent.change(retryText, { target: { value: 'Please keep this draft' } })
-    fireEvent.click(
-      within(retryArticle).getByRole('button', { name: 'Comment' })
-    )
-    await waitFor(() =>
-      expect(toastMocks.showToast).toHaveBeenCalledWith(
-        expect.objectContaining({
-          tone: 'error',
-          message: expect.stringContaining('Snapshot unavailable'),
+      if (surface === 'rendered') {
+        expect(view.anchors.map((a: any) => a.range)).toEqual([
+          { start_index: 7, end_index: 11, unit: 'unicode-code-point' },
+          { start_index: 12, end_index: 27, unit: 'unicode-code-point' },
+        ])
+        expect(view.anchorSources.map((a: any) => a.source)).toEqual([
+          source,
+          source,
+        ])
+        expect(
+          await screen.findByText('Commented revision: the migration guide')
+        ).toBeTruthy()
+        expect((await store.load(uri)).cells[0].value).toBe('Changed by sync')
+        expect(
+          ancestorClosure(
+            parseOperationLog(await store.loadContent(uri)).operations,
+            [view.anchors[0].version.revision_id]
+          ).some((op) => (op.payload as any).cell?.value === 'Changed by sync')
+        ).toBe(false)
+        expect(toastMocks.showToast).not.toHaveBeenCalledWith(
+          expect.objectContaining({ tone: 'error' })
+        )
+        selection.removeAllRanges()
+        // A failed bind must leave the user's typed draft available for retry.
+        vi.spyOn(store, 'bindOperationLogCommentAnchors').mockRejectedValueOnce(
+          new Error('Snapshot unavailable')
+        )
+        const retryRange = document.createRange()
+        const rendered = screen.getByTestId('markdown-rendered')
+        retryRange.setStart(within(rendered).getByText('the').firstChild!, 0)
+        retryRange.setEnd(
+          within(rendered).getByText('migration guide').firstChild!,
+          15
+        )
+        Object.defineProperty(retryRange, 'getBoundingClientRect', {
+          value: () => ({
+            top: 10,
+            bottom: 20,
+            left: 10,
+            right: 90,
+            width: 80,
+            height: 10,
+            x: 10,
+            y: 10,
+            toJSON: () => ({}),
+          }),
         })
-      )
-    )
-    expect(retryText.value).toBe('Please keep this draft')
-    expect((await store.listOperationLogComments(uri)).length).toBe(1)
-    selection.removeAllRanges()
-    actor.mockRestore()
-  }, 20000)
+        selection.addRange(retryRange)
+        fireEvent.contextMenu(screen.getByTestId('markdown-rendered'), {
+          clientX: 40,
+          clientY: 20,
+        })
+        fireEvent.click(
+          screen.getByRole('button', { name: 'Comment on selected text' })
+        )
+        const retryDraft = await screen.findByText('New comment on Cell 1')
+        const retryArticle = retryDraft.closest('article') as HTMLElement
+        const retryText = within(retryArticle).getByRole(
+          'textbox'
+        ) as HTMLTextAreaElement
+        fireEvent.change(retryText, {
+          target: { value: 'Please keep this draft' },
+        })
+        fireEvent.click(
+          within(retryArticle).getByRole('button', { name: 'Comment' })
+        )
+        await waitFor(() =>
+          expect(toastMocks.showToast).toHaveBeenCalledWith(
+            expect.objectContaining({
+              tone: 'error',
+              message: expect.stringContaining('Snapshot unavailable'),
+            })
+          )
+        )
+        expect(retryText.value).toBe('Please keep this draft')
+        expect((await store.listOperationLogComments(uri)).length).toBe(1)
+        selection.removeAllRanges()
+      } else {
+        expect(view.anchors.map((a: any) => a.range)).toEqual([
+          {
+            start_index: 1,
+            end_index: Array.from(source).length,
+            unit: 'unicode-code-point',
+          },
+        ])
+        expect(view.anchorSources[0].source).toBe(source)
+        expect(view.quote).toBe(source.slice(1))
+      }
+      actor.mockRestore()
+    },
+    20000
+  )
 
   it('embeds an image selected from the button beside Add cell', async () => {
     const uri = 'local://file/images.json'

@@ -68,6 +68,31 @@ describe('historical comment display mapping', () => {
       status: 'unavailable',
     })
   })
+  it('derives the source origin for old comparison ranges without duplicating locations', () => {
+    const anchor = {
+      kind: 'cell',
+      cell_id: 'cell',
+      surface: 'source',
+      version: { kind: 'operation', op_id: 'a:1' },
+      range: { start_index: 0, end_index: 2, unit: 'unicode-code-point' },
+    }
+    const encoded = JSON.stringify({
+      runme: {
+        comparison: { start: anchor.version, end: anchor.version },
+        anchorSources: [{ anchor, source: '**syntax**' }],
+      },
+    })
+    const comment = { anchor: encoded, replies: [{ anchor: encoded }] }
+    expect(historicalAnchors(comment)).toEqual([
+      {
+        anchor: { ...anchor, selection_surface: 'source' },
+        source: '**syntax**',
+      },
+    ])
+    expect(comment.anchor).toBe(encoded)
+    expect(anchor).not.toHaveProperty('selection_surface')
+  })
+
   it('resolves all root and reply anchors independently on both sides, without mutation', () => {
     const anchor = {
       kind: 'cell',

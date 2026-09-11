@@ -79,6 +79,7 @@ function fetchWithTimeout(
 }
 
 const SCENARIO_DRIVERS = [
+  join(SCRIPT_DIR, "test-scenario-editor-range-comments.ts"),
   join(SCRIPT_DIR, "test-scenario-colab-export-recovery.ts"),
   join(SCRIPT_DIR, "test-scenario-horizontal-rendering.ts"),
   join(SCRIPT_DIR, "test-scenario-drive-revision-recovery.ts"),

@@ -112,6 +112,12 @@ export function validateAnchor(value: any): asserts value is Anchor {
     value.surface !== 'source'
   )
     throw new Error('Invalid cell anchor')
+  if (
+    value.selection_surface !== undefined &&
+    value.selection_surface !== 'source' &&
+    value.selection_surface !== 'rendered-markdown'
+  )
+    throw new Error('Invalid selection surface')
   if (value.range) {
     const r = value.range
     if (

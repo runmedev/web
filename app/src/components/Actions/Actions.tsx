@@ -691,6 +691,7 @@ export function Action({
   onFocusStateChange,
   readOnly = false,
   commentsAvailable = false,
+  sourceCommentsAvailable = false,
   commentCount = 0,
   commentRanges = [],
   commentSourceRanges = [],
@@ -708,6 +709,7 @@ export function Action({
   onFocusStateChange?: (state: NotebookActiveCellState) => void
   readOnly?: boolean
   commentsAvailable?: boolean
+  sourceCommentsAvailable?: boolean
   commentCount?: number
   commentRanges?: readonly RenderedMarkdownCommentRange[]
   commentSourceRanges?: CommentSourceRange[]
@@ -902,6 +904,19 @@ export function Action({
       setContextMenu({ x: event.clientX, y: event.clientY })
     },
     []
+  )
+
+  const handleEditorComment = useCallback(
+    (selection: { source: string; range: { start: number; end: number } }) => {
+      if (!cell?.refId || !sourceCommentsAvailable) return
+      setContextMenu(null)
+      onStartComment?.({
+        type: 'cell-source',
+        cellId: cell.refId,
+        ...selection,
+      })
+    },
+    [cell?.refId, sourceCommentsAvailable, onStartComment]
   )
 
   const handleRenderedSelectionContextMenu = useCallback(
@@ -1690,6 +1705,9 @@ export function Action({
               commentRanges={commentRanges}
               commentSourceRanges={commentSourceRanges}
               onSelectComment={onSelectComment}
+              onCommentSelection={
+                sourceCommentsAvailable ? handleEditorComment : undefined
+              }
               onRenderedSelectionContextMenu={
                 handleRenderedSelectionContextMenu
               }
@@ -1980,6 +1998,9 @@ export function Action({
             <Editor
               commentRanges={commentSourceRanges}
               onSelectComment={onSelectComment}
+              onCommentSelection={
+                sourceCommentsAvailable ? handleEditorComment : undefined
+              }
               key={`editor-${cell.refId}-${selectedLanguage}`}
               id={cell.refId}
               value={cell.value}
@@ -2496,11 +2517,13 @@ function NotebookTabContent({
   }, [])
 
   const focusCommentCell = useCallback(
-    (cellId: string) => {
+    (cellId: string, originatingRole?: CellFocusRole) => {
       const element = findCellElement(cellId)
-      const focusRole = element?.id.startsWith('markdown-action-')
-        ? 'rendered'
-        : 'editor'
+      // Source drafts originate in Monaco even inside a Markdown wrapper.
+      // Preserve that mode when notebook/window focus is restored later.
+      const focusRole =
+        originatingRole ??
+        (element?.id.startsWith('markdown-action-') ? 'rendered' : 'editor')
       const nextState = createNotebookActiveCellState(cellId, focusRole)
       if (nextState) {
         onCellFocus(docUri, nextState)
@@ -2511,8 +2534,20 @@ function NotebookTabContent({
 
   const selectCommentTarget = useCallback(
     (target: CommentNavigationTarget) => {
-      focusCommentCell(target.cellId)
-      const range = target.range
+      focusCommentCell(
+        target.cellId,
+        target.surface === 'source' ? 'editor' : undefined
+      )
+      const source =
+        commentCellIdentities.find((cell) => cell.refId === target.cellId)
+          ?.value ?? ''
+      const range = target.sourceRange
+        ? projectSourceCommentRange(
+            source,
+            target.sourceRange.start,
+            target.sourceRange.end
+          )[0]
+        : target.range
       setActiveCommentRange(range ? { cellId: target.cellId, ...range } : null)
 
       const scrollCellIntoView = () => {
@@ -2561,7 +2596,7 @@ function NotebookTabContent({
         scrollCellIntoView()
       }
     },
-    [findCellElement, focusCommentCell]
+    [findCellElement, focusCommentCell, commentCellIdentities]
   )
 
   useEffect(() => {
@@ -3138,7 +3173,7 @@ function NotebookTabContent({
     }
   }, [syncPendingComments])
 
-  // Bind the rendered selection to immutable source while its displayed model
+  // Bind the selection to immutable source while its displayed model
   // and revision are still available. Sending later does not inspect the editor.
   const draftAnchors = useRef(
     new WeakMap<
@@ -3168,11 +3203,13 @@ function NotebookTabContent({
                 target.selectors[0].start,
                 target.selectors[0].end
               )
-            : undefined
+            : target.type === 'cell-source'
+              ? [target.range]
+              : undefined
         const binding = (async () => {
           if (
             typeof source !== 'string' ||
-            (target.type === 'cell-text' && source !== target.source)
+            (target.type !== 'cell' && source !== target.source)
           )
             throw new Error(
               'The displayed selection changed. Select the text again.'
@@ -3203,6 +3240,8 @@ function NotebookTabContent({
             cellId: target.cellId,
             source,
             ranges,
+            selectionSurface:
+              target.type === 'cell-source' ? 'source' : 'rendered-markdown',
           })
         })()
         draftAnchors.current.set(
@@ -3216,7 +3255,10 @@ function NotebookTabContent({
       openCommentsPanel()
       setDraftTarget(target)
       setDraftContent('')
-      focusCommentCell(target.cellId)
+      focusCommentCell(
+        target.cellId,
+        target.type === 'cell-source' ? 'editor' : undefined
+      )
       setActiveCommentRange(
         target.type === 'cell-text'
           ? { cellId: target.cellId, ...target.selectors[0] }
@@ -3954,6 +3996,7 @@ function NotebookTabContent({
                       onFocusStateChange={(state) => onCellFocus(docUri, state)}
                       readOnly={readOnly}
                       commentsAvailable={Boolean(commentsRemoteUri)}
+                      sourceCommentsAvailable={operationLogComments}
                       commentCount={commentsByCell.get(refId)?.length ?? 0}
                       commentRanges={commentRangesByCell.get(refId) ?? []}
                       commentSourceRanges={sourceRangesByCell.get(refId) ?? []}

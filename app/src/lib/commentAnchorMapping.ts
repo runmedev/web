@@ -295,12 +295,14 @@ export function mapSourceRange(
 /** Read only transient materialization metadata; it is never a serialized quote. */
 export function historicalAnchors(comment: DriveComment): HistoricalAnchor[] {
   const result: HistoricalAnchor[] = []
+  const seen = new Set<string>()
   for (const message of [
     comment,
     ...(comment.replies ?? []).filter((r) => !r.deleted),
   ]) {
     try {
-      const sources = JSON.parse(message.anchor ?? '{}').runme?.anchorSources
+      const projection = JSON.parse(message.anchor ?? '{}').runme
+      const sources = projection?.anchorSources
       if (Array.isArray(sources))
         for (const entry of sources) {
           if (
@@ -311,11 +313,22 @@ export function historicalAnchors(comment: DriveComment): HistoricalAnchor[] {
               ? typeof entry.anchor.version.op_id === 'string'
               : entry.anchor.version?.kind === 'revision' &&
                 typeof entry.anchor.version.revision_id === 'string') &&
-            !result.some(
-              (x) => JSON.stringify(x.anchor) === JSON.stringify(entry.anchor)
+            !seen.has(JSON.stringify(entry.anchor))
+          ) {
+            seen.add(JSON.stringify(entry.anchor))
+            // Comparisons select source even in older records without a UI hint.
+            // Derive this only in the read projection; never rewrite history.
+            result.push(
+              projection.comparison &&
+                entry.anchor.range &&
+                !entry.anchor.selection_surface
+                ? {
+                    ...entry,
+                    anchor: { ...entry.anchor, selection_surface: 'source' },
+                  }
+                : entry
             )
-          )
-            result.push(entry)
+          }
         }
     } catch {
       /* Legacy anchors have no historical-source projection. */

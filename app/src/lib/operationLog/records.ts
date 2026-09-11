@@ -52,6 +52,8 @@ export type Anchor =
       cell_id: string
       version: VersionRef
       surface: 'source'
+      /** UI origin only; anchor coordinates always refer to immutable source. */
+      selection_surface?: 'source' | 'rendered-markdown'
       range?: SourceRange
     }
 

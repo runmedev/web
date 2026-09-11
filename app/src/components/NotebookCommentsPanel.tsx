@@ -1,7 +1,7 @@
 import { useEffect, useMemo, useRef, useState } from 'react'
 import { commentAttributionLabel } from '../lib/commentAttribution'
 import { CommentAnchorLocations } from './CommentAnchorLocations'
-import { isLocated } from '../lib/commentAnchorMapping'
+import { isLocated, type LocatedAnchor } from '../lib/commentAnchorMapping'
 
 import type {
   CellCommentThread,
@@ -345,8 +345,11 @@ export function NotebookCommentsPanel({
               )
               const isRangeItem = Boolean(
                 item.draftTarget?.type === 'cell-text' ||
+                  item.draftTarget?.type === 'cell-source' ||
                   item.threads.some(
-                    (thread) => thread.anchor?.type === 'cell-text'
+                    (thread) =>
+                      thread.anchor?.type === 'cell-text' ||
+                      isSourceRangeThread(thread)
                   )
               )
               const isActiveThread =
@@ -414,8 +417,10 @@ export function NotebookCommentsPanel({
                       key={thread.comment.id}
                       locations={thread.locations ?? []}
                       onSelect={(entry) => {
-                        if (entry.anchor.kind === 'cell')
-                          onSelectTarget({ cellId: entry.anchor.cell_id })
+                        if (entry.anchor.kind === 'cell') {
+                          setActiveThreadKey(item.key)
+                          onSelectTarget(navigationTargetForLocation(entry)!)
+                        }
                       }}
                     />
                   ))}
@@ -477,9 +482,20 @@ export function NotebookCommentsPanel({
                         New comment on{' '}
                         {cellLabels.get(item.draftTarget.cellId) ?? 'cell'}
                       </label>
-                      {item.draftTarget.type === 'cell-text' && (
-                        <blockquote className="mt-2 border-l-2 border-nb-accent pl-2 text-xs text-nb-text-muted">
-                          {item.draftTarget.selectors[1].exact}
+                      {item.draftTarget.type !== 'cell' && (
+                        <blockquote
+                          className={`mt-2 border-l-2 border-nb-accent pl-2 text-xs text-nb-text-muted${
+                            item.draftTarget.type === 'cell-source'
+                              ? ' whitespace-pre-wrap break-words'
+                              : ''
+                          }`}
+                        >
+                          {item.draftTarget.type === 'cell-source'
+                            ? item.draftTarget.source.slice(
+                                item.draftTarget.range.start,
+                                item.draftTarget.range.end
+                              )
+                            : item.draftTarget.selectors[1].exact}
                         </blockquote>
                       )}
                       <textarea
@@ -880,7 +896,9 @@ function sortCommentPanelItems(
   const draftKey =
     draftTarget.type === 'cell'
       ? getCellThreadKey(draftTarget.cellId)
-      : `draft:${draftTarget.cellId}:${draftTarget.selectors[0].start}:${draftTarget.selectors[0].end}`
+      : draftTarget.type === 'cell-source'
+        ? `source-draft:${draftTarget.cellId}:${draftTarget.range.start}:${draftTarget.range.end}`
+        : `draft:${draftTarget.cellId}:${draftTarget.selectors[0].start}:${draftTarget.selectors[0].end}`
   const existingItem =
     draftTarget.type === 'cell' ? itemsByCell.get(draftKey) : undefined
   if (existingItem) {
@@ -963,16 +981,56 @@ function getThreadKey(thread: CellCommentThread): string {
   )
 }
 
+/** V2 comments retain a cell-shaped compatibility anchor around typed ranges. */
+function isSourceRangeThread(thread: CellCommentThread): boolean {
+  return Boolean(
+    (thread.anchor?.type === 'cell' && thread.anchor.diffTarget?.sourceRange) ||
+      thread.locations?.some(
+        (entry) =>
+          entry.anchor.kind === 'cell' &&
+          entry.anchor.surface === 'source' &&
+          entry.anchor.range
+      )
+  )
+}
+
+/** Older V2 selections originated in rendered Markdown. Only an explicit UI
+ * origin opens Monaco; the anchor's source surface describes storage coordinates.
+ */
+function navigationTargetForLocation(
+  entry: LocatedAnchor
+): CommentNavigationTarget | null {
+  if (entry.anchor.kind !== 'cell') return null
+  const cellId = entry.anchor.cell_id
+  if (entry.anchor.selection_surface === 'source')
+    return { cellId, surface: 'source' }
+  return {
+    cellId,
+    ...('start' in entry.location
+      ? {
+          sourceRange: { start: entry.location.start, end: entry.location.end },
+        }
+      : {}),
+  }
+}
+
 function navigationTargetForItem(
   item: CommentsPanelItem
 ): CommentNavigationTarget | null {
   if (!item.cellId || item.orphaned) {
     return null
   }
+  if (item.draftTarget?.type === 'cell-source') {
+    return { cellId: item.cellId, surface: 'source' }
+  }
   if (item.draftTarget?.type === 'cell-text') {
     const { start, end } = item.draftTarget.selectors[0]
     return { cellId: item.cellId, range: { start, end } }
   }
+  const located = item.threads.flatMap((thread) => thread.locations ?? [])
+  const primary =
+    located.find((entry) => isLocated(entry.location)) ?? located[0]
+  if (primary) return navigationTargetForLocation(primary)
   const rangeThread = item.threads.find(
     (thread) =>
       thread.anchor?.type === 'cell-text' &&

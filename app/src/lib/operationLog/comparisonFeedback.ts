@@ -173,6 +173,7 @@ export async function commentOnComparison(
           surface: 'source',
           ...(input.sourceRange
             ? {
+                selection_surface: 'source',
                 range: codePointRange(
                   source!,
                   input.sourceRange.start,

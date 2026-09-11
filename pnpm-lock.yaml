@@ -373,6 +373,9 @@ importers:
       jsdom:
         specifier: 27.4.0
         version: 27.4.0
+      playwright-core:
+        specifier: 1.57.0
+        version: 1.57.0
       prettier:
         specifier: ^3.6.2
         version: 3.6.2
@@ -4688,6 +4691,11 @@ packages:
   prettier@3.6.2:
     resolution: {integrity: sha512-I7AIg5boAr5R0FFtJ6rCfD+LFsWHp81dolrFD8S79U9tb8Az2nGrJncnMSnys+bpQJfRUzqs9hnA81OAA3hCuQ==}
     engines: {node: '>=14'}
+    hasBin: true
+
+  playwright-core@1.57.0:
+    resolution: {integrity: sha512-agTcKlMw/mjBWOnD6kFZttAAGHgi/Nw0CZ2o6JqWSbMlI219lAFLZZCyqByTsvVAJq5XA5H8cA6PrvBRpBWEuQ==}
+    engines: {node: ">=18"}
     hasBin: true
 
   pretty-format@27.5.1:
@@ -10112,6 +10120,8 @@ snapshots:
   prettier@2.8.8: {}
 
   prettier@3.6.2: {}
+
+  playwright-core@1.57.0: {}
 
   pretty-format@27.5.1:
     dependencies:
