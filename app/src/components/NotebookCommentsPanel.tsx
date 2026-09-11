@@ -984,7 +984,7 @@ function getThreadKey(thread: CellCommentThread): string {
 /** V2 comments retain a cell-shaped compatibility anchor around typed ranges. */
 function isSourceRangeThread(thread: CellCommentThread): boolean {
   return Boolean(
-    thread.anchor?.diffTarget?.sourceRange ||
+    (thread.anchor?.type === 'cell' && thread.anchor.diffTarget?.sourceRange) ||
       thread.locations?.some(
         (entry) =>
           entry.anchor.kind === 'cell' &&
