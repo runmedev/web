@@ -54,7 +54,16 @@ export type CellTextCommentAnchor = {
 
 export type CommentAnchor = CellCommentAnchor | CellTextCommentAnchor
 
+/** Transient Monaco selection; offsets are UTF-16 until bound to immutable source. */
+export type SourceSelectionDraft = {
+  type: 'cell-source'
+  cellId: string
+  source: string
+  range: TextRange
+}
+
 export type CommentDraftTarget =
+  | SourceSelectionDraft
   | { type: 'cell'; cellId: string }
   | RenderedMarkdownSelectionDraft
 

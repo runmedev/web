@@ -345,6 +345,7 @@ export function NotebookCommentsPanel({
               )
               const isRangeItem = Boolean(
                 item.draftTarget?.type === 'cell-text' ||
+                  item.draftTarget?.type === 'cell-source' ||
                   item.threads.some(
                     (thread) => thread.anchor?.type === 'cell-text'
                   )
@@ -477,9 +478,14 @@ export function NotebookCommentsPanel({
                         New comment on{' '}
                         {cellLabels.get(item.draftTarget.cellId) ?? 'cell'}
                       </label>
-                      {item.draftTarget.type === 'cell-text' && (
+                      {item.draftTarget.type !== 'cell' && (
                         <blockquote className="mt-2 border-l-2 border-nb-accent pl-2 text-xs text-nb-text-muted">
-                          {item.draftTarget.selectors[1].exact}
+                          {item.draftTarget.type === 'cell-source'
+                            ? item.draftTarget.source.slice(
+                                item.draftTarget.range.start,
+                                item.draftTarget.range.end
+                              )
+                            : item.draftTarget.selectors[1].exact}
                         </blockquote>
                       )}
                       <textarea
@@ -880,7 +886,9 @@ function sortCommentPanelItems(
   const draftKey =
     draftTarget.type === 'cell'
       ? getCellThreadKey(draftTarget.cellId)
-      : `draft:${draftTarget.cellId}:${draftTarget.selectors[0].start}:${draftTarget.selectors[0].end}`
+      : draftTarget.type === 'cell-source'
+        ? `source-draft:${draftTarget.cellId}:${draftTarget.range.start}:${draftTarget.range.end}`
+        : `draft:${draftTarget.cellId}:${draftTarget.selectors[0].start}:${draftTarget.selectors[0].end}`
   const existingItem =
     draftTarget.type === 'cell' ? itemsByCell.get(draftKey) : undefined
   if (existingItem) {

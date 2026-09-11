@@ -107,10 +107,7 @@ const markdownComponents: Components = {
       )
     }
     return (
-      <code
-        className={`block text-[12.6px] font-mono ${className}`}
-        {...props}
-      >
+      <code className={`block text-[12.6px] font-mono ${className}`} {...props}>
         {children}
       </code>
     )
@@ -197,6 +194,7 @@ interface MarkdownCellProps {
   /** Resolved open-comment ranges to keep visible in rendered Markdown. */
   commentRanges?: readonly RenderedMarkdownCommentRange[]
   commentSourceRanges?: CommentSourceRange[]
+  onCommentSelection?: React.ComponentProps<typeof Editor>['onCommentSelection']
   onSelectComment?: (id: string) => void
   /** Open the cell context menu with a lazily captured rendered selection. */
   onRenderedSelectionContextMenu?: (request: {
@@ -253,6 +251,7 @@ const MarkdownCell = memo(
     commentRanges = [],
     commentSourceRanges = [],
     onSelectComment,
+    onCommentSelection,
     onRenderedSelectionContextMenu,
   }: MarkdownCellProps) => {
     // Subscribe to cell data changes using useSyncExternalStore for tearing-safe reads
@@ -637,6 +636,7 @@ const MarkdownCell = memo(
           >
             <Editor
               commentRanges={commentSourceRanges}
+              onCommentSelection={onCommentSelection}
               onSelectComment={onSelectComment}
               id={`md-editor-${cell.refId}`}
               value={value}
@@ -694,6 +694,7 @@ const MarkdownCell = memo(
       prevProps.readOnly === nextProps.readOnly &&
       sameCommentRanges(prevProps.commentRanges, nextProps.commentRanges) &&
       prevProps.commentSourceRanges === nextProps.commentSourceRanges &&
+      prevProps.onCommentSelection === nextProps.onCommentSelection &&
       prevProps.onSelectComment === nextProps.onSelectComment &&
       prevProps.onRenderedSelectionContextMenu ===
         nextProps.onRenderedSelectionContextMenu

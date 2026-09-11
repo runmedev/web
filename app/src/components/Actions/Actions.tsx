@@ -691,6 +691,7 @@ export function Action({
   onFocusStateChange,
   readOnly = false,
   commentsAvailable = false,
+  sourceCommentsAvailable = false,
   commentCount = 0,
   commentRanges = [],
   commentSourceRanges = [],
@@ -708,6 +709,7 @@ export function Action({
   onFocusStateChange?: (state: NotebookActiveCellState) => void
   readOnly?: boolean
   commentsAvailable?: boolean
+  sourceCommentsAvailable?: boolean
   commentCount?: number
   commentRanges?: readonly RenderedMarkdownCommentRange[]
   commentSourceRanges?: CommentSourceRange[]
@@ -902,6 +904,19 @@ export function Action({
       setContextMenu({ x: event.clientX, y: event.clientY })
     },
     []
+  )
+
+  const handleEditorComment = useCallback(
+    (selection: { source: string; range: { start: number; end: number } }) => {
+      if (!cell?.refId || !sourceCommentsAvailable) return
+      setContextMenu(null)
+      onStartComment?.({
+        type: 'cell-source',
+        cellId: cell.refId,
+        ...selection,
+      })
+    },
+    [cell?.refId, sourceCommentsAvailable, onStartComment]
   )
 
   const handleRenderedSelectionContextMenu = useCallback(
@@ -1690,6 +1705,9 @@ export function Action({
               commentRanges={commentRanges}
               commentSourceRanges={commentSourceRanges}
               onSelectComment={onSelectComment}
+              onCommentSelection={
+                sourceCommentsAvailable ? handleEditorComment : undefined
+              }
               onRenderedSelectionContextMenu={
                 handleRenderedSelectionContextMenu
               }
@@ -1980,6 +1998,9 @@ export function Action({
             <Editor
               commentRanges={commentSourceRanges}
               onSelectComment={onSelectComment}
+              onCommentSelection={
+                sourceCommentsAvailable ? handleEditorComment : undefined
+              }
               key={`editor-${cell.refId}-${selectedLanguage}`}
               id={cell.refId}
               value={cell.value}
@@ -3168,11 +3189,13 @@ function NotebookTabContent({
                 target.selectors[0].start,
                 target.selectors[0].end
               )
-            : undefined
+            : target.type === 'cell-source'
+              ? [target.range]
+              : undefined
         const binding = (async () => {
           if (
             typeof source !== 'string' ||
-            (target.type === 'cell-text' && source !== target.source)
+            (target.type !== 'cell' && source !== target.source)
           )
             throw new Error(
               'The displayed selection changed. Select the text again.'
@@ -3954,6 +3977,7 @@ function NotebookTabContent({
                       onFocusStateChange={(state) => onCellFocus(docUri, state)}
                       readOnly={readOnly}
                       commentsAvailable={Boolean(commentsRemoteUri)}
+                      sourceCommentsAvailable={operationLogComments}
                       commentCount={commentsByCell.get(refId)?.length ?? 0}
                       commentRanges={commentRangesByCell.get(refId) ?? []}
                       commentSourceRanges={sourceRangesByCell.get(refId) ?? []}

@@ -25,6 +25,7 @@ const Editor = memo(
     onMount,
     commentRanges = [],
     onSelectComment,
+    onCommentSelection,
   }: {
     id: string;
     value: string;
@@ -41,12 +42,47 @@ const Editor = memo(
     onMount?: (editor: any, monaco: any) => void;
     commentRanges?: readonly CommentSourceRange[];
     onSelectComment?: (id: string) => void;
+    onCommentSelection?: (selection: {
+      source: string;
+      range: { start: number; end: number };
+    }) => void;
   }) => {
     // Store the latest onEnter in a ref to ensure late binding
     const onEnterRef = useRef(onEnter);
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
     const editorRef = useRef<any>(null);
     const [mountVersion, setMountVersion] = useState(0);
+    const monacoRef = useRef<any>(null);
+
+    // Read Monaco's model/selection synchronously when the action runs. DOM
+    // selections are unrelated to Monaco offsets and disappear on menu focus.
+    useEffect(() => {
+      const editor = editorRef.current;
+      const monaco = monacoRef.current;
+      if (!editor || !monaco || !onCommentSelection) return;
+      const action = editor.addAction({
+        id: "runme.commentSelection",
+        label: "Comment on selection",
+        precondition: "editorHasSelection",
+        contextMenuGroupId: "9_cutcopypaste",
+        contextMenuOrder: 4,
+        keybindings: [
+          monaco.KeyMod.CtrlCmd | monaco.KeyMod.Alt | monaco.KeyCode.KeyM,
+        ],
+        run: () => {
+          const model = editor.getModel();
+          const selection = editor.getSelection();
+          if (!model || !selection || selection.isEmpty()) return;
+          const start = model.getOffsetAt(selection.getStartPosition());
+          const end = model.getOffsetAt(selection.getEndPosition());
+          onCommentSelection({
+            source: model.getValue(),
+            range: { start, end },
+          });
+        },
+      });
+      return () => action.dispose();
+    }, [onCommentSelection, mountVersion]);
     // Monaco uses UTF-16 positions; immutable anchors are converted by the view.
     useEffect(() => {
       const editor = editorRef.current,
@@ -148,6 +184,7 @@ const Editor = memo(
 
     const editorDidMount = (editor: any, monaco: any) => {
       editorRef.current = editor;
+      monacoRef.current = monaco;
       setMountVersion((v) => v + 1);
 
       if (!monaco?.editor) {
@@ -234,6 +271,8 @@ const Editor = memo(
         className="w-full min-w-0 max-w-full"
         style={{ contain: "inline-size" }}
         ref={setContainerRef}
+        // Monaco owns its context menu, including selection and clipboard actions.
+        onContextMenu={(event) => event.stopPropagation()}
       >
         <div className="overflow-hidden">
           <MonacoEditor
@@ -273,17 +312,6 @@ const Editor = memo(
           />
         </div>
       </div>
-    );
-  },
-  (prevProps, nextProps) => {
-    return (
-      prevProps.id === nextProps.id &&
-      prevProps.value === nextProps.value &&
-      prevProps.language === nextProps.language &&
-      prevProps.readOnly === nextProps.readOnly &&
-      prevProps.ariaLabel === nextProps.ariaLabel &&
-      prevProps.autoFocusWhenEmpty === nextProps.autoFocusWhenEmpty &&
-      prevProps.shouldFocus === nextProps.shouldFocus
     );
   }
 );
