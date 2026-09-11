@@ -914,7 +914,26 @@ describe('Actions tabs', () => {
             name: 'Mock editor selection comment',
           })
         )
-        expect(document.querySelector('blockquote')?.textContent).toBe(source.slice(1))
+        expect(document.querySelector('blockquote')?.textContent).toBe(
+          source.slice(1)
+        )
+        expect(
+          JSON.parse(localStorage.getItem('runme/notebook-active-cells')!)[uri]
+            .focusRole
+        ).toBe('editor')
+        if (surface === 'markdown-source') {
+          const focused = vi.spyOn(document, 'hasFocus').mockReturnValue(false)
+          fireEvent.blur(window)
+          focused.mockReturnValue(true)
+          fireEvent.focus(window)
+          expect(screen.queryByTestId('markdown-rendered')).toBeNull()
+          expect(
+            screen.getByRole('button', {
+              name: 'Mock editor selection comment',
+            })
+          ).toBeTruthy()
+          focused.mockRestore()
+        }
       }
       await waitFor(() => expect(flush).toHaveBeenCalledOnce())
       await waitFor(async () =>

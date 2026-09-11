@@ -27,6 +27,10 @@ history.
 - Selected source is transient draft data for display/validation. The durable
   comment stores the revision and source range; historical context is resolved
   from that revision, not from a captured quote or a checksum of current text.
+- Preserve source draft whitespace so newlines and indentation remain visible.
+  Verify browser geometry and computed whitespace, not only `textContent`.
+- Source drafts retain the `editor` focus role even in a Markdown wrapper.
+  Switching tabs or restoring window focus must return to source editing.
 - Register/dispose the Monaco action with its current callback and comment
   availability. Memoization must not retain a stale cell callback or hide newly
   available comments. Keep Monaco's context menu from also opening the outer

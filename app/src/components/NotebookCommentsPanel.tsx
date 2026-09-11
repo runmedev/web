@@ -479,7 +479,13 @@ export function NotebookCommentsPanel({
                         {cellLabels.get(item.draftTarget.cellId) ?? 'cell'}
                       </label>
                       {item.draftTarget.type !== 'cell' && (
-                        <blockquote className="mt-2 border-l-2 border-nb-accent pl-2 text-xs text-nb-text-muted">
+                        <blockquote
+                          className={`mt-2 border-l-2 border-nb-accent pl-2 text-xs text-nb-text-muted${
+                            item.draftTarget.type === 'cell-source'
+                              ? ' whitespace-pre-wrap break-words'
+                              : ''
+                          }`}
+                        >
                           {item.draftTarget.type === 'cell-source'
                             ? item.draftTarget.source.slice(
                                 item.draftTarget.range.start,

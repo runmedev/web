@@ -2517,11 +2517,13 @@ function NotebookTabContent({
   }, [])
 
   const focusCommentCell = useCallback(
-    (cellId: string) => {
+    (cellId: string, originatingRole?: CellFocusRole) => {
       const element = findCellElement(cellId)
-      const focusRole = element?.id.startsWith('markdown-action-')
-        ? 'rendered'
-        : 'editor'
+      // Source drafts originate in Monaco even inside a Markdown wrapper.
+      // Preserve that mode when notebook/window focus is restored later.
+      const focusRole =
+        originatingRole ??
+        (element?.id.startsWith('markdown-action-') ? 'rendered' : 'editor')
       const nextState = createNotebookActiveCellState(cellId, focusRole)
       if (nextState) {
         onCellFocus(docUri, nextState)
@@ -3159,7 +3161,7 @@ function NotebookTabContent({
     }
   }, [syncPendingComments])
 
-  // Bind the rendered selection to immutable source while its displayed model
+  // Bind the selection to immutable source while its displayed model
   // and revision are still available. Sending later does not inspect the editor.
   const draftAnchors = useRef(
     new WeakMap<
@@ -3239,7 +3241,10 @@ function NotebookTabContent({
       openCommentsPanel()
       setDraftTarget(target)
       setDraftContent('')
-      focusCommentCell(target.cellId)
+      focusCommentCell(
+        target.cellId,
+        target.type === 'cell-source' ? 'editor' : undefined
+      )
       setActiveCommentRange(
         target.type === 'cell-text'
           ? { cellId: target.cellId, ...target.selectors[0] }
