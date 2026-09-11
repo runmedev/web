@@ -32,7 +32,9 @@ history.
 - Store the optional `selection_surface` with typed anchors to preserve the UI
   origin across reloads. `surface: source` always describes storage coordinates;
   it must not be used to infer editor versus rendered navigation. Older V2
-  comments lack this hint and keep rendered navigation. Project mapped source
+  comments lack this hint and keep rendered navigation, except comparison
+  comments: their comparison context identifies a source selection. New diff
+  comments explicitly store the source hint. Project mapped source
   ranges into the current rendered text for scrolling; never use source offsets
   directly as rendered offsets.
 - Persisted source ranges navigate to Monaco and activate only their own thread.

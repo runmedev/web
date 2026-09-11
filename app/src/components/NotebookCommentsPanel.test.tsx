@@ -98,67 +98,78 @@ describe('NotebookCommentsPanel', () => {
     )
     expect(onReply).toHaveBeenCalledTimes(1)
   })
-  it('activates only the selected saved source range and navigates to its editor', () => {
-    const source = 'first second'
-    const threads = toCellCommentThreads(
-      [0, 1].map((index) => {
-        const anchor = {
-          kind: 'cell',
-          cell_id: 'cell-1',
-          surface: 'source',
-          selection_surface: 'source',
-          version: { kind: 'operation', op_id: 'old:1' },
-          range: {
-            start_index: index === 0 ? 0 : 6,
-            end_index: index === 0 ? 5 : 12,
-            unit: 'unicode-code-point',
-          },
-        }
-        return {
-          id: `range-${index}`,
-          content: `Source range ${index}`,
-          anchor: JSON.stringify({
-            runme: {
-              version: 1,
-              type: 'cell',
-              cellId: 'cell-1',
-              anchorSources: [{ anchor, source }],
+  it.each([false, true])(
+    'activates only the selected saved source range and navigates to its editor (legacy comparison: %s)',
+    (comparison) => {
+      const source = 'first second'
+      const threads = toCellCommentThreads(
+        [0, 1].map((index) => {
+          const anchor = {
+            kind: 'cell',
+            cell_id: 'cell-1',
+            surface: 'source',
+            selection_surface: comparison ? undefined : 'source',
+            version: { kind: 'operation', op_id: 'old:1' },
+            range: {
+              start_index: index === 0 ? 0 : 6,
+              end_index: index === 0 ? 5 : 12,
+              unit: 'unicode-code-point',
             },
-          }),
-        }
-      }),
-      [{ refId: 'cell-1', value: source }]
-    )
-    const onSelectTarget = vi.fn()
-    renderPanel({
-      storage: 'runme-operation-log',
-      threads,
-      activeCellId: 'cell-1',
-      cellLabels: new Map([['cell-1', 'Cell 1']]),
-      onSelectTarget,
-    })
-    expect(
-      document.querySelectorAll('article[aria-current="true"]')
-    ).toHaveLength(1)
-    expect(
-      screen.getAllByPlaceholderText('Reply or add others with @')
-    ).toHaveLength(1)
-    const second = screen.getByText('Source range 1').closest('article')!
-    fireEvent.click(second)
-    expect(
-      document.querySelectorAll('article[aria-current="true"]')
-    ).toHaveLength(1)
-    expect(second.getAttribute('aria-current')).toBe('true')
-    expect(onSelectTarget).toHaveBeenLastCalledWith({
-      cellId: 'cell-1',
-      surface: 'source',
-    })
-    fireEvent.click(within(second).getByRole('button', { name: /Located/ }))
-    expect(onSelectTarget).toHaveBeenLastCalledWith({
-      cellId: 'cell-1',
-      surface: 'source',
-    })
-  })
+          }
+          return {
+            id: `range-${index}`,
+            content: `Source range ${index}`,
+            anchor: JSON.stringify({
+              runme: {
+                version: 1,
+                type: 'cell',
+                cellId: 'cell-1',
+                anchorSources: [{ anchor, source }],
+                ...(comparison
+                  ? {
+                      comparison: {
+                        start: anchor.version,
+                        end: anchor.version,
+                      },
+                    }
+                  : {}),
+              },
+            }),
+          }
+        }),
+        [{ refId: 'cell-1', value: source }]
+      )
+      const onSelectTarget = vi.fn()
+      renderPanel({
+        storage: 'runme-operation-log',
+        threads,
+        activeCellId: 'cell-1',
+        cellLabels: new Map([['cell-1', 'Cell 1']]),
+        onSelectTarget,
+      })
+      expect(
+        document.querySelectorAll('article[aria-current="true"]')
+      ).toHaveLength(1)
+      expect(
+        screen.getAllByPlaceholderText('Reply or add others with @')
+      ).toHaveLength(1)
+      const second = screen.getByText('Source range 1').closest('article')!
+      fireEvent.click(second)
+      expect(
+        document.querySelectorAll('article[aria-current="true"]')
+      ).toHaveLength(1)
+      expect(second.getAttribute('aria-current')).toBe('true')
+      expect(onSelectTarget).toHaveBeenLastCalledWith({
+        cellId: 'cell-1',
+        surface: 'source',
+      })
+      fireEvent.click(within(second).getByRole('button', { name: /Located/ }))
+      expect(onSelectTarget).toHaveBeenLastCalledWith({
+        cellId: 'cell-1',
+        surface: 'source',
+      })
+    }
+  )
 
   it.each([undefined, 'rendered-markdown'])(
     'keeps saved rendered selections on their rendered surface (%s)',

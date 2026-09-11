@@ -125,6 +125,7 @@ describe('direct comparison feedback', () => {
           kind: 'cell',
           cell_id: 'c',
           version: { kind: 'revision', revision_id: 'end' },
+          selection_surface: 'source',
           range: { start_index: 6, end_index: 11, unit: 'unicode-code-point' },
         },
       ],
