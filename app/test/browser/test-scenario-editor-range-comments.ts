@@ -45,11 +45,9 @@ function browser(...args: string[]): string {
   }
 }
 
-/** Evaluate setup and storage assertions; interactions below use real input. */
-function evaluate(code: string): any {
-  let result = JSON.parse(browser('eval', `(async () => { ${code} })()`))
-  if (typeof result === 'string') result = JSON.parse(result)
-  return result
+/** Inspect setup/storage directly, while UI actions use real browser events. */
+async function evaluate(code: string): Promise<any> {
+  return inputPage.evaluate(`(async () => { ${code} })()`)
 }
 
 /** Count every assertion so the suite can reject a partial walkthrough. */
@@ -60,25 +58,33 @@ function check(name: string, ok: boolean) {
 }
 
 /** Save the actual draft through the visible comments panel. */
-function submit(content: string) {
-  browser(
-    'fill',
-    '[aria-label="Notebook comments"] textarea:not([placeholder])',
-    content
+async function submit(content: string) {
+  const draft = inputPage.locator(
+    '[aria-label="Notebook comments"] textarea:not([placeholder])'
   )
-  browser('find', 'role', 'button', 'click', '--name', 'Comment', '--exact')
-  browser(
-    'wait',
-    '--fn',
-    `!document.querySelector('[aria-label="Notebook comments"] textarea:not([placeholder])')`
-  )
+  await draft.fill(content)
+  await inputPage.getByRole('button', { name: 'Comment', exact: true }).click()
+  await draft.waitFor({ state: 'hidden' })
 }
 
 try {
   browser('open', process.env.CUJ_FRONTEND_URL ?? 'http://localhost:5173')
   browser('record', 'start', movie)
   browser('wait', '--fn', 'Boolean(window.app?.localNotebooks)')
-  const fixture = evaluate(`
+  // The pinned agent-browser native CLI treats chord strings as a single key.
+  // Use Playwright for UI events and accessible locators, while retaining
+  // the suite's existing browser session, recorder, and artifacts.
+  const endpoint = JSON.parse(browser('get', 'cdp-url', '--json')).data.cdpUrl
+  inputBrowser = await chromium.connectOverCDP(endpoint)
+  const activeUrl = browser('get', 'url')
+  const activePage = inputBrowser
+    .contexts()
+    .flatMap((context) => context.pages())
+    .find((page) => page.url() === activeUrl)
+  if (!activePage) throw new Error('Cannot find the recorded browser page')
+  inputPage = activePage
+  inputPage.setDefaultTimeout(15000)
+  const fixture = await evaluate(`
     const db = window.app.localNotebooks;
     const { LOCAL_FOLDER_URI } = await import('/src/storage/local.ts');
     const { parseOperationLog, serializeOperationLog, createRunmeOperation, causalHeads } = await import('/src/lib/operationLog/index.ts');
@@ -98,24 +104,12 @@ try {
     sessionStorage.setItem('runme/currentDoc', file.uri);
     return {uri:file.uri};
   `)
-  browser('reload')
+  await inputPage.reload()
   const codeInput = '#code-action-editor-range-0 textarea'
   const markdownInput = '#markdown-action-editor-range-1 textarea'
-  browser('wait', codeInput)
-  // The pinned agent-browser native CLI treats chord strings as a single key.
-  // Attach Playwright only for real keyboard input; retain the suite's existing
-  // browser session, recorder, setup, snapshots, and artifacts.
-  const endpoint = JSON.parse(browser('get', 'cdp-url', '--json')).data.cdpUrl
-  inputBrowser = await chromium.connectOverCDP(endpoint)
-  const activeUrl = browser('get', 'url')
-  const activePage = inputBrowser
-    .contexts()
-    .flatMap((context) => context.pages())
-    .find((page) => page.url() === activeUrl)
-  if (!activePage) throw new Error('Cannot find the recorded browser page')
-  inputPage = activePage
+  await inputPage.locator(codeInput).first().waitFor({ state: 'visible' })
   // From offset one through the end, crossing a surrogate pair and a newline.
-  browser('focus', codeInput)
+  await inputPage.locator(codeInput).focus()
   for (const key of [
     'ControlOrMeta+a',
     'ArrowLeft',
@@ -125,33 +119,39 @@ try {
     'Shift+F10',
   ])
     await inputPage.keyboard.press(key)
-  browser('wait', '[aria-label="Comment on selection"]')
+  const menu = inputPage.getByRole('menuitem', {
+    name: /^Comment on selection/,
+  })
+  await menu.waitFor({ state: 'visible' })
   check('Monaco context menu offers Comment on selection', true)
   browser(
     'screenshot',
     join(output, 'scenario-editor-range-comments-code-menu.png')
   )
-  browser('click', '[aria-label="Comment on selection"]')
-  browser('wait', '[aria-label="Notebook comments"] blockquote')
+  await menu.click()
+  await inputPage
+    .locator('[aria-label="Notebook comments"] blockquote')
+    .first()
+    .waitFor({ state: 'visible' })
   check(
     'Code draft contains only the selected multiline source',
-    evaluate(
+    await evaluate(
       `return document.querySelector('[aria-label="Notebook comments"] blockquote').textContent === ${JSON.stringify(sources[0].slice(1))};`
     )
   )
   check(
     'Code draft visibly preserves source line breaks',
-    evaluate(`
+    await evaluate(`
     const quote = document.querySelector('[aria-label="Notebook comments"] blockquote');
     const style = getComputedStyle(quote);
     return style.whiteSpace === 'pre-wrap' && quote.getBoundingClientRect().height >= 2 * parseFloat(style.lineHeight);
   `)
   )
-  submit('Code selection comment')
+  await submit('Code selection comment')
 
-  browser('dblclick', '#markdown-rendered-editor-range-1')
-  browser('wait', markdownInput)
-  browser('focus', markdownInput)
+  await inputPage.locator('#markdown-rendered-editor-range-1').dblclick()
+  await inputPage.locator(markdownInput).first().waitFor({ state: 'visible' })
+  await inputPage.locator(markdownInput).focus()
   for (const key of [
     'ControlOrMeta+a',
     'ArrowLeft',
@@ -162,37 +162,33 @@ try {
     'ControlOrMeta+Alt+m',
   ])
     await inputPage.keyboard.press(key)
-  browser(
-    'wait',
-    '[aria-label="Notebook comments"] textarea:not([placeholder])'
-  )
+  await inputPage
+    .locator('[aria-label="Notebook comments"] textarea:not([placeholder])')
+    .first()
+    .waitFor({ state: 'visible' })
   check(
     'Markdown shortcut captures source including formatting markers',
-    evaluate(
+    await evaluate(
       `return [...document.querySelectorAll('[aria-label="Notebook comments"] blockquote')].at(-1).textContent === ${JSON.stringify('😀 **first**\nsecond')};`
     )
   )
   check(
     'Markdown draft preserves editor focus role',
-    evaluate(`
+    await evaluate(`
     return JSON.parse(localStorage.getItem('runme/notebook-active-cells'))[${JSON.stringify(fixture.uri)}].focusRole === 'editor';
   `)
   )
-  browser('find', 'role', 'button', 'click', '--name', 'Open Logs', '--exact')
-  browser(
-    'find',
-    'role',
-    'tab',
-    'click',
-    '--name',
-    'editor-range-comments.runme',
-    '--exact'
-  )
-  browser('wait', markdownInput)
+  await inputPage
+    .getByRole('button', { name: 'Open Logs', exact: true })
+    .click()
+  await inputPage
+    .getByRole('tab', { name: 'editor-range-comments.runme', exact: true })
+    .click()
+  await inputPage.locator(markdownInput).first().waitFor({ state: 'visible' })
   check('Returning to the notebook restores Markdown source editing', true)
   check(
     'Markdown draft visibly preserves source line breaks',
-    evaluate(`
+    await evaluate(`
     const quote = [...document.querySelectorAll('[aria-label="Notebook comments"] blockquote')].at(-1);
     const style = getComputedStyle(quote);
     return style.whiteSpace === 'pre-wrap' && quote.getBoundingClientRect().height >= 2 * parseFloat(style.lineHeight);
@@ -203,13 +199,11 @@ try {
     join(output, 'scenario-editor-range-comments-markdown-draft.png')
   )
   // The draft must retain the immutable revision even when the editor changes.
-  browser('focus', markdownInput)
+  await inputPage.locator(markdownInput).focus()
   await inputPage.keyboard.press('ControlOrMeta+a')
   await inputPage.keyboard.insertText('# Changed after opening comment draft')
-  submit('Markdown selection comment')
-  browser(
-    'wait',
-    '--fn',
+  await submit('Markdown selection comment')
+  await inputPage.waitForFunction(
     `document.body.textContent.includes('Outdated anchor')`
   )
   browser(
@@ -219,7 +213,7 @@ try {
 
   // Add another range on the same Markdown cell, this time on current source.
   // The old range remains outdated; selecting either card must not activate both.
-  browser('focus', markdownInput)
+  await inputPage.locator(markdownInput).focus()
   for (const key of [
     'ControlOrMeta+a',
     'ArrowLeft',
@@ -229,20 +223,18 @@ try {
     'ControlOrMeta+Alt+m',
   ])
     await inputPage.keyboard.press(key)
-  browser(
-    'wait',
-    '[aria-label="Notebook comments"] textarea:not([placeholder])'
-  )
-  submit('Current Markdown selection comment')
+  await inputPage
+    .locator('[aria-label="Notebook comments"] textarea:not([placeholder])')
+    .first()
+    .waitFor({ state: 'visible' })
+  await submit('Current Markdown selection comment')
 
-  browser('reload')
-  browser('wait', codeInput)
-  browser(
-    'wait',
-    '--fn',
+  await inputPage.reload()
+  await inputPage.locator(codeInput).first().waitFor({ state: 'visible' })
+  await inputPage.waitForFunction(
     `document.body.textContent.includes('Markdown selection comment')`
   )
-  const persisted = evaluate(`
+  const persisted = await evaluate(`
     const db = window.app.localNotebooks;
     const comments = await db.listOperationLogComments(${JSON.stringify(fixture.uri)});
     return comments.map(comment => ({id:comment.id,content:comment.content,view:JSON.parse(comment.anchor).runme}));
@@ -274,29 +266,32 @@ try {
   )
   // Explicitly render the already-active Markdown cell before navigating back
   // through the persisted comment card, as a reader does after reopening.
-  browser('focus', markdownInput)
+  await inputPage.locator(markdownInput).focus()
   await inputPage.keyboard.press('Escape')
-  browser('wait', '#markdown-rendered-editor-range-1')
-  browser('click', `#editor-comment-${current.id}`)
-  browser('wait', markdownInput)
-  browser(
-    'wait',
-    '#markdown-action-editor-range-1 .runme-source-comment-underline'
-  )
+  await inputPage
+    .locator('#markdown-rendered-editor-range-1')
+    .first()
+    .waitFor({ state: 'visible' })
+  await inputPage.locator(`#editor-comment-${current.id}`).click()
+  await inputPage.locator(markdownInput).first().waitFor({ state: 'visible' })
+  await inputPage
+    .locator('#markdown-action-editor-range-1 .runme-source-comment-underline')
+    .first()
+    .waitFor({ state: 'visible' })
   check(
     'Saved Markdown range navigation opens its decorated source editor',
     true
   )
   check(
     'Only the selected saved range is active',
-    evaluate(`
+    await evaluate(`
     const active = [...document.querySelectorAll('[aria-label="Notebook comments"] article[aria-current="true"]')];
     return active.length === 1 && active[0].id === ${JSON.stringify('editor-comment-' + current.id)};
   `)
   )
   check(
     'Later Markdown edit does not retarget the comment',
-    evaluate(
+    await evaluate(
       `return document.body.textContent.includes('Changed after opening comment draft') && document.body.textContent.includes('Outdated anchor');`
     )
   )
@@ -307,6 +302,11 @@ try {
 } catch (error) {
   failed++
   console.log(`[FAIL] ${error}`)
+  if (inputPage)
+    writeFileSync(
+      join(output, 'scenario-editor-range-comments-failure.html'),
+      await inputPage.content().catch(() => 'Page unavailable')
+    )
 } finally {
   try {
     browser('record', 'stop')
