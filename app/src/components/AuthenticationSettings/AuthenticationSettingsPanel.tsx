@@ -22,6 +22,7 @@ import {
   type GoogleDriveAuthUxMode,
 } from '../../lib/googleClientManager'
 import { getGoogleDriveOAuthCallbackUrl } from '../../lib/appBase'
+import { setLocalConfigPreferredOnLoad } from '../../lib/appConfig'
 import { showToast } from '../../lib/toast'
 
 const inputClass =
@@ -293,6 +294,9 @@ export default function AuthenticationSettingsPanel() {
         clientSecret: runmeClientSecret.trim() || undefined,
         scope: runmeScope.trim(),
       })
+      // A successful save is an explicit local override. Production startup
+      // otherwise reapplies deployment defaults and silently erases these edits.
+      setLocalConfigPreferredOnLoad(true)
       setErrorMessage(null)
       return true
     } catch (error) {

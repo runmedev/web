@@ -65,6 +65,10 @@ vi.mock('../../auth/oidcConfig', () => ({
 vi.mock('../../lib/toast', () => ({ showToast: mocks.showToast }))
 
 import AuthenticationSettingsPanel from './AuthenticationSettingsPanel'
+import {
+  isLocalConfigPreferredOnLoad,
+  setLocalConfigPreferredOnLoad,
+} from '../../lib/appConfig'
 
 describe('AuthenticationSettingsPanel', () => {
   beforeEach(() => {
@@ -98,6 +102,34 @@ describe('AuthenticationSettingsPanel', () => {
       'value',
       'drive-user@example.com'
     )
+  })
+
+  it('preserves explicitly saved OAuth settings on the next startup', () => {
+    setLocalConfigPreferredOnLoad(false)
+    render(<AuthenticationSettingsPanel />)
+    fireEvent.change(screen.getByLabelText('Runme OAuth scopes'), {
+      target: { value: 'openid email profile' },
+    })
+    fireEvent.click(
+      screen.getByRole('button', { name: 'Save authentication settings' })
+    )
+    expect(mocks.setOidcConfig).toHaveBeenCalledWith(
+      expect.objectContaining({ scope: 'openid email profile' })
+    )
+    expect(isLocalConfigPreferredOnLoad()).toBe(true)
+  })
+
+  it('does not change startup precedence when authentication settings fail validation', () => {
+    setLocalConfigPreferredOnLoad(false)
+    render(<AuthenticationSettingsPanel />)
+    fireEvent.change(screen.getByLabelText('Runme OAuth scopes'), {
+      target: { value: '' },
+    })
+    fireEvent.click(
+      screen.getByRole('button', { name: 'Save authentication settings' })
+    )
+    expect(isLocalConfigPreferredOnLoad()).toBe(false)
+    expect(mocks.setOidcConfig).not.toHaveBeenCalled()
   })
 
   it('registers the authentication controls as AI tour targets', () => {

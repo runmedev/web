@@ -8,6 +8,8 @@ from `docs-dev/cujs/`.
 
 ## Current CUJs
 
+- `authentication-settings-persistence.md` — saved OAuth scopes survive refresh under production config precedence.
+
 - [horizontal-rendering.md](horizontal-rendering.md) — viewport-bounded prose with locally scrolling wide
   tables/code and wrapping outputs; verified at normal and narrow widths.
 
