@@ -819,8 +819,11 @@ if (run(`curl -sf ${FRONTEND_URL}`).status !== 0) {
 
 runWithRetry(agentBrowserCommand(`open ${FRONTEND_URL}`));
 run(agentBrowserCommand("record stop"));
-runWithRetry(agentBrowserCommand(`record restart ${MOVIE_PATH}`));
-run(agentBrowserCommand("wait 3500"));
+// Wait for the initial navigation and React mount before attaching the recorder.
+// Restarting immediately after open produced zero JPEG frames in CI, leaving
+// FFmpeg without stream dimensions even though all notebook assertions passed.
+runWithRetry(agentBrowserCommand('wait --fn "Boolean(window.app?.localNotebooks)"'));
+runWithRetry(agentBrowserCommand(`record start ${MOVIE_PATH}`));
 
 const runnerWsLiteral = `'${BACKEND_WS.replace(/\\/g, "\\\\").replace(/'/g, "\\'")}'`;
 const runnerSeed = run(

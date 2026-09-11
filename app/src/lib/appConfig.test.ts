@@ -1,4 +1,4 @@
-import { beforeEach, describe, expect, it, vi } from 'vitest'
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 
 import localAppConfigYaml from '../../assets/configs/app-configs.yaml?raw'
 
@@ -13,6 +13,7 @@ async function loadModules() {
 }
 
 describe('appConfig OIDC Google shorthand', () => {
+  afterEach(() => vi.unstubAllGlobals())
   beforeEach(() => {
     window.localStorage.clear()
     window.history.replaceState(null, '', '/index.html')
@@ -374,6 +375,50 @@ describe('appConfig OIDC Google shorthand', () => {
         scopes: ['https://www.googleapis.com/auth/drive.readonly'],
       },
     })
+  })
+
+  it('restores locally saved OAuth settings before deployment preload after a reload', async () => {
+    const original = await loadModules()
+    original.setAppConfigFromYaml(localAppConfigYaml)
+    original.setLocalConfigPreferredOnLoad(false)
+    original.oidcConfigManager.setConfig({ scope: 'openid email profile' })
+    const { googleClientManager } = await import('./googleClientManager')
+    googleClientManager.setOAuthClient({
+      clientId: 'saved.apps.googleusercontent.com',
+      authFlow: 'pkce',
+      authUxMode: 'popup',
+    })
+    original.setLocalConfigPreferredOnLoad(true)
+
+    // Recreate the singleton managers as a real page load does, then run the
+    // actual async startup loader against the deployment's default YAML.
+    const reloaded = await loadModules()
+    vi.stubGlobal(
+      'fetch',
+      vi.fn(async () => new Response(localAppConfigYaml))
+    )
+    const applied = await reloaded.maybeSetAppConfig()
+    expect(applied?.oidc?.scope).toBe('openid email profile')
+    expect(applied?.googleOAuth).toMatchObject({
+      clientId: 'saved.apps.googleusercontent.com',
+      authFlow: 'pkce',
+      authUxMode: 'popup',
+    })
+    expect(JSON.parse(window.localStorage.getItem('oidcConfig')!).scope).toBe(
+      'openid email profile'
+    )
+
+    // Explicit imports and opting back into deployment defaults remain supported.
+    reloaded.setAppConfigFromYaml(localAppConfigYaml)
+    expect(reloaded.oidcConfigManager.getScope()).not.toBe(
+      'openid email profile'
+    )
+    reloaded.oidcConfigManager.setScope('openid email profile')
+    reloaded.enableAppConfigOverridesOnLoad()
+    await reloaded.maybeSetAppConfig()
+    expect(reloaded.oidcConfigManager.getScope()).not.toBe(
+      'openid email profile'
+    )
   })
 
   it('toggles app-config local precedence on load', async () => {
