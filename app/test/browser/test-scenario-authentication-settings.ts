@@ -77,7 +77,7 @@ try {
   if (!page) throw new Error('Recorded page not found')
   page.setDefaultTimeout(15000)
   await page.waitForFunction(
-    'Boolean(window.app?.setLocalConfigPreferredOnLoad && window.oidc)'
+    'Boolean(window.oidc?.getScope)'
   )
   saved = await page.evaluate(() =>
     Object.fromEntries(
@@ -90,7 +90,11 @@ try {
       ].map((key) => [key, localStorage.getItem(key)])
     )
   )
-  await page.evaluate('window.app.setLocalConfigPreferredOnLoad(false)')
+  // App mounts replace window.app with debug state. Seed the documented
+  // preference directly instead of relying on that transient global API.
+  await page.evaluate(() =>
+    localStorage.setItem('runme/app-config/prefer-local', 'false')
+  )
   await page.reload()
   await showSettings()
   const scopes = page.getByLabel('Runme OAuth scopes', { exact: true })
@@ -102,7 +106,9 @@ try {
     .click()
   check(
     'Saving authentication settings preserves local startup configuration',
-    await page.evaluate('window.app.isLocalConfigPreferredOnLoad()')
+    await page.evaluate(() =>
+      localStorage.getItem('runme/app-config/prefer-local') === 'true'
+    )
   )
   for (let reload = 1; reload <= 2; reload++) {
     await page.reload()
@@ -121,7 +127,9 @@ try {
     'screenshot',
     join(output, 'scenario-authentication-settings-reloaded.png')
   )
-  await page.evaluate('window.app.enableConfigOverridesOnLoad()')
+  await page.evaluate(() =>
+    localStorage.setItem('runme/app-config/prefer-local', 'false')
+  )
   await page.reload()
   await showSettings()
   check(
