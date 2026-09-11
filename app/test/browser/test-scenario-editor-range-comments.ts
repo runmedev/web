@@ -311,7 +311,14 @@ try {
   const heading = rendered.locator('h1')
   const box = await heading.evaluate((element) => {
     const range = document.createRange()
-    range.selectNodeContents(element)
+    const walker = document.createTreeWalker(element, NodeFilter.SHOW_TEXT)
+    let text = walker.nextNode()
+    while (text && !text.textContent?.includes('Changed'))
+      text = walker.nextNode()
+    if (!text) throw new Error('Rendered heading text is missing')
+    const start = text.textContent!.indexOf('Changed')
+    range.setStart(text, start)
+    range.setEnd(text, start + 'Changed'.length)
     const rect = range.getBoundingClientRect()
     return { x: rect.x, y: rect.y + rect.height / 2, width: rect.width }
   })
@@ -319,7 +326,7 @@ try {
   await inputPage.mouse.down()
   await inputPage.mouse.move(box.x + box.width - 1, box.y, { steps: 12 })
   await inputPage.mouse.up()
-  await heading.click({ button: 'right' })
+  await inputPage.mouse.click(box.x + box.width / 2, box.y, { button: 'right' })
   await inputPage
     .getByRole('button', { name: 'Comment on selected text', exact: true })
     .click()
@@ -345,7 +352,7 @@ try {
     const active = [...(CSS.highlights?.get('runme-comment-range-active') ?? [])];
     const fallback = [...root.querySelectorAll('[data-runme-comment-highlight=active]')];
     return [...active.map(range => range.toString()), ...fallback.map(el => el.textContent)]
-      .includes('Changed after opening comment draft') &&
+      .includes('Changed') &&
       !document.querySelector('#markdown-action-editor-range-1 .monaco-editor');
   `)
   )
