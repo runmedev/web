@@ -648,9 +648,7 @@ describe('Actions tabs', () => {
         'Whole document feedback'
       )
       heads = ['later-edit']
-      fireEvent.click(
-        screen.getByRole('button', { name: 'Comment' })
-      )
+      fireEvent.click(screen.getByRole('button', { name: 'Comment' }))
       await waitFor(() =>
         expect(addAnchoredComment).toHaveBeenCalledWith(
           uri,
@@ -668,6 +666,74 @@ describe('Actions tabs', () => {
       expect(checkpointNotebookRevision).toHaveBeenCalledTimes(1)
     }
   )
+
+  it('allows legacy Drive cell comments when notebook edits are read-only', async () => {
+    const uri = 'local://file/legacy-comment'
+    const remoteUri = 'https://drive.google.com/file/d/legacy-comment/view'
+    const cell = create(parser_pb.CellSchema, {
+      refId: 'legacy-cell',
+      kind: parser_pb.CellKind.MARKUP,
+      languageId: 'markdown',
+      value: 'Read-only notebook content',
+    })
+    const stub = new StubCellData(cell)
+    const localComments = {
+      list: vi.fn(async () => []),
+      listPendingRecords: vi.fn(async () => []),
+      subscribe: vi.fn(() => () => {}),
+      getDraft: vi.fn(async () => null),
+      saveDraft: vi.fn(async () => undefined),
+      deleteDraft: vi.fn(async () => undefined),
+      saveDesiredComment: vi.fn(async () => undefined),
+      reconcile: vi.fn(async () => undefined),
+    }
+    appState.setLocalComments(localComments as never)
+    appState.setDriveNotebookStore({
+      listComments: vi.fn(async () => []),
+    } as never)
+    contextMocks.notebookStore = {
+      getMetadata: vi.fn(async () => ({ remoteUri })),
+      getSyncState: vi.fn(async () => ({
+        status: 'synced',
+        localUri: uri,
+        remoteId: remoteUri,
+      })),
+      rename: vi.fn(),
+      subscribeSync: vi.fn(() => () => {}),
+    }
+    contextMocks.currentDoc = uri
+    contextMocks.workspaceDocuments = [
+      { uri, title: 'legacy.ipynb', state: 'loaded', readOnly: true },
+    ]
+    contextMocks.notebookSnapshots.set(uri, {
+      uri,
+      loaded: true,
+      readOnly: true,
+      notebook: create(parser_pb.NotebookSchema, { cells: [cell] }),
+    })
+    contextMocks.getNotebookData.mockReturnValue({
+      getCell: () => stub,
+      getNotebook: () => ({ cells: [cell] }),
+    })
+    commentsPanelMocks.commentsPanelOpen = true
+    render(<Actions />)
+    const button = await screen.findByRole('button', { name: 'Add comment' })
+    await waitFor(() =>
+      expect((button as HTMLButtonElement).disabled).toBe(false)
+    )
+    fireEvent.click(button)
+    const input = await screen.findByRole('textbox', { name: 'New comment' })
+    fireEvent.change(input, { target: { value: 'Drive feedback' } })
+    fireEvent.click(screen.getByRole('button', { name: 'Comment' }))
+    await waitFor(() =>
+      expect(localComments.saveDesiredComment).toHaveBeenCalledWith({
+        notebookUri: uri,
+        remoteUri,
+        content: 'Drive feedback',
+        target: { type: 'cell', cellId: 'legacy-cell' },
+      })
+    )
+  })
 
   it('keeps the complete .runme comment lifecycle in the operation log', async () => {
     const uri = 'local://file/comments.runme'

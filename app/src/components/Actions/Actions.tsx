@@ -3183,7 +3183,7 @@ function NotebookTabContent({
   )
   const startCommentDraft = useCallback(
     (target: CommentDraftTarget) => {
-      if (readOnly || commentsBusy) return
+      if ((operationLogComments && readOnly) || commentsBusy) return
       if (target.type === 'document') {
         if (!operationLogComments || !notebookData || !store) return
         // Freeze the whole-document target when the composer opens, so later
@@ -3356,7 +3356,8 @@ function NotebookTabContent({
 
   const handleCreateComment = useCallback(
     async (target: CommentDraftTarget, content: string) => {
-      if (readOnly) throw new Error('This notebook is read-only.')
+      if (operationLogComments && readOnly)
+        throw new Error('This notebook is read-only.')
       if (operationLogComments && store) {
         setCommentsBusy(true)
         try {
