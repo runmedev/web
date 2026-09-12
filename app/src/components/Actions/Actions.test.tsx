@@ -649,7 +649,7 @@ describe('Actions tabs', () => {
       )
       heads = ['later-edit']
       fireEvent.click(
-        screen.getByRole('button', { name: 'Comment', exact: true })
+        screen.getByRole('button', { name: 'Comment' })
       )
       await waitFor(() =>
         expect(addAnchoredComment).toHaveBeenCalledWith(

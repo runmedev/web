@@ -66,7 +66,7 @@ describe('NotebookCommentsPanel', () => {
       target: { value: 'Document feedback' },
     })
     fireEvent.click(
-      screen.getByRole('button', { name: 'Comment', exact: true })
+      screen.getByRole('button', { name: 'Comment' })
     )
     await waitFor(() =>
       expect(onCreateComment).toHaveBeenCalledWith(target, 'Document feedback')
