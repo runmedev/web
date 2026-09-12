@@ -91,6 +91,7 @@ const DEFAULT_SANDBOX_ALLOWED_METHODS = [
   'notebookDiff.restoreDeletedCell',
   'notebookDiff.restoreAllDeletedCells',
   'notebookDiff.help',
+  'app.getVersion',
   'app.getSessionId',
   'app.getSessionID',
   'app.startGoogleDriveOAuth',
@@ -460,6 +461,7 @@ export function buildSandboxSrcDoc(options: {
           help: () => hostCall("notebookDiff.help", []),
         };
         const app = {
+          getVersion: () => hostCall("app.getVersion", []),
           getSessionId: () => hostCall("app.getSessionId", []),
           getSessionID: () => hostCall("app.getSessionID", []),
           startGoogleDriveOAuth: (options) => hostCall("app.startGoogleDriveOAuth", [options]),
@@ -576,6 +578,7 @@ export function buildSandboxSrcDoc(options: {
           consoleProxy.log("- notebookDiff.listConflictCells({ target?, localUri? })");
           consoleProxy.log("- notebookDiff.restoreDeletedCell({ target?, localUri?, refId?, rowId? })");
           consoleProxy.log("- notebookDiff.restoreAllDeletedCells({ target?, localUri? })");
+          consoleProxy.log("- await app.getVersion() (loaded app build metadata)");
           consoleProxy.log("- await app.getSessionId()");
           consoleProxy.log("- await app.getSessionID()");
           consoleProxy.log("- await app.startGoogleDriveOAuth({ mode?, prompt? })");

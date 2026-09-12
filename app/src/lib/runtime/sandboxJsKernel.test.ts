@@ -574,6 +574,13 @@ class TestableSandboxJSKernel extends SandboxJSKernel {
 }
 
 describe('SandboxJSKernel', () => {
+  it('exposes app.getVersion in sandbox helpers, discovery, and the allowlist', () => {
+    const srcDoc = buildSandboxSrcDoc({ enableOpfs: false, enableNet: false })
+    expect(srcDoc).toContain('getVersion: () => hostCall("app.getVersion", [])')
+    expect(srcDoc).toContain('await app.getVersion() (loaded app build metadata)')
+    expect(CODE_MODE_SANDBOX_ALLOWED_METHODS).toContain('app.getVersion')
+  })
+
   it('passes the top-level embed helper into the dynamic runner', () => {
     const srcDoc = buildSandboxSrcDoc({
       enableOpfs: true,
