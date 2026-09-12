@@ -272,6 +272,7 @@ function parseAgentEvalString(raw: string): string {
 
 mkdirSync(OUTPUT_DIR, { recursive: true });
 for (const file of [
+  "scenario-appkernel-version.json",
   "scenario-appkernel-javascript-01-initial.png",
   "scenario-appkernel-javascript-02-after-seed.txt",
   "scenario-appkernel-javascript-03-opened.txt",
@@ -310,6 +311,7 @@ try {
   const source = `(async () => {
     const { createCodeModeExecutor } = await import('/src/lib/runtime/codeModeExecutor.ts');
     const { runmeVersionInfo } = await import('/src/lib/versionInfo.ts');
+    const expected = JSON.stringify(runmeVersionInfo);
     const versions = {};
     for (const mode of ['sandbox', 'browser']) {
       const executor = createCodeModeExecutor({ mode, resolveNotebook: () => null });
@@ -319,11 +321,14 @@ try {
       });
       if (result.exitCode !== 0) throw new Error(result.output);
       versions[mode] = JSON.parse(result.output);
-      if (JSON.stringify(versions[mode]) !== JSON.stringify(runmeVersionInfo)) {
+      if (JSON.stringify(versions[mode]) !== expected) {
         throw new Error(mode + ' returned metadata different from the loaded bundle');
       }
     }
-    return JSON.stringify({ expected: runmeVersionInfo, versions });
+    if (JSON.stringify(runmeVersionInfo) !== expected) {
+      throw new Error('Caller mutation changed the loaded bundle metadata');
+    }
+    return JSON.stringify({ expected: JSON.parse(expected), versions });
   })()`;
   const raw = runOrThrow(`agent-browser eval ${shellQuote(source)}`).trim();
   const parsed = JSON.parse(raw);
