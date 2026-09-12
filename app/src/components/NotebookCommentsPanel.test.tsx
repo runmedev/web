@@ -50,6 +50,30 @@ function renderPanel(overrides = {}) {
 }
 
 describe('NotebookCommentsPanel', () => {
+  it('composes a document comment without a cell target or selected text', async () => {
+    const target = { type: 'document' as const }
+    const onCreateComment = vi.fn(async () => undefined)
+    const onSelectTarget = vi.fn()
+    renderPanel({
+      storage: 'runme-operation-log',
+      draftTarget: target,
+      onCreateComment,
+      onSelectTarget,
+    })
+    expect(screen.getByText('New comment on notebook')).toBeTruthy()
+    expect(document.querySelector('blockquote')).toBeNull()
+    fireEvent.change(screen.getByRole('textbox', { name: 'New comment' }), {
+      target: { value: 'Document feedback' },
+    })
+    fireEvent.click(
+      screen.getByRole('button', { name: 'Comment' })
+    )
+    await waitFor(() =>
+      expect(onCreateComment).toHaveBeenCalledWith(target, 'Document feedback')
+    )
+    expect(onSelectTarget).not.toHaveBeenCalled()
+  })
+
   it('keeps one native conversation with all historical locations and Enter-to-send', async () => {
     const anchor = {
       kind: 'cell',

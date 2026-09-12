@@ -3183,7 +3183,29 @@ function NotebookTabContent({
   )
   const startCommentDraft = useCallback(
     (target: CommentDraftTarget) => {
-      if (operationLogComments && notebookData && store) {
+      if ((operationLogComments && readOnly) || commentsBusy) return
+      if (target.type === 'document') {
+        if (!operationLogComments || !notebookData || !store) return
+        // Freeze the whole-document target when the composer opens, so later
+        // edits cannot silently move the comment to a different revision.
+        const binding = captureCommentSnapshot(notebookData).then(
+          async (heads): Promise<Anchor[]> => [
+            {
+              kind: 'notebook',
+              version: await store.checkpointNotebookRevision(docUri, {
+                snapshot_heads: heads,
+              }),
+            },
+          ]
+        )
+        draftAnchors.current.set(
+          target,
+          binding.then(
+            (anchors) => ({ anchors }),
+            (error) => ({ error })
+          )
+        )
+      } else if (operationLogComments && notebookData && store) {
         // Capture source and mapping synchronously, before the flush yields to
         // another edit or a remote sync. The store verifies that same source
         // against the captured causal revision before creating typed anchors.
@@ -3255,10 +3277,11 @@ function NotebookTabContent({
       openCommentsPanel()
       setDraftTarget(target)
       setDraftContent('')
-      focusCommentCell(
-        target.cellId,
-        target.type === 'cell-source' ? 'editor' : undefined
-      )
+      if (target.type !== 'document')
+        focusCommentCell(
+          target.cellId,
+          target.type === 'cell-source' ? 'editor' : undefined
+        )
       setActiveCommentRange(
         target.type === 'cell-text'
           ? { cellId: target.cellId, ...target.selectors[0] }
@@ -3281,6 +3304,8 @@ function NotebookTabContent({
     },
     [
       commentsRemoteUri,
+      commentsBusy,
+      readOnly,
       docUri,
       focusCommentCell,
       openCommentsPanel,
@@ -3331,6 +3356,8 @@ function NotebookTabContent({
 
   const handleCreateComment = useCallback(
     async (target: CommentDraftTarget, content: string) => {
+      if (operationLogComments && readOnly)
+        throw new Error('This notebook is read-only.')
       if (operationLogComments && store) {
         setCommentsBusy(true)
         try {
@@ -3413,6 +3440,7 @@ function NotebookTabContent({
     },
     [
       cellDatas,
+      readOnly,
       getCommentAuthor,
       notebookData,
       commentsRemoteUri,
@@ -3908,7 +3936,22 @@ function NotebookTabContent({
             </div>
           ) : null}
           {entry.operationLog && store && (
-            <div className="mb-3 flex justify-end">
+            <div
+              id="notebook-comment-review-actions"
+              className="mb-3 flex items-center justify-end gap-2"
+            >
+              {operationLogComments && (
+                <button
+                  type="button"
+                  className="inline-flex h-7 w-7 items-center justify-center rounded-nb-sm text-nb-text-muted hover:bg-nb-accent-muted hover:text-nb-accent disabled:opacity-40"
+                  aria-label="Comment on notebook"
+                  title="Comment on notebook"
+                  disabled={readOnly || commentsBusy || Boolean(draftTarget)}
+                  onClick={() => startCommentDraft({ type: 'document' })}
+                >
+                  <ChatBubbleLeftIcon className="h-5 w-5" />
+                </button>
+              )}
               <Button size="1" variant="soft" onClick={openSuggestionView}>
                 Review suggestions
               </Button>

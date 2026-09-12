@@ -360,6 +360,60 @@ try {
     'screenshot',
     join(output, 'scenario-editor-range-comments-rendered.png')
   )
+  // Whole-document feedback uses the same composer but has no cell/range target.
+  const documentButton = inputPage.getByRole('button', {
+    name: 'Comment on notebook',
+    exact: true,
+  })
+  await documentButton.click()
+  await inputPage
+    .getByText('New comment on notebook', { exact: true })
+    .waitFor({ state: 'visible' })
+  check(
+    'Document comment button is left of Review suggestions',
+    await evaluate(`
+    const toolbar = document.getElementById('notebook-comment-review-actions');
+    const buttons = [...toolbar.querySelectorAll('button')];
+    return buttons[0].getAttribute('aria-label') === 'Comment on notebook' &&
+      buttons[1].textContent.includes('Review suggestions') &&
+      buttons[0].getBoundingClientRect().right <= buttons[1].getBoundingClientRect().left;
+  `)
+  )
+  check(
+    'Whole-document composer has no selected-text quote',
+    (await inputPage
+      .locator('[data-comment-panel-item="draft"] blockquote')
+      .count()) === 0
+  )
+  browser(
+    'screenshot',
+    join(output, 'scenario-whole-document-comment-draft.png')
+  )
+  await submit('Whole notebook feedback')
+  await inputPage.reload()
+  await inputPage
+    .getByText('Whole notebook feedback', { exact: true })
+    .waitFor({ state: 'visible' })
+  const documentComment = await evaluate(`
+    const comments = await window.app.localNotebooks.listOperationLogComments(${JSON.stringify(fixture.uri)});
+    const comment = comments.find(c => c.content === 'Whole notebook feedback');
+    return { content: comment.content, view: JSON.parse(comment.anchor).runme };
+  `)
+  check(
+    'Whole-document comment survives reload with only a revision-bound notebook anchor',
+    documentComment.view.anchors.length === 1 &&
+      documentComment.view.anchors[0].kind === 'notebook' &&
+      documentComment.view.anchors[0].version.kind === 'revision' &&
+      !documentComment.view.anchors[0].cell_id
+  )
+  writeFileSync(
+    join(output, 'scenario-whole-document-comment.json'),
+    JSON.stringify(documentComment, null, 2)
+  )
+  browser(
+    'screenshot',
+    join(output, 'scenario-whole-document-comment-saved.png')
+  )
 } catch (error) {
   failed++
   console.log(`[FAIL] ${error}`)

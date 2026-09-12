@@ -362,8 +362,13 @@ export class LocalComments extends Dexie {
   async saveDesiredComment(
     input: SaveDesiredCommentInput
   ): Promise<DesiredCommentRecord> {
-    if (input.target.type === 'cell-source') {
-      throw new Error('Source selection comments require a .runme notebook.')
+    if (
+      input.target.type === 'cell-source' ||
+      input.target.type === 'document'
+    ) {
+      throw new Error(
+        'Source selection and whole-document comments require a .runme notebook.'
+      )
     }
     await this.draftWriteTails.get(input.notebookUri)?.catch(() => undefined)
     const timestamp = nowIsoString()
