@@ -32,6 +32,14 @@ export function normalizeRunmeVersionInfo(
 
 export const runmeVersionInfo = normalizeRunmeVersionInfo(import.meta.env)
 
+/** Return a fresh snapshot of the loaded app bundle's build metadata.
+ * Never fetch a deployment manifest: a running tab may still use an older build.
+ * Unknown fields remain null, matching the Version Information window.
+ */
+export function getRunmeVersionInfo(): RunmeVersionInfo {
+  return { ...runmeVersionInfo }
+}
+
 export function hasRunmeVersionInfo(info: RunmeVersionInfo): boolean {
   return VERSION_YAML_KEYS.some((key) => Boolean(info[key]))
 }

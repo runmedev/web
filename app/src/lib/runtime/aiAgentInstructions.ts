@@ -187,6 +187,8 @@ console.log(await app.getSessionID())
 
 Continue only when the printed value matches the selected tab's \`session\` query parameter. If they differ, do not mutate a notebook in that tab.
 
+To identify the app build loaded in that tab, use \`console.log(await app.getVersion())\`. It returns buildDate, webRepo, webBranch, webCommit, and bucket; unavailable values are null.
+
 ## Open or focus notebooks deliberately
 
 - Treat a supplied Runme gateway URL, Google Drive URL, or Markdown-linked notebook URL as a direct notebook reference. Pass it directly to \`notebooks.open(reference)\` for background work or \`notebooks.show(reference)\` for a visible-open request; do not search for the notebook by name.

@@ -304,6 +304,36 @@ runWithRetry(`agent-browser record restart ${MOVIE_PATH}`);
 run("agent-browser wait 3500");
 run(`agent-browser screenshot ${join(OUTPUT_DIR, "scenario-appkernel-javascript-01-initial.png")}`);
 
+// Exercise the real sandbox iframe and host bridge used by WebMCP, without
+// requiring an open notebook, credentials, or a runner connection.
+try {
+  const source = `(async () => {
+    const { createCodeModeExecutor } = await import('/src/lib/runtime/codeModeExecutor.ts');
+    const { runmeVersionInfo } = await import('/src/lib/versionInfo.ts');
+    const versions = {};
+    for (const mode of ['sandbox', 'browser']) {
+      const executor = createCodeModeExecutor({ mode, resolveNotebook: () => null });
+      const result = await executor.execute({
+        source: 'webmcp',
+        code: 'const v = await app.getVersion(); v.webCommit = "caller-change"; console.log(JSON.stringify(await app.getVersion()));',
+      });
+      if (result.exitCode !== 0) throw new Error(result.output);
+      versions[mode] = JSON.parse(result.output);
+      if (JSON.stringify(versions[mode]) !== JSON.stringify(runmeVersionInfo)) {
+        throw new Error(mode + ' returned metadata different from the loaded bundle');
+      }
+    }
+    return JSON.stringify({ expected: runmeVersionInfo, versions });
+  })()`;
+  const raw = runOrThrow(`agent-browser eval ${shellQuote(source)}`).trim();
+  const parsed = JSON.parse(raw);
+  const result = typeof parsed === "string" ? JSON.parse(parsed) : parsed;
+  writeArtifact("scenario-appkernel-version.json", JSON.stringify(result, null, 2));
+  pass("Sandbox and browser getVersion report loaded build metadata without a notebook and resist caller mutation");
+} catch (error) {
+  fail(`App version probe: ${String(error)}`);
+}
+
 // Clear runner config so AppKernel execution proves it is not using a remote websocket runner.
 run(
   `agent-browser eval "(async () => {

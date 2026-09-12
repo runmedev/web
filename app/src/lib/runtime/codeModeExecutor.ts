@@ -428,6 +428,8 @@ async function handleSandboxAppKernelBridgeCall({
         cellCount: notebook.getNotebook().cells.length,
       }
     }
+    case 'app.getVersion':
+      return globals.app.getVersion()
     case 'app.getSessionId':
       return getClaimedSessionId()
     case 'app.getSessionID':

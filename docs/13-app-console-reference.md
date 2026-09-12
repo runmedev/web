@@ -327,6 +327,20 @@ corpora, shared-drive, ordering, pagination, spaces, and fields parameters.
 Include `id` and `mimeType` in `fields` when the returned file should have a
 Runme-ready `uri`. Continue with `result.nextPageToken` when it is present.
 
+App version (available in sandbox code, browser JS, and WebMCP `ExecuteCode`):
+
+```js
+const version = await app.getVersion()
+console.log(version)
+// { buildDate, webRepo, webBranch, webCommit, bucket }
+```
+
+The result identifies the app bundle currently loaded in this tab, using the
+same metadata as the Version Information window. Each field is a string or
+`null` when unavailable (for example, in an unversioned local build). It does
+not fetch the latest deployment or report the runner/backend version. The
+returned object is a copy; modifying it does not change the app's metadata.
+
 App config:
 
 ```js

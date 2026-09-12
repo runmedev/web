@@ -163,3 +163,14 @@ transport.
 
 - `docs-dev/design/20260224_appkernel.md`
 - `docs-dev/design/20260224_drive.md`
+
+## Loaded app version API
+
+Before notebook execution, the browser driver runs `app.getVersion()` through
+both the real sandbox iframe and browser executor with no selected notebook.
+The result must match the loaded bundle’s `runmeVersionInfo`, including nulls
+in unversioned builds. Mutating one result must not change later results.
+`scenario-appkernel-version.json` records the expected and returned metadata.
+The version unit tests separately cover populated build fields and normalization.
+This API must not fetch deployment manifests: an already-open tab may run an
+older bundle than the latest deployment.

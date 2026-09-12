@@ -495,3 +495,16 @@ The reread stays inside the `NOTEBOOK_UPDATE_FAILED` branch where `error` is in
 scope. Do not assume the whole update rolled back. `notebooks.update` reports
 which operations were applied; it does not make multi-operation updates fully
 transactional.
+
+## Inspect the running app version
+
+Use `ExecuteCode` with sandbox JavaScript to identify the build in the connected tab:
+
+```js
+console.log(await app.getVersion())
+```
+
+This returns `{ buildDate, webRepo, webBranch, webCommit, bucket }` from the
+loaded app bundle. Values are strings, or `null` if the build omitted them.
+No notebook or authentication is required. It does not fetch deployment metadata,
+so an older open tab correctly reports its own build until reloaded.

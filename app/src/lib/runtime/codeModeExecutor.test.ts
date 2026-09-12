@@ -5,6 +5,7 @@ import { afterEach, describe, expect, it, vi } from 'vitest'
 import { parser_pb } from '../../runme/client'
 import { appLogger } from '../logging/runtime'
 import { __resetTabIdForTests, getClaimedSessionId } from '../tabIdentity'
+import { getRunmeVersionInfo } from '../versionInfo'
 import { appState } from './AppState'
 import {
   createCodeModeExecutor,
@@ -26,6 +27,44 @@ const createNotebook = () => {
 }
 
 describe('codeModeExecutor', () => {
+  it('reports the app version in browser mode without an open notebook', async () => {
+    const executor = createCodeModeExecutor({
+      mode: 'browser',
+      resolveNotebook: () => null,
+    })
+    const result = await executor.execute({
+      source: 'webmcp',
+      code: 'console.log(JSON.stringify(await app.getVersion()))',
+    })
+    expect(result.exitCode).toBe(0)
+    expect(JSON.parse(result.output)).toEqual(getRunmeVersionInfo())
+  })
+
+  it('dispatches sandbox version requests without an open notebook', async () => {
+    let version: unknown
+    vi.spyOn(SandboxJSKernel.prototype, 'run').mockImplementation(
+      async function (this: SandboxJSKernel) {
+        const bridge = (
+          this as unknown as {
+            bridge: {
+              call: (method: string, args: unknown[]) => Promise<unknown>
+            }
+          }
+        ).bridge
+        version = await bridge.call('app.getVersion', [])
+      }
+    )
+    const executor = createCodeModeExecutor({
+      mode: 'sandbox',
+      resolveNotebook: () => null,
+    })
+    await executor.execute({
+      source: 'webmcp',
+      code: 'console.log(await app.getVersion())',
+    })
+    expect(version).toEqual(getRunmeVersionInfo())
+  })
+
   afterEach(() => {
     vi.restoreAllMocks()
     vi.unstubAllGlobals()

@@ -81,6 +81,7 @@ import {
   showTourStep,
 } from '../tourGuide'
 import { type PanelKey, tourUiController } from '../tourUiController'
+import { getRunmeVersionInfo } from '../versionInfo'
 import { appState } from './AppState'
 import type {
   AppKernelNetworkApi,
@@ -1689,6 +1690,7 @@ export function createAppJsGlobals({
       oidc: oidcConfigManager,
     },
     app: {
+      getVersion: getRunmeVersionInfo,
       getSessionId: () => getClaimedSessionId(),
       getSessionID: () => getClaimedSessionId(),
       getDefaultConfigUrl: () => getDefaultAppConfigUrl(),
@@ -1785,6 +1787,7 @@ export function createAppJsGlobals({
         '  credentials     - Shorthand for Google and OIDC credential managers',
         '',
         'High-value commands:',
+        '  await app.getVersion()',
         '  await app.getSessionId()',
         '  await app.getSessionID()',
         '  tour.show({ target: "left-nav.google-drive", message: "Click here to connect Google Drive." })',
