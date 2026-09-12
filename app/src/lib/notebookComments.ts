@@ -63,6 +63,7 @@ export type SourceSelectionDraft = {
 }
 
 export type CommentDraftTarget =
+  | { type: 'document' }
   | SourceSelectionDraft
   | { type: 'cell'; cellId: string }
   | RenderedMarkdownSelectionDraft

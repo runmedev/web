@@ -61,3 +61,19 @@ the JSON artifact records persisted anchors and the movie shows the walkthrough.
 Unit tests cover live model capture, empty selections, callback replacement and
 action disposal. Store-backed component tests cover all three selection surfaces
 (rendered Markdown, code, Markdown source), pending saves, and later sync edits.
+
+## Whole-document comments
+
+The comment bubble immediately left of **Review suggestions** opens a **New
+comment on notebook** draft in `.runme` notebooks, including empty notebooks.
+It uses a `notebook` anchor bound to the revision visible when the draft opens;
+it must never infer a cell or range from focus or selection. The button is
+disabled for read-only notebooks, while submitting, and while another draft is
+open so a repeated click cannot discard text. Submit also checks writability.
+
+The browser journey verifies button order, the absence of a selected-text quote,
+and a durable notebook anchor after reload. Evidence is in
+`scenario-whole-document-comment-{draft,saved}.png` and
+`scenario-whole-document-comment.json`. Component tests cover empty notebooks,
+read-only gating, draft preservation, and retaining the original revision after
+later edits. Existing cell and range workflows remain covered by the same CUJ.

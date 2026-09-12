@@ -480,9 +480,12 @@ export function NotebookCommentsPanel({
                     >
                       <label className="block text-xs font-medium text-nb-text-muted">
                         New comment on{' '}
-                        {cellLabels.get(item.draftTarget.cellId) ?? 'cell'}
+                        {item.draftTarget.type === 'document'
+                          ? 'notebook'
+                          : (cellLabels.get(item.draftTarget.cellId) ?? 'cell')}
                       </label>
-                      {item.draftTarget.type !== 'cell' && (
+                      {(item.draftTarget.type === 'cell-source' ||
+                        item.draftTarget.type === 'cell-text') && (
                         <blockquote
                           className={`mt-2 border-l-2 border-nb-accent pl-2 text-xs text-nb-text-muted${
                             item.draftTarget.type === 'cell-source'
@@ -499,6 +502,7 @@ export function NotebookCommentsPanel({
                         </blockquote>
                       )}
                       <textarea
+                        aria-label="New comment"
                         className="mt-2 h-24 w-full resize-none rounded-nb-sm border border-nb-border bg-white p-2 text-sm text-nb-text outline-none focus:border-nb-accent"
                         value={draft}
                         disabled={busy}
@@ -891,6 +895,21 @@ function sortCommentPanelItems(
 
   if (!draftTarget) {
     return items
+  }
+
+  // Document drafts have no cell target and stay visible above cell threads.
+  if (draftTarget.type === 'document') {
+    return [
+      {
+        type: 'thread',
+        key: 'document-draft',
+        cellId: null,
+        orphaned: false,
+        threads: [],
+        draftTarget,
+      },
+      ...items,
+    ]
   }
 
   const draftKey =
