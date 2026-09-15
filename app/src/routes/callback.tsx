@@ -1,6 +1,7 @@
 import { useEffect, useState } from 'react'
 import { useNavigate } from 'react-router-dom'
 
+import { getOidcReturnRoute } from '../auth/oidcNavigation'
 import { relayOidcWindowCallback } from '../auth/oidcWindow'
 import { getBrowserAdapter } from '../browserAdapter.client'
 import { APP_ROUTE_PATHS } from '../lib/appBase'
@@ -48,12 +49,7 @@ export default function Callback() {
         // Navigate back to the main page after handling the callback
         const returnTo = window.sessionStorage.getItem('oidc_login_return')
         window.sessionStorage.removeItem('oidc_login_return')
-        navigate(
-          returnTo?.startsWith('/') && !returnTo.startsWith('//')
-            ? returnTo
-            : APP_ROUTE_PATHS.home,
-          { replace: true }
-        )
+        navigate(getOidcReturnRoute(returnTo), { replace: true })
       })
       .catch((error) => {
         if (controller.signal.aborted) return

@@ -43,3 +43,8 @@ Unit/component tests cover signed implicit validation, window-origin and source
 isolation, duplicate responses, denial/cancellation/timeouts, a cancelled login
 finishing discovery late, persisted choices, independence from Drive, right-click
 without auth mutation, malformed claims, expiry transitions and logout updates.
+
+The callback route also has a MemoryRouter regression with a `/runme` basename.
+Stored browser return paths must be made relative to the router basename while
+retaining the session query/hash; otherwise React Router doubles the prefix.
+External origins and paths outside the app base are rejected.
