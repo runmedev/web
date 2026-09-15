@@ -87,6 +87,7 @@ import {
 import {
   isDriveLinkStatusUri,
   isDriveSyncStatusUri,
+  isOidcStatusUri,
   isDocumentationDocumentUri,
   isAppConsoleUri,
   isExcalidrawWorkspaceDocument,
@@ -144,6 +145,7 @@ import {
 import type { Anchor } from '../../lib/operationLog/records'
 import type { RenderedMarkdownCommentRange } from '../../lib/markdown/renderedMarkdownCommentHighlights'
 import DriveLinkStatusTab from '../DriveLinkStatusTab'
+import OidcStatusTab from '../OidcStatusTab'
 import DriveSyncStatusTab from '../DriveSyncStatusTab'
 import RunnerStatusTab from '../RunnerStatusTab'
 import KernelStatusTab from '../KernelStatusTab'
@@ -4348,6 +4350,8 @@ function renderWorkspaceDocument({
   if (isDriveSyncStatusUri(document.uri)) {
     return <DriveSyncStatusTab />
   }
+
+  if (isOidcStatusUri(document.uri)) return <OidcStatusTab />
 
   if (isVersionInfoUri(document.uri)) {
     return <VersionInfoTab />

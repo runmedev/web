@@ -1,7 +1,11 @@
 import YAML from 'yaml'
 
 import type { GoogleServiceAccountCredentials } from '../auth/googleServiceAccount'
-import type { OidcConfig } from '../auth/oidcConfig'
+import type {
+  OidcAuthFlow,
+  OidcAuthUxMode,
+  OidcConfig,
+} from '../auth/oidcConfig'
 import { OIDC_STORAGE_KEY, oidcConfigManager } from '../auth/oidcConfig'
 import { agentEndpointManager } from './agentEndpointManager'
 import { getOidcCallbackUrl, resolveAppUrl } from './appBase'
@@ -41,6 +45,8 @@ export type AppConfigApplyOptions = {
 }
 
 export interface OidcGenericRuntimeConfig {
+  authFlow?: OidcAuthFlow
+  authUxMode?: OidcAuthUxMode
   clientId: string
   clientSecret: string
   discoveryUrl: string
@@ -425,6 +431,16 @@ export class RuntimeAppConfigSchema {
         issuer: pickString(oidcGeneric, ['issuer']),
         redirectUrl: pickString(oidcGeneric, ['redirectUrl', 'redirectURL']),
         scopes: asStringArray(oidcGeneric.scopes),
+        authFlow: parseOidcChoice(oidcGeneric.authFlow, [
+          'auto',
+          'pkce',
+          'implicit',
+        ]),
+        authUxMode: parseOidcChoice(oidcGeneric.authUxMode, [
+          'redirect',
+          'popup',
+          'new_tab',
+        ]),
       }
     }
     if (oidcGoogle) {
@@ -547,6 +563,10 @@ export function applyAppConfig(
     }
     if (redirectUri) {
       oidcConfig.redirectUri = redirectUri
+    }
+    if (hasOidcBlock) {
+      oidcConfig.authFlow = genericOidcConfig.authFlow ?? 'auto'
+      oidcConfig.authUxMode = genericOidcConfig.authUxMode ?? 'redirect'
     }
     if (oidcScope) {
       oidcConfig.scope = oidcScope
@@ -752,4 +772,15 @@ export async function maybeSetAppConfig(): Promise<AppliedAppConfig | null> {
     })
     return null
   }
+}
+
+/** Reject typos rather than silently launching a different authentication flow. */
+function parseOidcChoice<T extends string>(
+  value: unknown,
+  choices: T[]
+): T | undefined {
+  if (value === undefined) return undefined
+  if (typeof value !== 'string' || !choices.includes(value as T))
+    throw new Error('Unsupported Runme OAuth option')
+  return value as T
 }

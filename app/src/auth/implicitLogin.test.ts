@@ -6,7 +6,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import localAppConfigYaml from '../../assets/configs/app-configs.yaml?raw'
 
 describe('secret-free Google OIDC login', () => {
-  let login: typeof import('./googleImplicitLogin')
+  let login: typeof import('./implicitLogin')
   let adapter: import('../browserAdapter.client').BrowserAuthAdapter
   let config: import('./oidcConfig').OidcConfig
   let privateKey: CryptoKey
@@ -33,7 +33,7 @@ describe('secret-free Google OIDC login', () => {
       localAppConfigYaml,
       'http://localhost/configs/app-configs.yaml'
     ).oidc!
-    login = await import('./googleImplicitLogin')
+    login = await import('./implicitLogin')
     adapter = (await import('../browserAdapter.client')).getBrowserAdapter()
   })
 
@@ -47,7 +47,7 @@ describe('secret-free Google OIDC login', () => {
     claims: Record<string, unknown> = {},
     parameters: Record<string, string> = {}
   ) {
-    const request = new URL(login.beginGoogleImplicitLogin(config))
+    const request = new URL(login.beginImplicitLogin(config))
     const digest = await crypto.subtle.digest(
       'SHA-256',
       new TextEncoder().encode('access-token')
@@ -83,8 +83,8 @@ describe('secret-free Google OIDC login', () => {
 
   it('routes the shipped configuration to a secret-free Google browser login', async () => {
     let authorizationUrl = ''
-    const begin = login.beginGoogleImplicitLogin
-    vi.spyOn(login, 'beginGoogleImplicitLogin').mockImplementation(
+    const begin = login.beginImplicitLogin
+    vi.spyOn(login, 'beginImplicitLogin').mockImplementation(
       (c, hint) => {
         authorizationUrl = begin(c, hint)
         return window.location.href // Avoid navigating jsdom away from the test.
@@ -100,13 +100,13 @@ describe('secret-free Google OIDC login', () => {
     expect(request.searchParams.has('client_secret')).toBe(false)
     expect(fetchMock).not.toHaveBeenCalled()
     expect(
-      login.usesGoogleImplicitLogin({
+      login.usesImplicitLogin({
         ...config,
         discoveryUrl: 'https://issuer.example/discovery',
       })
     ).toBe(false)
     expect(
-      login.usesGoogleImplicitLogin({
+      login.usesImplicitLogin({
         ...config,
         clientSecret: 'private-config',
       })
@@ -130,7 +130,7 @@ describe('secret-free Google OIDC login', () => {
       Date.now() + 1800_000
     )
     expect(window.location.hash).toBe('')
-    expect(login.hasGoogleImplicitLogin()).toBe(false)
+    expect(login.hasImplicitLogin()).toBe(false)
     expect(fetchMock).toHaveBeenCalledTimes(1)
     await adapter.refresh()
     expect(fetchMock).toHaveBeenCalledTimes(1)
@@ -158,7 +158,7 @@ describe('secret-free Google OIDC login', () => {
       await expect(adapter.handleCallback()).rejects.toThrow()
       expect(adapter.simpleAuth).toBeNull()
       expect(window.location.hash).toBe('')
-      expect(login.hasGoogleImplicitLogin()).toBe(false)
+      expect(login.hasImplicitLogin()).toBe(false)
     }
   )
 
@@ -218,7 +218,7 @@ describe('secret-free Google OIDC login', () => {
     await callback()
     window.history.replaceState(null, '', window.location.href + '&state=other')
     await expect(adapter.handleCallback()).rejects.toThrow('Duplicate')
-    expect(login.hasGoogleImplicitLogin()).toBe(false)
+    expect(login.hasImplicitLogin()).toBe(false)
     expect(adapter.simpleAuth).toBeNull()
   })
 

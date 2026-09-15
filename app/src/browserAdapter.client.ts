@@ -5,19 +5,20 @@ import pkceChallenge from 'pkce-challenge'
 
 import { readAppLoginConfiguration } from './auth/appLoginConfiguration'
 import {
-  beginGoogleImplicitLogin,
-  clearGoogleImplicitLogin,
-  finishGoogleImplicitLogin,
-  hasGoogleImplicitLogin,
-  usesGoogleImplicitLogin,
-} from './auth/googleImplicitLogin'
-import {
   IMPERSONATED_SERVICE_ACCOUNT_CREDENTIAL_CHANGED_EVENT,
   IMPERSONATED_SERVICE_ACCOUNT_CREDENTIAL_STORAGE_KEY,
   clearImpersonatedServiceAccountCredential,
   readImpersonatedServiceAccountCredential,
 } from './auth/impersonatedServiceAccountCredentialStore'
-import { getOidcConfig } from './auth/oidcConfig'
+import {
+  beginImplicitLogin,
+  clearImplicitLogin,
+  finishImplicitLogin,
+  hasImplicitLogin,
+  usesImplicitLogin,
+} from './auth/implicitLogin'
+import { effectiveOidcAuthFlow, getOidcConfig } from './auth/oidcConfig'
+import { openOidcWindow } from './auth/oidcWindow'
 import type {
   OAuthTokenEndpointResponse,
   SimpleAuthJSONWithHelpers,
@@ -34,6 +35,8 @@ type DiscoveryDocument = {
   authorization_endpoint: string
   token_endpoint: string
   issuer?: string
+  jwks_uri?: string
+  response_types_supported?: string[]
 }
 
 type AuthListener = (authData: SimpleAuthJSONWithHelpers | null) => void
@@ -111,6 +114,8 @@ function buildSimpleAuth(
     tokenType: token.token_type,
     scope: token.scope,
     expiresAt,
+    loginFlow: token.loginFlow,
+    loginInteraction: token.loginInteraction,
     isExpired: () =>
       typeof expiresAt === 'number' ? Date.now() >= expiresAt : false,
     willExpireSoon: (thresholdSeconds = 60) =>
@@ -146,9 +151,15 @@ function normalizeTokenResponse(
   }
 }
 
+let discoveryUrl = ''
 let discoveryPromise: Promise<DiscoveryDocument> | null = null
 
 async function loadDiscovery(): Promise<DiscoveryDocument> {
+  const nextUrl = getOidcConfig().discoveryUrl
+  if (discoveryUrl !== nextUrl) {
+    discoveryPromise = null
+    discoveryUrl = nextUrl
+  }
   if (!discoveryPromise) {
     discoveryPromise = (async () => {
       const config = getOidcConfig()
@@ -201,13 +212,19 @@ async function loadDiscovery(): Promise<DiscoveryDocument> {
       return json
     })()
   }
-  return discoveryPromise
+  try {
+    return await discoveryPromise
+  } catch (error) {
+    discoveryPromise = null
+    throw error
+  }
 }
 
 export class BrowserAuthAdapter {
   private readonly listeners = new Set<AuthListener>()
   private callbackInFlight: Promise<void> | null = null
   private authOperationVersion = 0
+  private cancelLoginWindow: (() => void) | null = null
   // The adapter keeps a current-tab copy for immediate subscribers. The
   // canonical, short-lived service-account token is stored in the versioned
   // impersonated-credential bundle; human OAuth credentials are never copied
@@ -218,23 +235,28 @@ export class BrowserAuthAdapter {
    * Share callback processing across repeated route effects so one-time login
    * state is consumed once, including while Google's signing keys are loading.
    */
-  handleCallback = (): Promise<void> => {
+  handleCallback = (url?: URL): Promise<void> => {
     if (!this.callbackInFlight) {
-      this.callbackInFlight = this.processCallback().finally(() => {
-        this.callbackInFlight = null
+      const pending = this.processCallback(url).finally(() => {
+        if (this.callbackInFlight === pending) this.callbackInFlight = null
       })
+      this.callbackInFlight = pending
     }
     return this.callbackInFlight
   }
 
   /** Validate the selected OAuth flow and persist only its verified credentials. */
-  private processCallback = async () => {
+  private processCallback = async (url?: URL) => {
     const operationVersion = this.authOperationVersion
-    const callbackUrl = new URL(window.location.href)
-    if (hasGoogleImplicitLogin()) {
-      const token = await finishGoogleImplicitLogin(
+    const callbackUrl = url ?? new URL(window.location.href)
+    const loginConfig = window.sessionStorage.getItem('oidc_login_config')
+    if (loginConfig && loginConfig !== JSON.stringify(getOidcConfig()))
+      throw new Error('Login configuration changed. Please sign in again.')
+    if (hasImplicitLogin()) {
+      const token = await finishImplicitLogin(
         callbackUrl,
-        getOidcConfig()
+        getOidcConfig(),
+        !url
       )
       if (operationVersion !== this.authOperationVersion) {
         throw new Error('Login was superseded by another authentication action')
@@ -244,9 +266,9 @@ export class BrowserAuthAdapter {
       return
     }
     const callbackParams = callbackUrl.searchParams
-    const codeVerifier = window.localStorage.getItem(PKCE_CODE_VERIFIER_KEY)
-    const storedState = window.localStorage.getItem(PKCE_STATE_KEY)
-    const storedNonce = window.localStorage.getItem(PKCE_NONCE_KEY)
+    const codeVerifier = window.sessionStorage.getItem(PKCE_CODE_VERIFIER_KEY)
+    const storedState = window.sessionStorage.getItem(PKCE_STATE_KEY)
+    const storedNonce = window.sessionStorage.getItem(PKCE_NONCE_KEY)
 
     appLogger.info('Handling OIDC callback', {
       attrs: {
@@ -289,9 +311,9 @@ export class BrowserAuthAdapter {
       })
       throw new Error('No nonce found')
     }
-    window.localStorage.removeItem(PKCE_CODE_VERIFIER_KEY)
-    window.localStorage.removeItem(PKCE_STATE_KEY)
-    window.localStorage.removeItem(PKCE_NONCE_KEY)
+    window.sessionStorage.removeItem(PKCE_CODE_VERIFIER_KEY)
+    window.sessionStorage.removeItem(PKCE_STATE_KEY)
+    window.sessionStorage.removeItem(PKCE_NONCE_KEY)
 
     const config = getOidcConfig()
     const discovery = await loadDiscovery()
@@ -379,12 +401,12 @@ export class BrowserAuthAdapter {
       })
     }
 
-    const result = (await oauth.processAuthorizationCodeOpenIDResponse(
+    const result = await oauth.processAuthorizationCodeOpenIDResponse(
       authServer,
       client,
       response,
       storedNonce
-    )) as OAuthTokenEndpointResponse | oauth.OAuth2Error
+    )
 
     if (oauth.isOAuth2Error(result)) {
       appLogger.error('OIDC token exchange failed', {
@@ -415,7 +437,9 @@ export class BrowserAuthAdapter {
     if (operationVersion !== this.authOperationVersion) {
       throw new Error('Login was superseded by another authentication action')
     }
-    this.persist(result)
+    if (loginConfig && loginConfig !== JSON.stringify(getOidcConfig()))
+      throw new Error('Login configuration changed. Please sign in again.')
+    this.persist(result, true)
   }
 
   /**
@@ -423,73 +447,149 @@ export class BrowserAuthAdapter {
    * Stores PKCE code verifier and state in localStorage.
    */
   loginWithRedirect = async (options?: { loginHint?: string }) => {
+    this.cancelLoginWindow?.()
     this.authOperationVersion += 1
+    this.callbackInFlight = null
+    const version = this.authOperationVersion
     const config = getOidcConfig()
-    if (usesGoogleImplicitLogin(config)) {
-      window.location.href = beginGoogleImplicitLogin(
-        config,
-        options?.loginHint
+    const interaction = config.authUxMode ?? 'redirect'
+    const child = openOidcWindow(
+      interaction,
+      config.redirectUri,
+      async (url) => {
+        if (version !== this.authOperationVersion)
+          throw new Error('Login was superseded')
+        await this.handleCallback(url)
+      }
+    )
+    this.cancelLoginWindow = child?.cancel ?? null
+    try {
+      window.sessionStorage.setItem('oidc_login_config', JSON.stringify(config))
+      window.sessionStorage.setItem(
+        'oidc_login_return',
+        window.location.pathname + window.location.search + window.location.hash
       )
-      return
-    }
-    clearGoogleImplicitLogin()
-    const discovery = await loadDiscovery()
-    const { code_verifier, code_challenge } = await pkceChallenge()
-    const state = crypto.randomUUID()
-    const nonce = crypto.randomUUID()
-    const hasRefreshToken = Boolean(this.getTokenResponse()?.refresh_token)
+      const navigate = async (url: string) => {
+        if (version !== this.authOperationVersion)
+          throw new Error('Login was superseded')
+        if (child) {
+          child.navigate(url)
+          await child.completion
+        } else window.location.href = url
+      }
+      if (usesImplicitLogin(config)) {
+        const google =
+          config.discoveryUrl ===
+          'https://accounts.google.com/.well-known/openid-configuration'
+        const discovery = google ? undefined : await loadDiscovery()
+        if (discovery && (!discovery.issuer || !discovery.jwks_uri))
+          throw new Error(
+            'Implicit login requires discovery issuer and signing keys'
+          )
+        if (version !== this.authOperationVersion)
+          throw new Error('Login was superseded')
+        await navigate(
+          beginImplicitLogin(
+            config,
+            options?.loginHint,
+            discovery as
+              | import('./auth/implicitLogin').ImplicitProvider
+              | undefined
+          )
+        )
+        return
+      }
+      clearImplicitLogin()
+      const discovery = await loadDiscovery()
+      const { code_verifier, code_challenge } = await pkceChallenge()
+      if (version !== this.authOperationVersion)
+        throw new Error('Login was superseded')
+      const state = crypto.randomUUID()
+      const nonce = crypto.randomUUID()
+      const hasRefreshToken = Boolean(this.getTokenResponse()?.refresh_token)
 
-    window.localStorage.setItem(PKCE_CODE_VERIFIER_KEY, code_verifier)
-    window.localStorage.setItem(PKCE_STATE_KEY, state)
-    window.localStorage.setItem(PKCE_NONCE_KEY, nonce)
+      window.sessionStorage.setItem(PKCE_CODE_VERIFIER_KEY, code_verifier)
+      window.sessionStorage.setItem(PKCE_STATE_KEY, state)
+      window.sessionStorage.setItem(PKCE_NONCE_KEY, nonce)
 
-    const url = new URL(discovery.authorization_endpoint)
-    url.searchParams.set('client_id', config.clientId)
-    url.searchParams.set('redirect_uri', config.redirectUri)
-    url.searchParams.set('response_type', 'code')
-    url.searchParams.set('scope', config.scope)
-    url.searchParams.set('state', state)
-    url.searchParams.set('code_challenge', code_challenge)
-    url.searchParams.set('code_challenge_method', 'S256')
-    url.searchParams.set('nonce', nonce)
-    if (config.extraAuthParams) {
-      Object.entries(config.extraAuthParams).forEach(([key, value]) => {
-        if (key === 'prompt' && value === 'consent' && hasRefreshToken) {
-          return
-        }
-        url.searchParams.set(key, value)
+      const url = new URL(discovery.authorization_endpoint)
+      url.searchParams.set('client_id', config.clientId)
+      url.searchParams.set('redirect_uri', config.redirectUri)
+      url.searchParams.set('response_type', 'code')
+      url.searchParams.set('scope', config.scope)
+      url.searchParams.set('state', state)
+      url.searchParams.set('code_challenge', code_challenge)
+      url.searchParams.set('code_challenge_method', 'S256')
+      url.searchParams.set('nonce', nonce)
+      if (config.extraAuthParams) {
+        Object.entries(config.extraAuthParams).forEach(([key, value]) => {
+          if (
+            [
+              'client_id',
+              'redirect_uri',
+              'response_type',
+              'response_mode',
+              'scope',
+              'state',
+              'nonce',
+              'code_challenge',
+              'code_challenge_method',
+              'client_secret',
+            ].includes(key)
+          )
+            return
+          if (key === 'prompt' && value === 'consent' && hasRefreshToken) {
+            return
+          }
+          url.searchParams.set(key, value)
+        })
+      }
+      const loginHint = options?.loginHint?.trim()
+      if (loginHint) {
+        url.searchParams.set('login_hint', loginHint)
+      }
+      appLogger.info('Initiating OIDC login redirect', {
+        attrs: {
+          scope: 'auth.oidc',
+          code: 'OIDC_LOGIN_REDIRECT',
+          authorizationEndpoint: sanitizeUrl(discovery.authorization_endpoint),
+          tokenEndpoint: sanitizeUrl(discovery.token_endpoint),
+          redirectUri: sanitizeUrl(config.redirectUri),
+          clientIdHint: redactIdentifier(config.clientId),
+          hasClientSecret: hasClientSecret(config.clientSecret),
+          scopeCount: summarizeScope(config.scope).length,
+          hasExtraAuthParams: Boolean(config.extraAuthParams),
+          hasRefreshToken,
+          codeVerifierLength: code_verifier.length,
+          codeChallengeLength: code_challenge.length,
+        },
       })
-    }
-    const loginHint = options?.loginHint?.trim()
-    if (loginHint) {
-      url.searchParams.set('login_hint', loginHint)
-    }
-    appLogger.info('Initiating OIDC login redirect', {
-      attrs: {
-        scope: 'auth.oidc',
-        code: 'OIDC_LOGIN_REDIRECT',
-        authorizationEndpoint: sanitizeUrl(discovery.authorization_endpoint),
-        tokenEndpoint: sanitizeUrl(discovery.token_endpoint),
-        redirectUri: sanitizeUrl(config.redirectUri),
-        clientIdHint: redactIdentifier(config.clientId),
-        hasClientSecret: hasClientSecret(config.clientSecret),
-        scopeCount: summarizeScope(config.scope).length,
-        hasExtraAuthParams: Boolean(config.extraAuthParams),
-        hasRefreshToken,
-        codeVerifierLength: code_verifier.length,
-        codeChallengeLength: code_challenge.length,
-      },
-    })
 
-    window.location.href = url.toString()
+      await navigate(url.toString())
+    } catch (error) {
+      child?.cancel()
+      if (version === this.authOperationVersion) {
+        this.authOperationVersion += 1
+        clearImplicitLogin()
+        window.sessionStorage.removeItem(PKCE_STATE_KEY)
+        window.sessionStorage.removeItem(PKCE_CODE_VERIFIER_KEY)
+        window.sessionStorage.removeItem(PKCE_NONCE_KEY)
+      }
+      throw error
+    } finally {
+      if (version === this.authOperationVersion) this.cancelLoginWindow = null
+    }
   }
 
   /**
    * Logs out the user by removing the token from localStorage and notifying listeners.
    */
   logout = () => {
+    this.cancelLoginWindow?.()
+    this.cancelLoginWindow = null
     this.authOperationVersion += 1
-    clearGoogleImplicitLogin()
+    this.callbackInFlight = null
+    clearImplicitLogin()
     this.ephemeralTokenResponse = null
     window.localStorage.removeItem(STORAGE_KEY)
     clearImpersonatedServiceAccountCredential(['app'])
@@ -506,6 +606,8 @@ export class BrowserAuthAdapter {
     idToken: string,
     expiresAt: string
   ) => {
+    this.cancelLoginWindow?.()
+    this.cancelLoginWindow = null
     const normalizedToken = idToken.trim()
     const expiresAtMs = Date.parse(expiresAt)
     if (!normalizedToken) {
@@ -519,7 +621,8 @@ export class BrowserAuthAdapter {
     // Switching effective identity must also remove any persisted human OIDC
     // refresh token so expiry cannot silently fall back to the human account.
     this.authOperationVersion += 1
-    clearGoogleImplicitLogin()
+    this.callbackInFlight = null
+    clearImplicitLogin()
     window.localStorage.removeItem(STORAGE_KEY)
     this.ephemeralTokenResponse = {
       access_token: normalizedToken,
@@ -561,6 +664,7 @@ export class BrowserAuthAdapter {
    * the new token response.
    */
   refresh = async () => {
+    const operationVersion = this.authOperationVersion
     const tokenResponse = this.getTokenResponse()
     if (!tokenResponse?.refresh_token) {
       if (tokenResponse && buildSimpleAuth(tokenResponse).isExpired()) {
@@ -614,11 +718,11 @@ export class BrowserAuthAdapter {
         },
       })
     }
-    const result = (await oauth.processRefreshTokenResponse(
+    const result = await oauth.processRefreshTokenResponse(
       authServer,
       client,
       response
-    )) as OAuthTokenEndpointResponse | oauth.OAuth2Error
+    )
     if (oauth.isOAuth2Error(result)) {
       appLogger.warn('OIDC refresh failed', {
         attrs: {
@@ -645,6 +749,7 @@ export class BrowserAuthAdapter {
         expiresIn: result.expires_in ?? null,
       },
     })
+    if (operationVersion !== this.authOperationVersion) return
     this.persist(result)
   }
 
@@ -662,9 +767,7 @@ export class BrowserAuthAdapter {
       'storage',
       (event) => {
         if (event.key === STORAGE_KEY) {
-          callback(
-            event.newValue ? buildSimpleAuth(JSON.parse(event.newValue)) : null
-          )
+          callback(this.simpleAuth)
           return
         }
         if (event.key === IMPERSONATED_SERVICE_ACCOUNT_CREDENTIAL_STORAGE_KEY) {
@@ -719,7 +822,11 @@ export class BrowserAuthAdapter {
 
   private getPersistedTokenResponse(): StoredTokenResponse | null {
     const authData = window.localStorage.getItem(STORAGE_KEY)
-    return authData ? (JSON.parse(authData) as StoredTokenResponse) : null
+    try {
+      return authData ? (JSON.parse(authData) as StoredTokenResponse) : null
+    } catch {
+      return null
+    }
   }
 
   private persist(
@@ -731,6 +838,11 @@ export class BrowserAuthAdapter {
       tokenResponse,
       replaceExisting ? null : this.getPersistedTokenResponse()
     )
+    if (replaceExisting) {
+      const config = getOidcConfig()
+      stored.loginFlow = effectiveOidcAuthFlow(config)
+      stored.loginInteraction = config.authUxMode ?? 'redirect'
+    }
     window.localStorage.setItem(STORAGE_KEY, JSON.stringify(stored))
     const simpleAuth = this.simpleAuth
     appLogger.info('Persisted OIDC auth state', {

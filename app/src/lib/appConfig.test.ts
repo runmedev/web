@@ -218,10 +218,10 @@ describe('appConfig OIDC Google shorthand', () => {
           preserveLocalConfiguration,
         }
       )
-      const { usesGoogleImplicitLogin } = await import(
-        '../auth/googleImplicitLogin'
+      const { usesImplicitLogin } = await import(
+        '../auth/implicitLogin'
       )
-      expect(usesGoogleImplicitLogin(getOidcConfig())).toBe(true)
+      expect(usesImplicitLogin(getOidcConfig())).toBe(true)
       expect(Boolean(getOidcConfig().clientSecret)).toBe(false)
       expect(
         Boolean(
