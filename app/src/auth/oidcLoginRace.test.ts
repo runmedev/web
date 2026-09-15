@@ -66,5 +66,8 @@ it('ignores delayed discovery from a cancelled login', async () => {
   expect(localStorage.getItem('oidc_pkce_state')).toBeNull()
   expect(windows[0].location.href).toBe('')
   adapter.logout()
+  expect(sessionStorage.getItem('oidc_pkce_state')).toBeNull()
+  expect(sessionStorage.getItem('oidc_pkce_code_verifier')).toBeNull()
+  expect(sessionStorage.getItem('oidc_login_config')).toBeNull()
   await expect(second).resolves.toBeInstanceOf(Error)
 })

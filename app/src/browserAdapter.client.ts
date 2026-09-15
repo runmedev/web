@@ -31,6 +31,19 @@ const PKCE_STATE_KEY = 'oidc_pkce_state'
 const PKCE_CODE_VERIFIER_KEY = 'oidc_pkce_code_verifier'
 const PKCE_NONCE_KEY = 'oidc_pkce_nonce'
 
+/** Logout and identity switches invalidate pending callbacks even after a reload. */
+function clearPendingLogin(): void {
+  clearImplicitLogin()
+  for (const key of [
+    PKCE_STATE_KEY,
+    PKCE_CODE_VERIFIER_KEY,
+    PKCE_NONCE_KEY,
+    'oidc_login_config',
+    'oidc_login_return',
+  ])
+    window.sessionStorage.removeItem(key)
+}
+
 type DiscoveryDocument = {
   authorization_endpoint: string
   token_endpoint: string
@@ -452,6 +465,7 @@ export class BrowserAuthAdapter {
     this.cancelLoginWindow?.()
     this.authOperationVersion += 1
     this.callbackInFlight = null
+    clearPendingLogin()
     const version = this.authOperationVersion
     const config = getOidcConfig()
     const interaction = config.authUxMode ?? 'redirect'
@@ -572,10 +586,7 @@ export class BrowserAuthAdapter {
       child?.cancel()
       if (version === this.authOperationVersion) {
         this.authOperationVersion += 1
-        clearImplicitLogin()
-        window.sessionStorage.removeItem(PKCE_STATE_KEY)
-        window.sessionStorage.removeItem(PKCE_CODE_VERIFIER_KEY)
-        window.sessionStorage.removeItem(PKCE_NONCE_KEY)
+        clearPendingLogin()
       }
       throw error
     } finally {
@@ -591,7 +602,7 @@ export class BrowserAuthAdapter {
     this.cancelLoginWindow = null
     this.authOperationVersion += 1
     this.callbackInFlight = null
-    clearImplicitLogin()
+    clearPendingLogin()
     this.ephemeralTokenResponse = null
     window.localStorage.removeItem(STORAGE_KEY)
     clearImpersonatedServiceAccountCredential(['app'])
@@ -624,7 +635,7 @@ export class BrowserAuthAdapter {
     // refresh token so expiry cannot silently fall back to the human account.
     this.authOperationVersion += 1
     this.callbackInFlight = null
-    clearImplicitLogin()
+    clearPendingLogin()
     window.localStorage.removeItem(STORAGE_KEY)
     this.ephemeralTokenResponse = {
       access_token: normalizedToken,

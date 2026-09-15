@@ -1,5 +1,6 @@
 import { useEffect, useState } from 'react'
 
+import { readAppLoginConfiguration } from '../auth/appLoginConfiguration'
 import { oidcDiagnostics } from '../auth/oidcDiagnostics'
 import {
   effectiveOidcAuthFlow,
@@ -47,6 +48,8 @@ export default function OidcStatusTab() {
   }, [])
   const details = oidcDiagnostics(auth, now)
   const config = oidcConfigManager.getConfigForEditing()
+  const serviceAccountLogin =
+    readAppLoginConfiguration().mode === 'service_account'
   const rows: Array<[string, string]> = [
     ['Status', details.status],
     ['Email', details.email ?? 'Not available'],
@@ -68,6 +71,12 @@ export default function OidcStatusTab() {
     [
       'Next sign-in browser interaction',
       interactionName(config.authUxMode ?? 'redirect'),
+    ],
+    [
+      'Configured login identity',
+      serviceAccountLogin
+        ? 'Impersonated service account (OAuth flow settings apply to direct-principal sign-in)'
+        : 'Direct principal',
     ],
     ['Requested scopes', config.scope || 'Not configured'],
     ['Client ID', config.clientId || 'Not configured'],
@@ -96,7 +105,7 @@ export default function OidcStatusTab() {
           </div>
         ))}
       </dl>
-      {!details.hasRefreshToken && auth ? (
+      {!details.hasRefreshToken && auth && !serviceAccountLogin ? (
         <p className="mt-4 text-sm text-nb-text-muted">
           This session has no refresh token. For OpenAI, request openid email
           offline_access and sign in again using authorization code with PKCE.

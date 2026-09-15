@@ -40,6 +40,9 @@ The **Runme OAuth client** section has independent controls for:
 - **OAuth flow:** Automatic, Authorization code with PKCE, or Implicit.
 - **Browser interaction:** Same-page redirect, Popup, or New tab.
 
+These OAuth controls apply to direct-principal login; service-account
+impersonation uses its separately configured human authorization flow.
+
 Save authentication settings, then sign in again to use the new choices. They
 persist across refresh independently of the Google Drive controls. Automatic
 preserves the existing behavior: secret-free Google uses implicit; other clients
