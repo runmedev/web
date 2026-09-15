@@ -123,7 +123,7 @@ export async function finishImplicitLogin(
     !Number.isFinite(age) ||
     age < 0 ||
     age > MAX_LOGIN_AGE_MS ||
-    transaction.discoveryUrl !== config.discoveryUrl ||
+    (transaction.discoveryUrl ?? DISCOVERY_URL) !== config.discoveryUrl ||
     transaction.clientId !== config.clientId ||
     transaction.redirectUri !== config.redirectUri ||
     callbackUrl.origin + callbackUrl.pathname !== config.redirectUri

@@ -458,8 +458,8 @@ export class BrowserAuthAdapter {
   }
 
   /**
-   * Initiates the OAuth login flow by redirecting the browser to the authorization URL.
-   * Stores PKCE code verifier and state in localStorage.
+   * Initiates OAuth using the configured browser interaction. The existing method
+   * name is retained for callers; PKCE verifier/state are isolated in sessionStorage.
    */
   loginWithRedirect = async (options?: { loginHint?: string }) => {
     this.cancelLoginWindow?.()

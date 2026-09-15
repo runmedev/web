@@ -234,4 +234,13 @@ describe('secret-free Google OIDC login', () => {
     )
     expect(adapter.simpleAuth).toBeNull()
   })
+  it('accepts the previous Google-only transaction shape across an app update', async () => {
+    await callback()
+    const pending = JSON.parse(sessionStorage.getItem('google_oidc_transaction')!)
+    delete pending.discoveryUrl
+    sessionStorage.setItem('google_oidc_transaction', JSON.stringify(pending))
+    await adapter.handleCallback()
+    expect(adapter.simpleAuth?.accessToken).toBe('access-token')
+  })
+
 })
