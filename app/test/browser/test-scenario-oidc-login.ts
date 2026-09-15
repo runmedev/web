@@ -182,10 +182,12 @@ try {
         )
       } finally {
         await context.close()
-        if (video)
-          await video.saveAs(
-            join(output, `scenario-oidc-login-${flow}-${mode}.webm`)
-          )
+        if (video) {
+          const movie = join(output, `scenario-oidc-login-${flow}-${mode}.webm`)
+          await video.saveAs(movie)
+          await video.delete()
+          console.log(`Movie: ${movie}`)
+        }
       }
     }
   }

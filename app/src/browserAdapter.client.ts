@@ -261,6 +261,8 @@ export class BrowserAuthAdapter {
       if (operationVersion !== this.authOperationVersion) {
         throw new Error('Login was superseded by another authentication action')
       }
+      if (loginConfig && loginConfig !== JSON.stringify(getOidcConfig()))
+        throw new Error('Login configuration changed. Please sign in again.')
       // Implicit login cannot refresh; discard any previous identity's refresh token.
       this.persist(token, true)
       return

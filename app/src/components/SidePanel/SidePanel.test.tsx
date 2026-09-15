@@ -735,7 +735,7 @@ it.each([false, true])('right-click opens authentication information without cha
   loginWithRedirectMock.mockClear()
   logoutMock.mockClear()
   render(<SidePanelToolbar />)
-  fireEvent.contextMenu(screen.getByRole('button', { name: signedIn ? 'Logout' : 'Login', exact: true }))
+  fireEvent.contextMenu(screen.getByRole('button', { name: signedIn ? 'Logout' : 'Login' }))
   expect(showDocumentMock).toHaveBeenLastCalledWith('status://oidc', { title: 'Runme authentication' })
   expect(setCurrentDocMock).toHaveBeenLastCalledWith('status://oidc')
   expect(loginWithRedirectMock).not.toHaveBeenCalled()
