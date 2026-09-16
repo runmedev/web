@@ -40,6 +40,7 @@ import {
   isDriveSyncStatusUri,
   isDocumentationDocumentUri,
   DRIVE_SYNC_STATUS_DOCUMENT_URI,
+  OIDC_STATUS_DOCUMENT_URI,
   isExcalidrawWorkspaceDocument,
   isNotebookDiffUri,
   isNotebookDocumentUri,
@@ -609,6 +610,26 @@ export function SidePanelToolbar() {
           data-tour-id="left-nav.account"
           className={`${sideButtonBase} ${sideButtonInactive}`}
           aria-label={authData ? 'Logout' : 'Login'}
+          title="Click to sign in or out. Right-click for authentication information."
+          onContextMenu={(event) => {
+            event.preventDefault()
+            showDocument(OIDC_STATUS_DOCUMENT_URI, {
+              title: 'Runme authentication',
+            })
+            setCurrentDoc(OIDC_STATUS_DOCUMENT_URI)
+          }}
+          onKeyDown={(event) => {
+            if (
+              event.key === 'ContextMenu' ||
+              (event.shiftKey && event.key === 'F10')
+            ) {
+              event.preventDefault()
+              showDocument(OIDC_STATUS_DOCUMENT_URI, {
+                title: 'Runme authentication',
+              })
+              setCurrentDoc(OIDC_STATUS_DOCUMENT_URI)
+            }
+          }}
           onClick={handleAccountClick}
         >
           <UserCircleIcon className="h-5 w-5" />

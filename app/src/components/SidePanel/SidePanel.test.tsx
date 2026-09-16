@@ -729,3 +729,15 @@ describe('SidePanelContent', () => {
     ).toBe('Read-only')
   })
 })
+
+it.each([false, true])('right-click opens authentication information without changing login (signed in: %s)', signedIn => {
+  authData = signedIn ? {} : null
+  loginWithRedirectMock.mockClear()
+  logoutMock.mockClear()
+  render(<SidePanelToolbar />)
+  fireEvent.contextMenu(screen.getByRole('button', { name: signedIn ? 'Logout' : 'Login' }))
+  expect(showDocumentMock).toHaveBeenLastCalledWith('status://oidc', { title: 'Runme authentication' })
+  expect(setCurrentDocMock).toHaveBeenLastCalledWith('status://oidc')
+  expect(loginWithRedirectMock).not.toHaveBeenCalled()
+  expect(logoutMock).not.toHaveBeenCalled()
+})

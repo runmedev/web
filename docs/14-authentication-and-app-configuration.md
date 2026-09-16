@@ -35,11 +35,40 @@ oidc.getStatus()
 
 ## Application login UI
 
-For Google OIDC with no client secret, browser login uses Google's implicit
-`id_token token` response. Runme verifies the signed ID token and callback before
-storing credentials. This flow has no refresh token; sign in again when the
-tokens expire. Other OIDC providers and configurations with a client secret
-continue to use authorization code with PKCE.
+The **Runme OAuth client** section has independent controls for:
+
+- **OAuth flow:** Automatic, Authorization code with PKCE, or Implicit.
+- **Browser interaction:** Same-page redirect, Popup, or New tab.
+
+These OAuth controls apply to direct-principal login; service-account
+impersonation uses its separately configured human authorization flow.
+
+Save authentication settings, then sign in again to use the new choices. They
+persist across refresh independently of the Google Drive controls. Automatic
+preserves the existing behavior: secret-free Google uses implicit; other clients
+use PKCE. Explicit PKCE does not fall back to implicit if the provider rejects it.
+Implicit requires the provider's `id_token token` response and RS256 ID tokens;
+Runme validates the signature, issuer, audience, state, nonce, expiry, and access
+token hash. It cannot obtain refresh tokens.
+
+For OpenAI, select **Authorization code with PKCE** and request
+`openid email offline_access`. The provider must grant refresh access. Saving
+scopes does not upgrade existing credentials; sign in again. Popup and New tab
+keep the original notebook tab in place. Allow browser popups when prompted;
+if the provider or browser severs the connection between windows, use Same-page
+redirect. The callback URI must have the same origin for Popup/New tab.
+
+The deployment YAML equivalents are `oidc.generic.authFlow` (`auto`, `pkce`,
+`implicit`) and `oidc.generic.authUxMode` (`redirect`, `popup`, `new_tab`).
+
+**Right-click the Login/Logout account icon** to open the Runme authentication
+tab, or focus it and press Shift+F10. This does not sign you in or out. The tab
+shows status, local expiry times, email, subject, issuer, audience, refresh-token
+presence, and scopes. It distinguishes the current session's recorded flow from
+the settings for the next sign-in; older sessions show “Not recorded.” It updates
+as tokens change and time passes. Raw credentials and arbitrary token claims
+are not displayed. Decoding claims for diagnostics does not revalidate the token
+or prove the runner will accept it.
 
 Returning users of the shared development client are signed out once while
 Runme removes its previously stored client secret and credentials. Sign in
@@ -69,7 +98,7 @@ The Runme account section supports:
   short-lived Drive and Runme credentials for the configured service-account
   email.
 
-The account icon remains a simple sign-in/sign-out action and uses the identity
+Left-clicking the account icon remains a sign-in/sign-out action and uses the identity
 mode saved in Authentication Settings. Runme remembers the selected mode,
 service-account email, and generated short-lived service-account credentials.
 The human OAuth access token used to authorize impersonation remains in memory

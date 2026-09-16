@@ -6,6 +6,7 @@ import type { NotebookOwnershipRecord } from '../tabCoordination/notebookOwnersh
 
 export const DRIVE_LINK_STATUS_DOCUMENT_URI = 'status://drive-link'
 export const DRIVE_SYNC_STATUS_DOCUMENT_URI = 'status://drive-sync'
+export const OIDC_STATUS_DOCUMENT_URI = 'status://oidc'
 export const VERSION_INFO_DOCUMENT_URI = 'app://version'
 export const RUNNER_STATUS_DOCUMENT_URI = 'status://runners'
 const RUNNER_KERNELS_DOCUMENT_PREFIX = `${RUNNER_STATUS_DOCUMENT_URI}/`
@@ -98,6 +99,11 @@ export function isDriveSyncStatusUri(uri: string | null | undefined): boolean {
   return uri === DRIVE_SYNC_STATUS_DOCUMENT_URI
 }
 
+/** Authentication diagnostics is a virtual tab with no notebook or token persistence. */
+export function isOidcStatusUri(uri: string | null | undefined): boolean {
+  return uri === OIDC_STATUS_DOCUMENT_URI
+}
+
 export function isVersionInfoUri(uri: string | null | undefined): boolean {
   return uri === VERSION_INFO_DOCUMENT_URI
 }
@@ -180,6 +186,7 @@ export function deriveWorkspaceDocumentTitle(uri: string): string {
   if (isDriveSyncStatusUri(documentUri)) {
     return 'Google Drive Sync Status'
   }
+  if (isOidcStatusUri(documentUri)) return 'Runme authentication'
   if (isVersionInfoUri(documentUri)) {
     return 'Version Information'
   }

@@ -10,7 +10,11 @@ import {
   type IdentitySharingMode,
 } from '../../auth/appLoginConfiguration'
 import { getServiceAccountCredentialStatusError } from '../../auth/googleServiceAccountImpersonation'
-import { oidcConfigManager } from '../../auth/oidcConfig'
+import {
+  oidcConfigManager,
+  type OidcAuthFlow,
+  type OidcAuthUxMode,
+} from '../../auth/oidcConfig'
 import {
   getBrowserAdapter,
   useBrowserAuthData,
@@ -211,6 +215,12 @@ export default function AuthenticationSettingsPanel() {
   const [runmeClientSecret, setRunmeClientSecret] = useState(
     initialOidc.clientSecret ?? ''
   )
+  const [runmeAuthFlow, setRunmeAuthFlow] = useState<OidcAuthFlow>(
+    initialOidc.authFlow ?? 'auto'
+  )
+  const [runmeAuthUxMode, setRunmeAuthUxMode] = useState<OidcAuthUxMode>(
+    initialOidc.authUxMode ?? 'redirect'
+  )
   const [runmeScope, setRunmeScope] = useState(initialOidc.scope)
   const [busyAction, setBusyAction] = useState<
     'runme' | 'drive' | 'save' | null
@@ -294,9 +304,16 @@ export default function AuthenticationSettingsPanel() {
           clientId: runmeClientId.trim(),
           clientSecret: runmeClientSecret.trim() || undefined,
           scope: runmeScope.trim(),
+          authFlow: runmeAuthFlow,
+          authUxMode: runmeAuthUxMode,
         }
         const currentDrive = googleClientManager.getOAuthClient()
-        const currentRunme = oidcConfigManager.getConfigForEditing()
+        const savedRunme = oidcConfigManager.getConfigForEditing()
+        const currentRunme = {
+          ...savedRunme,
+          authFlow: savedRunme.authFlow ?? 'auto',
+          authUxMode: savedRunme.authUxMode ?? 'redirect',
+        }
         const oauthChanged =
           Object.entries(driveOAuth).some(
             ([key, value]) =>
@@ -335,6 +352,8 @@ export default function AuthenticationSettingsPanel() {
       identitySharing,
       loginMode,
       requiredFieldsPresent,
+      runmeAuthFlow,
+      runmeAuthUxMode,
       runmeClientId,
       runmeClientSecret,
       runmeDiscoveryUrl,
@@ -723,8 +742,45 @@ export default function AuthenticationSettingsPanel() {
 
         <SettingsSection
           title="Runme OAuth client"
-          description="OIDC client used to authenticate Runme Agent requests."
+          description="OIDC client used to authenticate Runme Agent requests. Flow changes take effect on the next sign-in."
         >
+          <label className={labelClass}>
+            OAuth flow
+            <select
+              aria-label="Runme OAuth flow"
+              className={`${inputClass} mt-1`}
+              value={runmeAuthFlow}
+              disabled={busyAction !== null}
+              onChange={(event) =>
+                setRunmeAuthFlow(event.target.value as OidcAuthFlow)
+              }
+            >
+              <option value="auto">Automatic (provider default)</option>
+              <option value="pkce">Authorization code with PKCE</option>
+              <option value="implicit">Implicit</option>
+            </select>
+          </label>
+          <label className={labelClass}>
+            Browser interaction
+            <select
+              aria-label="Runme OAuth interaction"
+              className={`${inputClass} mt-1`}
+              value={runmeAuthUxMode}
+              disabled={busyAction !== null}
+              onChange={(event) =>
+                setRunmeAuthUxMode(event.target.value as OidcAuthUxMode)
+              }
+            >
+              <option value="redirect">Same-page redirect</option>
+              <option value="popup">Popup</option>
+              <option value="new_tab">New tab</option>
+            </select>
+          </label>
+          <p className={helpClass}>
+            For OpenAI, use authorization code with PKCE and scopes openid email
+            offline_access to request refresh capability. Implicit login cannot
+            obtain a refresh token.
+          </p>
           <label className={labelClass}>
             Discovery URL
             <input

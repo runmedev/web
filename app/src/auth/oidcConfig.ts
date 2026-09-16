@@ -1,54 +1,72 @@
-import { googleClientManager } from "../lib/googleClientManager";
-import { getOidcCallbackUrl } from "../lib/appBase";
+import { getOidcCallbackUrl } from '../lib/appBase'
+import { googleClientManager } from '../lib/googleClientManager'
+
+export type OidcAuthFlow = 'auto' | 'pkce' | 'implicit'
+export type OidcAuthUxMode = 'redirect' | 'popup' | 'new_tab'
+export const OIDC_CONFIG_CHANGED_EVENT = 'runme:oidc-config-changed'
+
+/** Preserve legacy provider selection until the user chooses a flow explicitly. */
+export function effectiveOidcAuthFlow(config: OidcConfig): 'pkce' | 'implicit' {
+  if (config.authFlow && config.authFlow !== 'auto') return config.authFlow
+  return config.discoveryUrl ===
+    'https://accounts.google.com/.well-known/openid-configuration' &&
+    !config.clientSecret?.trim()
+    ? 'implicit'
+    : 'pkce'
+}
 
 export type OidcConfig = {
-  discoveryUrl: string;
-  clientId: string;
-  clientSecret?: string;
-  scope: string;
-  redirectUri: string;
-  extraAuthParams?: Record<string, string>;
-};
+  discoveryUrl: string
+  clientId: string
+  clientSecret?: string
+  scope: string
+  redirectUri: string
+  authFlow?: OidcAuthFlow
+  authUxMode?: OidcAuthUxMode
+  extraAuthParams?: Record<string, string>
+}
 
 type StoredOidcConfig = {
-  discoveryUrl?: string;
-  clientId?: string;
-  clientSecret?: string;
-  scope?: string;
-  redirectUri?: string;
-  extraAuthParams?: Record<string, string>;
-};
+  discoveryUrl?: string
+  clientId?: string
+  clientSecret?: string
+  scope?: string
+  redirectUri?: string
+  authFlow?: OidcAuthFlow
+  authUxMode?: OidcAuthUxMode
+  extraAuthParams?: Record<string, string>
+}
 
-export const OIDC_STORAGE_KEY = "oidcConfig";
-const STORAGE_KEY = OIDC_STORAGE_KEY;
+export const OIDC_STORAGE_KEY = 'oidcConfig'
+const STORAGE_KEY = OIDC_STORAGE_KEY
 // This shared development client is now used as a public browser client.
 const PUBLIC_DEVELOPMENT_CLIENT_ID =
-  "554943104515-bdt3on71kvc489nvi3l37gialolcnk0a.apps.googleusercontent.com";
+  '554943104515-bdt3on71kvc489nvi3l37gialolcnk0a.apps.googleusercontent.com'
 
 function sanitizeString(value?: string): string | undefined {
-  const trimmed = value?.trim();
-  return trimmed && trimmed.length > 0 ? trimmed : undefined;
+  const trimmed = value?.trim()
+  return trimmed && trimmed.length > 0 ? trimmed : undefined
 }
 
 export class OidcConfigManager {
-  private static singleton: OidcConfigManager | null = null;
-  private config: OidcConfig;
+  private static singleton: OidcConfigManager | null = null
+  private config: OidcConfig
 
   private constructor() {
-    const stored = this.readConfigFromStorage();
-    this.config = this.mergeConfig(stored);
+    const stored = this.readConfigFromStorage()
+    this.config = this.mergeConfig(stored)
   }
 
   static instance(): OidcConfigManager {
     if (!this.singleton) {
-      this.singleton = new OidcConfigManager();
+      this.singleton = new OidcConfigManager()
     }
-    return this.singleton;
+    return this.singleton
   }
 
   getConfig(): OidcConfig {
-    this.assertRequired(this.config);
-    return this.config;
+    this.assertRequired(this.config)
+    return this.config
   }
 
   getConfigForEditing(): OidcConfig {
@@ -57,149 +75,172 @@ export class OidcConfigManager {
       extraAuthParams: this.config.extraAuthParams
         ? { ...this.config.extraAuthParams }
         : undefined,
-    };
+    }
   }
 
   getRedirectURI(): string {
-    this.assertRequired(this.config);
-    return this.config.redirectUri;
+    this.assertRequired(this.config)
+    return this.config.redirectUri
   }
 
   getScope(): string {
-    this.assertRequired(this.config);
-    return this.config.scope;
+    this.assertRequired(this.config)
+    return this.config.scope
   }
 
   setConfig(
     config: Partial<OidcConfig>,
-    options: { requirePersistence?: boolean } = {},
+    options: { requirePersistence?: boolean } = {}
   ): OidcConfig {
     const extraAuthParams = config.extraAuthParams
       ? this.sanitizeExtraAuthParams(config.extraAuthParams)
-      : undefined;
+      : undefined
     const normalizedExtraAuthParams =
       extraAuthParams && Object.keys(extraAuthParams).length > 0
         ? extraAuthParams
-        : undefined;
+        : undefined
     const nextConfig = {
       ...this.config,
       ...config,
       extraAuthParams: normalizedExtraAuthParams ?? this.config.extraAuthParams,
-    };
-    if (options.requirePersistence) this.assertRequired(nextConfig);
-    this.persistConfig(nextConfig, options.requirePersistence);
-    this.config = nextConfig;
-    this.assertRequired(this.config);
-    return this.config;
+    }
+    if (
+      nextConfig.authFlow &&
+      !['auto', 'pkce', 'implicit'].includes(nextConfig.authFlow)
+    )
+      throw new Error('Unsupported Runme OAuth flow')
+    if (
+      nextConfig.authUxMode &&
+      !['redirect', 'popup', 'new_tab'].includes(nextConfig.authUxMode)
+    )
+      throw new Error('Unsupported Runme OAuth browser interaction')
+    if (options.requirePersistence) this.assertRequired(nextConfig)
+    this.persistConfig(nextConfig, options.requirePersistence)
+    this.config = nextConfig
+    window.dispatchEvent(new Event(OIDC_CONFIG_CHANGED_EVENT))
+    this.assertRequired(this.config)
+    return this.config
   }
 
   setClientId(clientId: string): OidcConfig {
-    return this.setConfig({ clientId });
+    return this.setConfig({ clientId })
   }
 
   setClientSecret(clientSecret: string): OidcConfig {
-    return this.setConfig({ clientSecret });
+    return this.setConfig({ clientSecret })
   }
 
   setDiscoveryURL(discoveryUrl: string): OidcConfig {
-    return this.setConfig({ discoveryUrl });
+    return this.setConfig({ discoveryUrl })
   }
 
   setClientToDrive(): OidcConfig {
-    const { clientId, clientSecret } = googleClientManager.getOAuthClient();
-    return this.setConfig({ clientId, clientSecret });
+    const { clientId, clientSecret } = googleClientManager.getOAuthClient()
+    return this.setConfig({ clientId, clientSecret })
   }
 
   setScope(scope: string): OidcConfig {
-    return this.setConfig({ scope });
+    return this.setConfig({ scope })
   }
 
   setGoogleDefaults(): OidcConfig {
     const extraAuthParams = this.sanitizeExtraAuthParams({
-      access_type: "offline",
-      prompt: "consent",
-    });
+      access_type: 'offline',
+      prompt: 'consent',
+    })
     this.config = {
       ...this.config,
-      discoveryUrl: "https://accounts.google.com/.well-known/openid-configuration",
-      scope: "openid https://www.googleapis.com/auth/userinfo.email",
+      discoveryUrl:
+        'https://accounts.google.com/.well-known/openid-configuration',
+      scope: 'openid https://www.googleapis.com/auth/userinfo.email',
       extraAuthParams,
-    };
-    this.persistConfig(this.config);
-    return this.config;
+    }
+    this.persistConfig(this.config)
+    return this.config
   }
 
-  private mergeConfig(stored?: StoredOidcConfig): OidcConfig {
+  private mergeConfig(stored?: StoredOidcConfig | null): OidcConfig {
     const storedExtra =
       stored?.extraAuthParams && Object.keys(stored.extraAuthParams).length > 0
         ? this.sanitizeExtraAuthParams(stored.extraAuthParams)
-        : undefined;
-    const mergedExtra = storedExtra ?? undefined;
+        : undefined
+    const mergedExtra = storedExtra ?? undefined
     const merged: OidcConfig = {
-      discoveryUrl: sanitizeString(stored?.discoveryUrl) ?? "",
-      clientId: sanitizeString(stored?.clientId) ?? "",
+      discoveryUrl: sanitizeString(stored?.discoveryUrl) ?? '',
+      clientId: sanitizeString(stored?.clientId) ?? '',
       clientSecret: sanitizeString(stored?.clientSecret),
-      scope: sanitizeString(stored?.scope) ?? "",
+      scope: sanitizeString(stored?.scope) ?? '',
+      authFlow:
+        stored?.authFlow &&
+        ['auto', 'pkce', 'implicit'].includes(stored.authFlow)
+          ? stored.authFlow
+          : 'auto',
+      authUxMode:
+        stored?.authUxMode &&
+        ['redirect', 'popup', 'new_tab'].includes(stored.authUxMode)
+          ? stored.authUxMode
+          : 'redirect',
       redirectUri: sanitizeString(stored?.redirectUri) ?? getOidcCallbackUrl(),
       extraAuthParams:
         mergedExtra && Object.keys(mergedExtra).length > 0
           ? mergedExtra
           : undefined,
-    };
+    }
 
-    return merged;
+    return merged
   }
 
   private sanitizeExtraAuthParams(
-    params: Record<string, string>,
+    params: Record<string, string>
   ): Record<string, string> {
     return Object.entries(params).reduce<Record<string, string>>(
       (acc, [key, value]) => {
-        const sanitizedKey = key.trim();
-        const sanitizedValue = value.trim();
+        const sanitizedKey = key.trim()
+        const sanitizedValue = value.trim()
         if (sanitizedKey.length > 0 && sanitizedValue.length > 0) {
-          acc[sanitizedKey] = sanitizedValue;
+          acc[sanitizedKey] = sanitizedValue
         }
-        return acc;
+        return acc
       },
-      {},
-    );
+      {}
+    )
   }
 
   private readConfigFromStorage(): StoredOidcConfig | null {
-    if (typeof window === "undefined" || !window.localStorage) {
-      return null;
+    if (typeof window === 'undefined' || !window.localStorage) {
+      return null
     }
     try {
-      const raw = window.localStorage.getItem(STORAGE_KEY);
+      const raw = window.localStorage.getItem(STORAGE_KEY)
       if (!raw) {
-        return null;
+        return null
       }
-      const parsed = JSON.parse(raw) as StoredOidcConfig | null;
+      const parsed = JSON.parse(raw) as StoredOidcConfig | null
       if (
         parsed?.clientId === PUBLIC_DEVELOPMENT_CLIENT_ID &&
         parsed.discoveryUrl ===
-          "https://accounts.google.com/.well-known/openid-configuration" &&
+          'https://accounts.google.com/.well-known/openid-configuration' &&
         parsed.clientSecret
       ) {
         // Migrate before config-precedence logic can preserve the old shipped
         // credential. Other client IDs and custom OIDC providers are untouched.
-        delete parsed.clientSecret;
-        window.localStorage.setItem(STORAGE_KEY, JSON.stringify(parsed));
-        window.localStorage.removeItem("oidc-auth");
+        delete parsed.clientSecret
+        window.localStorage.setItem(STORAGE_KEY, JSON.stringify(parsed))
+        window.localStorage.removeItem('oidc-auth')
       }
-      return parsed ?? null;
+      return parsed ?? null
     } catch (error) {
-      console.warn("Failed to read OIDC config from storage", error);
-      return null;
+      console.warn('Failed to read OIDC config from storage', error)
+      return null
     }
   }
 
   private persistConfig(config: OidcConfig, requirePersistence = false): void {
     try {
-      if (typeof window === "undefined" || !window.localStorage) {
-        if (requirePersistence) throw new Error("Browser storage is unavailable");
-        return;
+      if (typeof window === 'undefined' || !window.localStorage) {
+        if (requirePersistence)
+          throw new Error('Browser storage is unavailable')
+        return
       }
       window.localStorage.setItem(
         STORAGE_KEY,
@@ -208,35 +249,37 @@ export class OidcConfigManager {
           clientId: config.clientId,
           clientSecret: config.clientSecret,
           scope: config.scope,
+          authFlow: config.authFlow,
+          authUxMode: config.authUxMode,
           redirectUri: config.redirectUri,
           extraAuthParams: config.extraAuthParams,
-        }),
-      );
+        })
+      )
     } catch (error) {
       if (requirePersistence) {
         throw new Error(
-          "Could not save Runme OAuth settings. Browser storage is unavailable or full.",
-        );
+          'Could not save Runme OAuth settings. Browser storage is unavailable or full.'
+        )
       }
-      console.warn("Failed to persist OIDC config", error);
+      console.warn('Failed to persist OIDC config', error)
     }
   }
 
   private assertRequired(config: OidcConfig): void {
     if (!config.discoveryUrl) {
-      throw new Error("Missing VITE_OIDC_DISCOVERY_URL");
+      throw new Error('Missing VITE_OIDC_DISCOVERY_URL')
     }
     if (!config.clientId) {
-      throw new Error("Missing VITE_OIDC_CLIENT_ID");
+      throw new Error('Missing VITE_OIDC_CLIENT_ID')
     }
     if (!config.scope) {
-      throw new Error("Missing VITE_OIDC_SCOPE");
+      throw new Error('Missing VITE_OIDC_SCOPE')
     }
   }
 }
 
-export const oidcConfigManager = OidcConfigManager.instance();
+export const oidcConfigManager = OidcConfigManager.instance()
 
 export function getOidcConfig(): OidcConfig {
-  return oidcConfigManager.getConfig();
+  return oidcConfigManager.getConfig()
 }

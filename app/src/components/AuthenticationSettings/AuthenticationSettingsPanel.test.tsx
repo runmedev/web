@@ -277,6 +277,8 @@ describe('AuthenticationSettingsPanel', () => {
         clientId: 'runme-client-id',
         clientSecret: 'runme-client-secret',
         scope: 'openid email',
+        authFlow: 'auto',
+        authUxMode: 'redirect',
       },
       { requirePersistence: true }
     )
@@ -442,4 +444,13 @@ describe('AuthenticationSettingsPanel', () => {
       'https://console.cloud.google.com/apis/library/drive.googleapis.com?project=runme-lewi-dev'
     )
   })
+})
+
+it('saves Runme flow and browser interaction independently of Drive', () => {
+  render(<AuthenticationSettingsPanel />)
+  fireEvent.change(screen.getByLabelText('Runme OAuth flow'), { target: { value: 'pkce' } })
+  fireEvent.change(screen.getByLabelText('Runme OAuth interaction'), { target: { value: 'popup' } })
+  fireEvent.click(screen.getByRole('button', { name: 'Save authentication settings' }))
+  expect(mocks.setOidcConfig).toHaveBeenLastCalledWith(expect.objectContaining({ authFlow: 'pkce', authUxMode: 'popup' }), { requirePersistence: true })
+  expect(mocks.setOAuthClient).toHaveBeenLastCalledWith(expect.objectContaining({ authFlow: 'implicit', authUxMode: 'new_tab' }), { requirePersistence: true })
 })
