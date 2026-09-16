@@ -16,7 +16,7 @@ import {
 import type { JsonValue, RunmeOperation } from '../operationLog/types'
 import { resolveVersion } from '../operationLog/versions'
 
-export const EXAMPLE_RULE_VERSION = 'revision-pair-content-v1'
+export const EXAMPLE_RULE_VERSION = 'revision-pair-content-v2'
 
 export interface ExampleContent {
   kind: 'code' | 'markup'
@@ -39,6 +39,8 @@ export type ExampleEdit =
 
 export interface TrainingExample {
   id: string
+  /** Pure history results are bound to a portable source by the runtime. */
+  source?: { driveFileId: string } | { localUri: string }
   start: VersionRef
   end: VersionRef
   accepted: boolean
@@ -47,18 +49,6 @@ export interface TrainingExample {
     recordIds: string[]
     derivedFrom?: string
   }
-}
-export interface ExampleSource {
-  notebookId: string
-  driveFileId?: string
-  localUri: string
-}
-export interface ExamplesHeader {
-  record_type: 'runme.examples'
-  format_version: 1
-  source: ExampleSource
-  ruleVersion: string
-  sourceChecksum: string
 }
 export interface ExampleIssue {
   recordIds: string[]
@@ -197,7 +187,7 @@ export function prepareExample(
 export function extractExamples(
   operations: RunmeOperation[],
   notebookId: string,
-  options: { syntheticReverse?: boolean } = {}
+  options: { syntheticReverse?: boolean; sources?: Array<'named-revision' | 'cell-decision'> } = {}
 ): ExtractedExamples {
   const examples: TrainingExample[] = [],
     issues: ExampleIssue[] = []
@@ -214,6 +204,8 @@ export function extractExamples(
     accepted: boolean,
     provenance: TrainingExample['provenance']
   ) => {
+    if (provenance.source !== 'synthetic-reverse' && options.sources &&
+        !options.sources.includes(provenance.source)) return
     const edits = compressSnapshots(snapshot(start), snapshot(end))
     if (!edits.length) return
     const value = { start, end, accepted, provenance }
@@ -234,7 +226,7 @@ export function extractExamples(
     if (!groups.has(key)) groups.set(key, revision)
   }
   const named = [...groups.values()]
-  for (const end of named) {
+  for (const end of options.sources && !options.sources.includes('named-revision') ? [] : named) {
     const ancestors = named.filter((start) => revisionFollows(start, end))
     const nearest = ancestors.filter(
       (start) => !ancestors.some((other) => revisionFollows(start, other))
@@ -261,6 +253,7 @@ export function extractExamples(
     const comparison =
       record.comparison ?? roots.get(record.thread_id)?.comparison
     if (!comparison || record.assessment?.kind !== 'cell') continue
+    if (options.sources && !options.sources.includes('cell-decision')) continue
     const assessedCell = record.assessment.cell_id
     const { start, end } = comparison
     const edits = compressSnapshots(snapshot(start), snapshot(end))
@@ -299,12 +292,4 @@ export function extractExamples(
         reason: 'Conflicting labels for the same content transition',
       })
   return { examples: examples.sort((a, b) => (a.id < b.id ? -1 : 1)), issues }
-}
-
-/** The sidecar stores references only; features are reconstructed on demand. */
-export function serializeExamples(
-  header: ExamplesHeader,
-  examples: TrainingExample[]
-): string {
-  return [header, ...examples].map(exampleJson).join('\n') + '\n'
 }

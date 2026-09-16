@@ -1,10 +1,9 @@
 import type { NotebookDiff } from '../notebookDiff/model'
 import type {
-  ClassifierInput,
-  ExamplesHeader,
   ExtractedExamples,
   TrainingExample,
 } from './model'
+import type { PreparedExample } from './payloads'
 
 /** A worker job carries a locator, never a cloned notebook history. */
 export interface ExampleJob {
@@ -14,14 +13,18 @@ export interface ExampleJob {
   name: string
 }
 export interface ExampleIndex extends ExtractedExamples {
-  header: ExamplesHeader
-  sidecarPath: string
+  sourceChecksum: string
+  ruleVersion: string
+}
+export interface ExtractionOptions {
+  sources?: Array<'named-revision' | 'cell-decision'>
+  syntheticReverse?: boolean
 }
 export type ExampleRequest =
-  | { id: number; kind: 'generate'; job: ExampleJob }
+  | { id: number; kind: 'generate'; job: ExampleJob; options?: ExtractionOptions }
   | { id: number; kind: 'preview'; job: ExampleJob; example: TrainingExample }
 export interface ExamplePreview {
-  input: ClassifierInput
+  input: PreparedExample
   diff: NotebookDiff
 }
 export type ExampleResponse =

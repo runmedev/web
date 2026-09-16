@@ -17,7 +17,7 @@ worker.onmessage = ({ data }) => {
         worker.postMessage({
           id: data.id,
           kind: 'generate',
-          result: await generateExampleIndex(browserExampleFiles, data.job),
+          result: await generateExampleIndex(browserExampleFiles, data.job, data.options),
         })
       } else {
         const source = await browserExampleFiles.read(data.job.sourcePath)

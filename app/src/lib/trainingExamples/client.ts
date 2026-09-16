@@ -1,4 +1,3 @@
-import { appLogger } from '../logging/runtime'
 import type { TrainingExample } from './model'
 import type {
   ExampleIndex,
@@ -6,10 +5,9 @@ import type {
   ExamplePreview,
   ExampleRequest,
   ExampleResponse,
+  ExtractionOptions,
 } from './protocol'
 
-export const automaticExamplesEnabled =
-  import.meta.env.VITE_TRAINING_EXAMPLES === 'true'
 let worker: Worker | undefined
 let nextId = 0
 const pending = new Map<
@@ -19,16 +17,16 @@ const pending = new Map<
     reject: (error: Error) => void
   }
 >()
-const scheduled = new Map<string, ReturnType<typeof setTimeout>>()
-const running = new Set<string>()
-const trailing = new Map<string, ExampleJob>()
 
-/** One dedicated worker per page; failures are independent of notebook saves. */
+/** Explicit jobs share one dedicated worker. There are no save/open triggers. */
 function request(
   request:
     | Omit<Extract<ExampleRequest, { kind: 'generate' }>, 'id'>
-    | Omit<Extract<ExampleRequest, { kind: 'preview' }>, 'id'>
+    | Omit<Extract<ExampleRequest, { kind: 'preview' }>, 'id'>,
+  signal?: AbortSignal
 ): Promise<ExampleResponse> {
+  if (signal?.aborted)
+    return Promise.reject(new Error('Example request cancelled'))
   if (!worker) {
     worker = new Worker(new URL('./examples.worker.ts', import.meta.url), {
       type: 'module',
@@ -39,88 +37,71 @@ function request(
       if (data.kind === 'error') job?.reject(new Error(data.error))
       else job?.resolve(data)
     }
-    worker.onerror = () => {
-      worker?.terminate()
-      worker = undefined
-      for (const job of pending.values())
-        job.reject(new Error('Example worker failed; retry generation'))
-      pending.clear()
-    }
+    worker.onerror = () =>
+      cancelTrainingExamples('Example worker failed; retry extraction')
   }
   const id = ++nextId
-  return new Promise((resolve, reject) => {
-    pending.set(id, { resolve, reject })
+  return new Promise<ExampleResponse>((resolve, reject) => {
+    const abort = () => {
+      pending.delete(id)
+      signal?.removeEventListener('abort', abort)
+      reject(new Error('Example request cancelled'))
+    }
+    signal?.addEventListener('abort', abort, { once: true })
+    const cleanup = () => signal?.removeEventListener('abort', abort)
+    pending.set(id, {
+      resolve: (response) => {
+        cleanup()
+        resolve(response)
+      },
+      reject: (error) => {
+        cleanup()
+        reject(error)
+      },
+    })
     try {
       worker!.postMessage({ ...request, id })
     } catch (error) {
       pending.delete(id)
+      cleanup()
       reject(error)
     }
   })
 }
 
-/** Explicit viewer refresh also works when automatic generation is disabled. */
+/** Cancel all page-local work, including CPU work; a later call creates a worker. */
+export function cancelTrainingExamples(
+  message = 'Example extraction cancelled'
+): void {
+  worker?.terminate()
+  worker = undefined
+  for (const job of pending.values()) job.reject(new Error(message))
+  pending.clear()
+}
+
+/** Extract on demand into memory, without writing an examples sidecar. */
 export async function loadTrainingExamples(
-  job: ExampleJob
+  job: ExampleJob,
+  options?: ExtractionOptions,
+  signal?: AbortSignal
 ): Promise<ExampleIndex> {
-  const response = await request({ kind: 'generate', job })
+  const response = await request(
+    { kind: 'generate', job, ...(options ? { options } : {}) },
+    signal
+  )
   if (response.kind !== 'generate')
     throw new Error('Unexpected example worker response')
   return response.result
 }
 
-/** Reconstruct one example off-thread; labels and provenance never enter input. */
+/** Reconstruct the immutable endpoints off-thread, not the current editor head. */
 export async function loadTrainingExamplePreview(
   job: ExampleJob,
-  example: TrainingExample
+  example: TrainingExample,
+  signal?: AbortSignal
 ): Promise<ExamplePreview> {
-  const response = await request({ kind: 'preview', job, example })
+  const response = await request({ kind: 'preview', job, example }, signal)
   if (response.kind !== 'preview')
     throw new Error('Unexpected example worker response')
   return response.result
-}
-
-/** Coalesce notifications; source history is the durable trigger on next open. */
-export function scheduleTrainingExamples(job: ExampleJob): void {
-  if (!automaticExamplesEnabled) return
-  clearTimeout(scheduled.get(job.localUri))
-  scheduled.set(
-    job.localUri,
-    setTimeout(() => {
-      scheduled.delete(job.localUri)
-      if (running.has(job.localUri)) {
-        trailing.set(job.localUri, job)
-        return
-      }
-      running.add(job.localUri)
-      void loadTrainingExamples(job)
-        .then((result) => {
-          appLogger.info(
-            'Training examples saved locally (Drive upload is not implemented)',
-            {
-              attrs: {
-                scope: 'training.examples',
-                localUri: job.localUri,
-                count: result.examples.length,
-              },
-            }
-          )
-        })
-        .catch((error) => {
-          appLogger.error('Training example generation failed', {
-            attrs: {
-              scope: 'training.examples',
-              localUri: job.localUri,
-              error: String(error),
-            },
-          })
-        })
-        .finally(() => {
-          running.delete(job.localUri)
-          const next = trailing.get(job.localUri)
-          trailing.delete(job.localUri)
-          if (next) scheduleTrainingExamples(next)
-        })
-    }, 500)
-  )
 }

@@ -1,90 +1,32 @@
-import { describe, expect, it } from 'vitest'
-
+import { describe, expect, it, vi } from 'vitest'
 import { serializeOperationLog } from '../operationLog/codec'
 import { exampleHeader, exampleJournal } from './fixtures.test-helper'
-import { type ExampleFiles, generateExampleIndex } from './storage'
+import { generateExampleIndex } from './storage'
 
-const job = {
-  localUri: 'local://file/test',
-  sourcePath: 'runme/notebooks/test/document.runme',
-  name: 'test.runme',
-  driveFileId: 'drive-id',
-}
-function fixture() {
-  const j = exampleJournal()
-  j.cell('a', 'one', true)
-  j.name('start')
-  j.cell('a', 'two')
-  j.name('end')
-  const files = new Map<string, string>([
-    [job.sourcePath, serializeOperationLog(exampleHeader, j.operations)],
-  ])
-  const adapter: ExampleFiles = {
-    read: async (path) => files.get(path),
-    write: async (path, value) => {
-      files.set(path, value)
-    },
-    exclusive: async (_key, action) => action(),
-  }
-  return { files, adapter, j }
-}
+const job = { localUri: 'local://file/test', sourcePath: 'runme/notebooks/test/document.runme', name: 'test.runme', driveFileId: 'drive-id' }
 
-describe('OPFS example production', () => {
-  it('writes a reference-only sibling and is idempotent on retry', async () => {
-    const { files, adapter } = fixture()
-    const result = await generateExampleIndex(adapter, job)
-    expect(result.examples).toHaveLength(1)
-    expect(result.header.source.driveFileId).toBe('drive-id')
-    const bytes = files.get(job.sourcePath + '.examples')!
-    expect(bytes.endsWith('\n')).toBe(true)
-    expect(bytes.split('\n').filter(Boolean)).toHaveLength(2)
-    expect(bytes).not.toContain('cell.update')
-    expect(bytes).not.toContain('hidden-author')
-    expect(await generateExampleIndex(adapter, job)).toEqual(result)
-    expect(files.get(job.sourcePath + '.examples')).toBe(bytes)
+describe('explicit read-only example extraction', () => {
+  it('returns portable references from one frozen read and never writes a sidecar', async () => {
+    const j = exampleJournal()
+    j.cell('a', 'one', true); j.name('start'); j.cell('a', 'two'); j.name('end')
+    const bytes = serializeOperationLog(exampleHeader, j.operations)
+    const read = vi.fn(async () => bytes)
+    const write = vi.fn()
+    const index = await generateExampleIndex({ read, ...{ write } }, job)
+    expect(index.examples).toHaveLength(1)
+    expect(index.examples[0].source).toEqual({ driveFileId: 'drive-id' })
+    expect(index.sourceChecksum).toMatch(/^[a-f0-9]{32}$/)
+    expect(read).toHaveBeenCalledTimes(1)
+    expect(read).toHaveBeenCalledWith(job.sourcePath)
+    expect(write).not.toHaveBeenCalled()
+    expect(await generateExampleIndex({ read }, job)).toEqual(index)
+    expect((await generateExampleIndex({ read }, job, { sources: ['cell-decision'] })).examples).toEqual([])
+    expect((await generateExampleIndex({ read }, job, { syntheticReverse: true })).examples).toHaveLength(2)
   })
-  it('preserves the previous sidecar when source history is corrupt', async () => {
-    const { files, adapter } = fixture()
-    await generateExampleIndex(adapter, job)
-    const old = files.get(job.sourcePath + '.examples')
-    files.set(job.sourcePath, 'not valid json\n')
-    await expect(generateExampleIndex(adapter, job)).rejects.toThrow()
-    expect(files.get(job.sourcePath + '.examples')).toBe(old)
-  })
-  it('preserves unrecognized sidecars and mismatched source identities', async () => {
-    const { files, adapter } = fixture()
-    const old =
-      JSON.stringify({ record_type: 'other', format_version: 1 }) + '\n'
-    files.set(job.sourcePath + '.examples', old)
-    await expect(generateExampleIndex(adapter, job)).rejects.toThrow(
-      'preserved'
-    )
-    expect(files.get(job.sourcePath + '.examples')).toBe(old)
-  })
-  it('retries if source changes before publication', async () => {
-    const { files, adapter, j } = fixture()
-    let changed = false
-    adapter.exclusive = async (key, action) => {
-      if (key.startsWith('runme:operation-log:') && !changed) {
-        changed = true
-        j.cell('a', 'three')
-        j.name('third')
-        files.set(
-          job.sourcePath,
-          serializeOperationLog(exampleHeader, j.operations)
-        )
-      }
-      return action()
-    }
-    expect((await generateExampleIndex(adapter, job)).examples).toHaveLength(2)
-  })
-  it('fails without touching source when sidecar storage is full', async () => {
-    const { files, adapter } = fixture()
-    const before = files.get(job.sourcePath)
-    adapter.write = async () => {
-      throw new Error('Quota exceeded')
-    }
-    await expect(generateExampleIndex(adapter, job)).rejects.toThrow('Quota')
-    expect(files.get(job.sourcePath)).toBe(before)
+  it('fails closed on missing or corrupt history without reading old sidecars', async () => {
+    const read = vi.fn(async () => 'invalid\n')
+    await expect(generateExampleIndex({ read }, job)).rejects.toThrow()
+    expect(read).toHaveBeenCalledTimes(1)
+    await expect(generateExampleIndex({ read: async () => undefined }, job)).rejects.toThrow('unavailable')
   })
 })

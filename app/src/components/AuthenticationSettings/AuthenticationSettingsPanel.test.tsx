@@ -98,6 +98,9 @@ describe('AuthenticationSettingsPanel', () => {
     expect(screen.getByText('Google Drive OAuth flow')).toBeTruthy()
     expect(screen.getByText('Google Drive OAuth client')).toBeTruthy()
     expect(screen.getByText('Runme OAuth client')).toBeTruthy()
+    expect(screen.getAllByRole('heading', { level: 3 }).at(-1)?.textContent).toBe(
+      'OpenAI API'
+    )
     expect(screen.getByLabelText('Shared human identity')).toHaveProperty(
       'value',
       'drive-user@example.com'

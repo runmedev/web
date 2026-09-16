@@ -2,6 +2,7 @@ import { ArrowPathIcon } from '@heroicons/react/24/outline'
 import { jwtDecode } from 'jwt-decode'
 import { useCallback, useMemo, useState, type ReactNode } from 'react'
 
+import { OpenAISettings } from './OpenAISettings'
 import {
   isGoogleServiceAccountEmail,
   readAppLoginConfiguration,
@@ -833,6 +834,7 @@ export default function AuthenticationSettingsPanel() {
             />
           </label>
         </SettingsSection>
+        <OpenAISettings />
       </div>
 
       <footer className="border-t border-nb-border bg-nb-surface px-4 py-3">

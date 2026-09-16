@@ -81,10 +81,6 @@ import {
 } from '../lib/operationLog/versions'
 import { captureCommittedRevision as captureReviewRevision } from '../lib/operationLog/versions'
 import { appState } from '../lib/runtime/AppState'
-import {
-  automaticExamplesEnabled,
-  scheduleTrainingExamples,
-} from '../lib/trainingExamples/client'
 import type { ExampleJob } from '../lib/trainingExamples/protocol'
 import { RunmeMetadataKey, parser_pb } from '../runme/client'
 import {
@@ -2559,7 +2555,6 @@ export class LocalNotebooks extends Dexie {
     const content = (
       await this.operationLogStorage.read(record.operationLogRef)
     ).document
-    this.scheduleExamples(uri)
     return decodeNotebookFile(content, record.name).notebook
   }
 
@@ -2576,22 +2571,6 @@ export class LocalNotebooks extends Dexie {
         ? { driveFileId: parseDriveItem(record.remoteId).id }
         : {}),
     }
-  }
-
-  /** This side effect must never turn a committed notebook save into an error. */
-  private scheduleExamples(uri: string): void {
-    if (!automaticExamplesEnabled) return
-    void this.trainingExampleJob(uri)
-      .then(scheduleTrainingExamples)
-      .catch((error) => {
-        appLogger.warn('Training example scheduling skipped', {
-          attrs: {
-            scope: 'training.examples',
-            localUri: uri,
-            error: String(error),
-          },
-        })
-      })
   }
 
   async saveContent(
@@ -4226,7 +4205,6 @@ export class LocalNotebooks extends Dexie {
   }
 
   private notifySync(uri: string): void {
-    this.scheduleExamples(uri)
     const listeners = this.syncListeners.get(uri)
     if (listeners) {
       for (const listener of listeners) {

@@ -48,6 +48,7 @@ import {
 } from './ReviewDiscussion'
 import { ChangedCell } from './OperationLogSuggestionView'
 import { TrainingExamplesView } from './TrainingExamplesView'
+import { getExampleSelection, subscribeExampleSelections } from '../../lib/trainingExamples/registry'
 
 type Props = {
   docUri: string
@@ -62,8 +63,17 @@ const button =
  * Browsing never creates a persisted Review entity.
  */
 export function NotebookReviewFlow(props: Props) {
-  const [examples, setExamples] = useState(false)
-  const [openedExamples, setOpenedExamples] = useState(false)
+  const [examples, setExamples] = useState(Boolean(getExampleSelection(props.docUri)))
+  const [openedExamples, setOpenedExamples] = useState(Boolean(getExampleSelection(props.docUri)))
+  useEffect(() => {
+    // A recipe for another notebook must not switch this notebook's review mode.
+    let previous = getExampleSelection(props.docUri)
+    return subscribeExampleSelections(() => {
+      const selection = getExampleSelection(props.docUri)
+      if (selection && selection !== previous) { setExamples(true); setOpenedExamples(true) }
+      previous = selection
+    })
+  }, [props.docUri])
   return (
     <div id="notebook-review-modes" className="flex h-full min-h-0 flex-col">
       <nav aria-label="Review mode" className="flex shrink-0 gap-2 border-b border-nb-border p-2">

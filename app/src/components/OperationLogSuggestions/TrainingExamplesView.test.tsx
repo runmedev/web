@@ -18,6 +18,7 @@ import type {
   ExamplePreview,
 } from '../../lib/trainingExamples/protocol'
 import { TrainingExamplesView } from './TrainingExamplesView'
+import { setExampleSelection } from '../../lib/trainingExamples/registry'
 
 const api = vi.hoisted(() => ({
   load: vi.fn(),
@@ -27,8 +28,6 @@ const api = vi.hoisted(() => ({
 vi.mock('../../lib/trainingExamples/client', () => ({
   loadTrainingExamples: api.load,
   loadTrainingExamplePreview: api.preview,
-  automaticExamplesEnabled: false,
-  scheduleTrainingExamples: vi.fn(),
 }))
 vi.mock('../../lib/notebookDataController', () => ({
   getNotebookDataController: () => ({
@@ -52,14 +51,8 @@ function fixture() {
   j.decide(start, end, 'a', 'undo')
   const result: ExampleIndex = {
     ...extractExamples(j.operations, 'test'),
-    sidecarPath: 'document.runme.examples',
-    header: {
-      record_type: 'runme.examples',
-      format_version: 1,
-      source: { notebookId: 'test', localUri: 'local://file/test' },
-      ruleVersion: 'test',
-      sourceChecksum: 'test',
-    },
+    ruleVersion: 'test',
+    sourceChecksum: 'test',
   }
   // Sort only this fixture so assertions exercise both labels independent of IDs.
   result.examples.sort((a, b) => Number(b.accepted) - Number(a.accepted))
@@ -73,6 +66,17 @@ function fixture() {
 beforeEach(() => vi.clearAllMocks())
 
 describe('training examples viewer', () => {
+  it('shows a recipe-selected list without extracting or writing on open', async () => {
+    const { result } = fixture()
+    const uri = 'local://file/recipe'
+    const chosen = result.examples.slice(0, 1)
+    setExampleSelection(uri, { examples: chosen, jobs: { [chosen[0].id]: {localUri:'local://file/other-source',sourcePath:'test',name:'other.runme'} } })
+    render(<TrainingExamplesView docUri={uri} store={store} />)
+    await screen.findByRole('heading', {name:'Example 1 · Accepted'})
+    expect(api.load).not.toHaveBeenCalled()
+    expect(api.preview.mock.calls[0][0].localUri).toBe('local://file/other-source')
+    expect(screen.getByText('1 / 1')).toBeTruthy()
+  })
   it('navigates all examples with the corresponding label and real review cell diff', async () => {
     fixture()
     render(<TrainingExamplesView docUri="local://file/test" store={store} />)
@@ -137,7 +141,7 @@ describe('training examples viewer', () => {
     expect(
       within(
         screen.getByRole('complementary', { name: 'Training examples' })
-      ).getByText(/Drive upload is not implemented/)
+      ).getByText(/No sidecar is written/)
     ).toBeTruthy()
   })
 })

@@ -1,4 +1,5 @@
-import { useEffect, useRef, useState } from 'react'
+import { useEffect, useRef, useState, useSyncExternalStore } from 'react'
+import { getExampleSelection, subscribeExampleSelections } from '../../lib/trainingExamples/registry'
 import { ChevronLeftIcon, ChevronRightIcon } from '@heroicons/react/20/solid'
 
 import {
@@ -33,6 +34,7 @@ export function TrainingExamplesView({
   docUri: string
   store: LocalNotebooks
 }) {
+  const selection = useSyncExternalStore(subscribeExampleSelections, () => getExampleSelection(docUri))
   const [index, setIndex] = useState<ExampleIndex>()
   const [selectedId, setSelectedId] = useState('')
   const [loadedPreview, setPreview] = useState<{
@@ -68,7 +70,7 @@ export function TrainingExamplesView({
       await getNotebookDataController()
         .getNotebookData(docUri)
         ?.flushPendingPersist()
-      const result = await loadTrainingExamples(
+      const result = selection ? { examples: selection.examples, issues: [], sourceChecksum: '', ruleVersion: 'recipe' } : await loadTrainingExamples(
         await store.trainingExampleJob(docUri)
       )
       if (!active) return
@@ -88,7 +90,7 @@ export function TrainingExamplesView({
     return () => {
       active = false
     }
-  }, [docUri, store, refresh])
+  }, [docUri, store, refresh, selection])
 
   // Prevent a slow preview for A overwriting the newer selection B (or another
   // document). The label and diff are always published for the same example.
@@ -98,8 +100,7 @@ export function TrainingExamplesView({
     setPreviewLoading(Boolean(selected))
     if (selected) {
       setError('')
-      void store
-        .trainingExampleJob(docUri)
+      void (selection ? Promise.resolve(selection.jobs[selected.id]) : store.trainingExampleJob(docUri))
         .then((job) => loadTrainingExamplePreview(job, selected))
         .then((result) => {
           if (active) {
@@ -117,7 +118,7 @@ export function TrainingExamplesView({
     return () => {
       active = false
     }
-  }, [docUri, store, selected])
+  }, [docUri, store, selected, selection, refresh])
 
   return (
     <div
@@ -149,8 +150,7 @@ export function TrainingExamplesView({
         >
           <h2 className="font-semibold">Training examples</h2>
           <p className="text-xs text-nb-text-muted">
-            Saved locally in OPFS. Drive upload is not implemented in this
-            draft.
+            {selection ? 'Recipe-selected examples. ' : ''}Computed in memory. No sidecar is written; exporting and uploading are separate actions.
           </p>
           <button
             className={button}

@@ -3,12 +3,9 @@ import { create } from '@bufbuild/protobuf'
 import { parser_pb } from '../../runme/client'
 import { computeNotebookDiff } from '../notebookDiff/diff'
 import type { RunmeOperation } from '../operationLog/types'
-import {
-  type ExampleCell,
-  type TrainingExample,
-  applyExampleEdits,
-  prepareExample,
-} from './model'
+import { type TrainingExample } from './model'
+import { prepareContentExample, replayContent } from './payloads'
+import type { CellCreatePayload } from '../operationLog/types'
 import type { ExamplePreview } from './protocol'
 
 /** The viewer renders the same sanitized input and replayed delta used by the
@@ -18,16 +15,16 @@ export function previewExample(
   operations: RunmeOperation[],
   example: TrainingExample
 ): ExamplePreview {
-  const input = prepareExample(operations, example)
-  const notebook = (cells: ExampleCell[]) =>
+  const input = prepareContentExample(operations, example)
+  const notebook = (cells: CellCreatePayload[]) =>
     create(parser_pb.NotebookSchema, {
       cells: cells.map((cell) =>
         create(parser_pb.CellSchema, {
-          refId: cell.cell,
-          value: cell.value,
-          languageId: cell.language,
+          refId: cell.cell_id,
+          value: cell.cell.value,
+          languageId: cell.cell.language_id,
           kind:
-            cell.kind === 'code'
+            cell.cell.kind === 'code'
               ? parser_pb.CellKind.CODE
               : parser_pb.CellKind.MARKUP,
         })
@@ -37,7 +34,7 @@ export function previewExample(
     input,
     diff: computeNotebookDiff(
       notebook(input.initial),
-      notebook(applyExampleEdits(input.initial, input.operations)),
+      notebook(replayContent(input.initial, input.operations)),
       {
         includeMetadata: false,
         includeOutputs: false,

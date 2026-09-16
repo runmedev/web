@@ -91,6 +91,17 @@ const DEFAULT_SANDBOX_ALLOWED_METHODS = [
   'notebookDiff.restoreDeletedCell',
   'notebookDiff.restoreAllDeletedCells',
   'notebookDiff.help',
+  'trainingExamples.extract',
+  'trainingExamples.prepare',
+  'trainingExamples.preview',
+  'trainingExamples.show',
+  'trainingExamples.encodeSftExample',
+  'trainingExamples.encodeJsonl',
+  'trainingExamples.uploadOpenAIJsonl',
+  'trainingExamples.submitTrainingJob',
+  'trainingExamples.getTrainingJob',
+  'trainingExamples.cancel',
+  'trainingExamples.help',
   'app.getVersion',
   'app.getSessionId',
   'app.getSessionID',
@@ -450,6 +461,19 @@ export function buildSandboxSrcDoc(options: {
           help: () => hostCall("revisions.help", []),
         };
         const suggestions = { list: (args) => hostCall("suggestions.list", [args]) };
+        const trainingExamples = {
+          extract: (args) => hostCall("trainingExamples.extract", [args]),
+          prepare: (example) => hostCall("trainingExamples.prepare", [example]),
+          preview: (example) => hostCall("trainingExamples.preview", [example]),
+          show: (examples) => hostCall("trainingExamples.show", [examples]),
+          encodeSftExample: (input, accepted) => hostCall("trainingExamples.encodeSftExample", [input, accepted]),
+          encodeJsonl: (rows) => hostCall("trainingExamples.encodeJsonl", [rows]),
+          uploadOpenAIJsonl: (args) => hostCall("trainingExamples.uploadOpenAIJsonl", [args]),
+          submitTrainingJob: (args) => hostCall("trainingExamples.submitTrainingJob", [args]),
+          getTrainingJob: (args) => hostCall("trainingExamples.getTrainingJob", [args]),
+          cancel: () => hostCall("trainingExamples.cancel", []),
+          help: () => hostCall("trainingExamples.help", []),
+        };
         const notebookDiff = {
           listDriveRevisions: (target) => hostCall("notebookDiff.listDriveRevisions", [target]),
           diffDriveRevision: (args) => hostCall("notebookDiff.diffDriveRevision", [args]),
@@ -614,6 +638,7 @@ export function buildSandboxSrcDoc(options: {
               "revisions",
               "suggestions",
               "notebookDiff",
+              "trainingExamples",
               "app",
               "runmeRunners",
               "explorer",
@@ -622,7 +647,7 @@ export function buildSandboxSrcDoc(options: {
               "help",
               '"use strict"; return (async () => {\\n' + code + '\\n})();',
             );
-            await runner(consoleProxy, runme, tour, ui, opfs, net, embed, notebooks, documents, documentation, comments, comparisons, revisions, suggestions, notebookDiff, app, runmeRunners, explorer, credentials, drive, help);
+            await runner(consoleProxy, runme, tour, ui, opfs, net, embed, notebooks, documents, documentation, comments, comparisons, revisions, suggestions, notebookDiff, trainingExamples, app, runmeRunners, explorer, credentials, drive, help);
           } catch (error) {
             exitCode = 1;
             post({ type: "stderr", data: String(error) + "\\n" });

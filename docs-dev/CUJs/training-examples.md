@@ -4,12 +4,19 @@
 
 Design: [20260912_training_examples.runme](https://web.runme.dev/?doc=https%3A%2F%2Fdrive.google.com%2Ffile%2Fd%2F1ZxXleLr8obZjsgf8ytAbJ9YM0cI3YSJl%2Fview).
 
-This draft generates a reference-only `.runme.examples` OPFS sibling. It does
-not upload that sidecar to Google Drive or train a model. The viewer is available
-on demand. Set `VITE_TRAINING_EXAMPLES=true` when building/running Vite to enable
-automatic reconciliation after local history changes and on notebook open.
-The default is off until Drive synchronization and large-history performance
-are validated. Existing notebook save/sync behavior is unchanged.
+This draft uses explicit AppKernel JS calls: `trainingExamples.extract`, `prepare`,
+`show`, `encodeSftExample`, and `encodeJsonl`. Results stay in memory. Saving,
+naming, opening and viewing notebooks never creates `.runme.examples` files.
+Existing old sidecars are untouched. Dataset export and upload are explicit recipe
+steps; no automatic training or Drive sync is performed.
+
+The encoder produces user-only `messages` plus a top-level string
+`reference_answer`, not the public assistant-target chat SFT format. Browser JS
+can explicitly call `uploadOpenAIJsonl`, `submitTrainingJob` and `getTrainingJob`.
+Set the OpenAI key and endpoint in Authentication Settings, or supply an ephemeral
+`apiKey` to each function. Never put a literal secret in notebook source.
+The saved key is unencrypted localStorage, scoped to this origin and endpoint.
+Only run trusted notebook code. The target endpoint must allow browser CORS.
 
 ## Journey
 
@@ -35,17 +42,32 @@ are validated. Existing notebook save/sync behavior is unchanged.
    the comparison selection and the selected example remain intact.
 9. Edit/name another revision in the editor. The viewer stays on the selected
    example until **Refresh examples** is clicked.
-10. Reopen the notebook. With automatic generation enabled, verify the source
-    history regenerates any missing derived index. Confirm the source notebook is
-    not changed by extraction. The viewer explicitly reports local-only storage.
+10. Run a recipe with `extract({source: {driveFileId}})`, prepare each retained
+    example, then `show(examples)`. Verify that the exact recipe-selected list is
+    displayed, including lists spanning documents. Extraction must not write any
+    sidecar or change notebook history.
+11. Encode rows using `await trainingExamples.encodeSftExample(input, accepted)`
+    and `await trainingExamples.encodeJsonl(rows)`. Verify one JSON object per line,
+    final LF, and no label in the prompt. Assign whole document families to train
+    or validation, detect feature overlap, and persist a manifest only explicitly.
+    One source family is a smoke test, not an independent validation dataset.
+12. Open Authentication Settings → OpenAI API. Save a key with its endpoint;
+    verify the password field clears and the saved status appears. Reload and
+    verify the key is still configured without revealing it. Clear removes it.
+13. Explicitly upload each reviewed split using `uploadOpenAIJsonl({jsonl, filename})`.
+    Record each returned ID in an OPFS manifest before continuing. Submit with
+    `submitTrainingJob({job})` only after reviewing the endpoint-specific payload
+    and resource cost. Use `getTrainingJob({id})` to read status. Tests mock these
+    network calls and must not upload user data or allocate paid resources.
 
 ## Failure cases
 
 - No eligible pair: show actionable empty state, not a broken diff.
 - Missing/corrupt history or unsupported records: fail extraction without
-  overwriting the prior sidecar; the notebook remains independently editable.
-- Missing Web Locks, worker failure or OPFS quota: report an example error, not
-  a failed notebook save. Retrying worker startup is supported.
+  changing source history; the notebook remains independently editable.
+- Worker failure or missing OPFS source: report an example error, not a failed
+  notebook save. Retrying worker startup is supported. Explicit cancellation
+  terminates page-local worker jobs; there is no durable background queue.
 - Multiple incomparable named predecessors: defer pairing with a warning.
 - A cell decision over a larger multi-cell delta: defer rather than mislabeling
   unrelated changes. Scope-only assessments and ordinary comments are not labels.
@@ -55,12 +77,19 @@ are validated. Existing notebook save/sync behavior is unchanged.
 
 - `model.test.ts`: causal revision pairs, canonical replay, reverse negatives,
   metadata exclusion, no-ops, historical naming, conflicts and scoped decisions.
-- `storage.test.ts`: reference-only JSONL, retries, changed-source publication,
-  preservation on corruption/schema mismatch/quota errors.
-- `client.test.ts`: dedicated worker messages, default-off automatic generation,
-  bounded coalescing and startup-error recovery.
+- `storage.test.ts`: read-only extraction, portable source references, options and
+  corruption handling without sidecar writes.
+- `client.test.ts`: explicit worker dispatch, cancellation and startup recovery.
+- `encoding.test.ts`: native payload replay, label separation, JSONL and multipart
+  validation. No real data upload occurs in tests.
+- `runtime.test.ts`: source resolution, explicit APIs and recipe-selected lists.
+- `openaiTraining.test.ts`: saved/ephemeral keys, endpoint binding, no redirects or
+  retries, sanitized errors, multipart upload, submission validation and status.
+- `OpenAISettings.test.tsx`: masked independent save and clear controls.
 - `TrainingExamplesView.test.tsx`: navigation, labels, real review cell rendering,
   stale-response isolation, empty/error/warning states and refresh.
 
-These component/unit tests do not substitute for a browser OPFS/worker smoke
-test on supported browsers before enabling automatic production by default.
+These component/unit tests do not substitute for browser OPFS/worker execution or
+an authenticated upload integration check. Upload success does not establish
+training-schema acceptance or start a training job. Reconcile timeouts before
+retrying POST. Never store credentials in notebook source, outputs or logs.

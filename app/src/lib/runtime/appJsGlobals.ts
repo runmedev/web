@@ -65,6 +65,7 @@ import {
   toImportedNotebookName,
 } from '../markdownImport'
 import { createNotebookDiffRuntimeApi } from '../notebookDiff/runtime'
+import { createTrainingExamplesApi } from '../trainingExamples/runtime'
 import { detectNotebookFileFormat } from '../notebookFormat'
 import type { Runner } from '../runner'
 import {
@@ -1293,6 +1294,12 @@ export function createAppJsGlobals({
         ].join('\n'),
     },
     notebooks: notebooksHelpers,
+    trainingExamples: createTrainingExamplesApi({
+      localStore: () => appState.localNotebooks,
+      driveStore: () => appState.driveNotebookStore,
+      openNotebook: openNotebookForRuntime,
+      signal,
+    }),
     embed: embedImageForRuntime,
     documents: documentsHelpers,
     documentation: documentationHelpers,
