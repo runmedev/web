@@ -96,11 +96,10 @@ export async function loadTrainingExamples(
 
 /** Reconstruct the immutable endpoints off-thread, not the current editor head. */
 export async function loadTrainingExamplePreview(
-  job: ExampleJob,
   example: TrainingExample,
   signal?: AbortSignal
 ): Promise<ExamplePreview> {
-  const response = await request({ kind: 'preview', job, example }, signal)
+  const response = await request({ kind: 'preview', example }, signal)
   if (response.kind !== 'preview')
     throw new Error('Unexpected example worker response')
   return response.result

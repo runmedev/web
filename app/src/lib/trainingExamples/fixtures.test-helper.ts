@@ -70,7 +70,38 @@ export function exampleJournal() {
     }
     operations.push(projectRecord(record))
   }
-  return { operations, append, cell, name, decide }
+  /** Comments bind to a precise cell snapshot; labels must not follow the head. */
+  const comment = (
+    cellId: string,
+    version: VersionRef,
+    parent?: CommentRecord
+  ) => {
+    append('entity', {})
+    const { kind: _kind, payload: _payload, ...envelope } = operations.pop()!
+    const record: CommentRecord = {
+      ...envelope,
+      record_type: 'runme.comment',
+      format_version: 2,
+      thread_id: parent?.thread_id ?? envelope.op_id,
+      ...(parent
+        ? { parent_comment_id: parent.op_id }
+        : {
+            anchors: [
+              {
+                kind: 'cell' as const,
+                cell_id: cellId,
+                version,
+                surface: 'source' as const,
+              },
+            ],
+          }),
+      author: { displayName: 'hidden-author', kind: 'human' },
+      body: { format: 'text/markdown', value: 'hidden-comment' },
+    }
+    operations.push(projectRecord(record))
+    return record
+  }
+  return { operations, append, cell, name, decide, comment }
 }
 
 export const exampleHeader = {

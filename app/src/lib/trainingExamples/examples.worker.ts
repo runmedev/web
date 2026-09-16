@@ -1,4 +1,3 @@
-import { parseOperationLog } from '../operationLog/codec'
 import { previewExample } from './preview'
 import type { ExampleRequest, ExampleResponse } from './protocol'
 import { browserExampleFiles, generateExampleIndex } from './storage'
@@ -17,18 +16,19 @@ worker.onmessage = ({ data }) => {
         worker.postMessage({
           id: data.id,
           kind: 'generate',
-          result: await generateExampleIndex(browserExampleFiles, data.job, data.options),
+          result: await generateExampleIndex(
+            browserExampleFiles,
+            data.job,
+            data.options
+          ),
         })
       } else {
-        const source = await browserExampleFiles.read(data.job.sourcePath)
-        if (!source) throw new Error('Source notebook is unavailable')
-        const parsed = parseOperationLog(source)
         // Historical naming can repartition the index. The viewer's frozen
         // revision pair remains inspectable until its next explicit refresh.
         worker.postMessage({
           id: data.id,
           kind: 'preview',
-          result: previewExample(parsed.operations, data.example),
+          result: previewExample([], data.example),
         })
       }
     } catch (error) {

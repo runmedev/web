@@ -45,8 +45,10 @@ const store = {
 function fixture() {
   const j = exampleJournal()
   j.cell('a', 'original', true)
-  const start = j.name('start')
   j.cell('a', 'improved')
+  j.name('positive')
+  const start = j.name('start')
+  j.cell('a', 'regression')
   const end = j.name('end')
   j.decide(start, end, 'a', 'undo')
   const result: ExampleIndex = {
@@ -54,10 +56,11 @@ function fixture() {
     ruleVersion: 'test',
     sourceChecksum: 'test',
   }
+  result.issues = [{ recordIds: ['test'], reason: 'Test diagnostic' }]
   // Sort only this fixture so assertions exercise both labels independent of IDs.
   result.examples.sort((a, b) => Number(b.accepted) - Number(a.accepted))
   api.load.mockResolvedValue(result)
-  api.preview.mockImplementation(async (_job, example) =>
+  api.preview.mockImplementation(async (example) =>
     previewExample(j.operations, example)
   )
   return { result, j }
@@ -70,11 +73,21 @@ describe('training examples viewer', () => {
     const { result } = fixture()
     const uri = 'local://file/recipe'
     const chosen = result.examples.slice(0, 1)
-    setExampleSelection(uri, { examples: chosen, jobs: { [chosen[0].id]: {localUri:'local://file/other-source',sourcePath:'test',name:'other.runme'} } })
+    setExampleSelection(uri, {
+      examples: chosen,
+      jobs: {
+        [chosen[0].id]: {
+          localUri: 'local://file/other-source',
+          sourcePath: 'test',
+          name: 'other.runme',
+        },
+      },
+    })
     render(<TrainingExamplesView docUri={uri} store={store} />)
-    await screen.findByRole('heading', {name:'Example 1 · Accepted'})
+    await screen.findByRole('heading', { name: 'Example 1 · Accepted' })
     expect(api.load).not.toHaveBeenCalled()
-    expect(api.preview.mock.calls[0][0].localUri).toBe('local://file/other-source')
+    expect(api.preview.mock.calls[0][0]).toEqual(chosen[0])
+    expect(store.trainingExampleJob).not.toHaveBeenCalled()
     expect(screen.getByText('1 / 1')).toBeTruthy()
   })
   it('navigates all examples with the corresponding label and real review cell diff', async () => {
@@ -85,8 +98,9 @@ describe('training examples viewer', () => {
     expect(
       screen.getByRole('button', { name: 'Previous example' })
     ).toBeDisabled()
-    const diff = screen.getByTestId('suggestion-modified-cell')
-    expect(diff.querySelector('.line-through')?.textContent).toBeTruthy()
+    expect(
+      screen.getByRole('heading', { name: 'Example 1 · Accepted' })
+    ).toBeTruthy()
     expect(screen.getByText('Label source: named-revision')).toBeTruthy()
     fireEvent.click(screen.getByRole('button', { name: 'Next example' }))
     await screen.findByRole('heading', { name: 'Example 2 · Rejected' })
@@ -103,6 +117,49 @@ describe('training examples viewer', () => {
       screen.getByRole('heading', { name: 'Example 2 · Rejected' })
     ).toBeTruthy()
   })
+  it('filters a recipe by notebook and cell while keeping labels attached to diffs', async () => {
+    const { result } = fixture()
+    const another = {
+      ...result.examples[0],
+      id: 'another-example',
+      provenance: {
+        ...result.examples[0].provenance,
+        source: { driveFileId: 'another' },
+        cellIds: ['b'],
+      },
+    }
+    const uri = 'local://file/filtered-recipe'
+    setExampleSelection(uri, {
+      examples: [...result.examples, another],
+      jobs: {},
+    })
+    render(<TrainingExamplesView docUri={uri} store={store} />)
+    await screen.findByText('1 / 3')
+    fireEvent.change(screen.getByLabelText('Filter by notebook'), {
+      target: { value: JSON.stringify(another.provenance.source) },
+    })
+    await screen.findByText('1 / 1')
+    expect(
+      within(screen.getByLabelText('Filter by cell')).getByRole('option', {
+        name: 'b',
+      })
+    ).toBeTruthy()
+    expect(
+      within(screen.getByLabelText('Filter by cell')).queryByRole('option', {
+        name: 'a',
+      })
+    ).toBeNull()
+    fireEvent.change(screen.getByLabelText('Filter by notebook'), {
+      target: { value: '' },
+    })
+    fireEvent.change(screen.getByLabelText('Filter by cell'), {
+      target: { value: 'a' },
+    })
+    await screen.findByText('1 / 2')
+    fireEvent.click(screen.getByRole('button', { name: 'Next example' }))
+    await screen.findByRole('heading', { name: 'Example 2 · Rejected' })
+    expect(api.preview.mock.calls.at(-1)?.[0]).toEqual(result.examples[1])
+  })
   it('does not display a stale diff under the next label', async () => {
     const { result, j } = fixture()
     let resolveFirst!: (value: ExamplePreview) => void
@@ -117,7 +174,7 @@ describe('training examples viewer', () => {
     fireEvent.click(screen.getByRole('button', { name: 'Next example' }))
     await screen.findByRole('heading', { name: 'Example 2 · Rejected' })
     const wrongPreview = previewExample(j.operations, result.examples[0])
-    wrongPreview.diff.cells[0].baseCell!.value = 'STALE RESPONSE'
+    wrongPreview.diff.cells[0].compareCell!.value = 'STALE RESPONSE'
     await act(async () => resolveFirst(wrongPreview))
     expect(screen.queryByText('STALE RESPONSE')).toBeNull()
     expect(

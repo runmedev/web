@@ -142,8 +142,10 @@ describe('revision-pair examples', () => {
     j.cell('b', 'new cell', true, 200)
     const end = j.name('third')
     const extracted = extractExamples(j.operations, 'notebook')
-    expect(extracted.examples).toHaveLength(2)
-    expect(extracted.examples.map(({ start, end }) => [start, end])).toEqual(
+    expect(extracted.examples).toHaveLength(3)
+    expect(
+      extracted.examples.map(({ provenance: { start, end } }) => [start, end])
+    ).toEqual(
       expect.arrayContaining([
         [start, middle],
         [middle, end],
@@ -154,12 +156,12 @@ describe('revision-pair examples', () => {
       syntheticReverse: true,
     }).examples
     expect(
-      synthetic.filter((e) => e.provenance.source === 'synthetic-reverse')
-    ).toHaveLength(2)
+      synthetic.filter((e) => e.provenance.labelSource === 'synthetic-reverse')
+    ).toHaveLength(3)
     const reverse = synthetic.find(
       (e) =>
-        e.provenance.source === 'synthetic-reverse' &&
-        JSON.stringify(e.start) === JSON.stringify(middle)
+        e.provenance.labelSource === 'synthetic-reverse' &&
+        JSON.stringify(e.provenance.end) === JSON.stringify(middle)
     )!
     expect(reverse.accepted).toBe(false)
     const preview = previewExample(j.operations, reverse)
@@ -175,7 +177,7 @@ describe('revision-pair examples', () => {
     j.cell('a', 'temporary')
     j.cell('a', 'same')
     j.name('last')
-    expect(extractExamples(j.operations, 'notebook').examples).toEqual([])
+    expect(extractExamples(j.operations, 'notebook').examples).toHaveLength(1)
   })
   it('repartitions pairs after historical naming without retaining obsolete examples', () => {
     const j = exampleJournal()
@@ -184,16 +186,16 @@ describe('revision-pair examples', () => {
     const middleOp = j.cell('a', 'two')
     j.cell('a', 'three')
     const end = j.name('end')
-    expect(extractExamples(j.operations, 'notebook').examples).toHaveLength(1)
+    expect(extractExamples(j.operations, 'notebook').examples).toHaveLength(2)
     const middle = j.name('historical', [(middleOp as { op_id: string }).op_id])
     const examples = extractExamples(j.operations, 'notebook').examples
-    expect(examples.map((e) => [e.start, e.end])).toEqual(
+    expect(examples.map((e) => [e.provenance.start, e.provenance.end])).toEqual(
       expect.arrayContaining([
         [start, middle],
         [middle, end],
       ])
     )
-    expect(examples).toHaveLength(2)
+    expect(examples).toHaveLength(3)
     expect(
       extractExamples([...j.operations].reverse(), 'notebook').examples
     ).toEqual(examples)
@@ -208,13 +210,11 @@ describe('revision-pair examples', () => {
     j.cell('a', 'one')
     const result = extractExamples(j.operations, 'notebook')
     const negative = result.examples.find((e) => !e.accepted)!
-    expect(negative.start).toEqual(start)
-    expect(negative.end).toEqual(end)
-    expect(
-      result.issues.some((issue) => issue.reason.includes('Conflicting'))
-    ).toBe(true)
+    expect(negative.provenance.start).toEqual(start)
+    expect(negative.provenance.end).toEqual(end)
+    expect(result.issues).toEqual([])
   })
-  it('defers a partial cell assessment over a multi-cell delta', () => {
+  it('extracts an isolated cell assessment over a multi-cell delta', () => {
     const j = exampleJournal()
     j.cell('a', 'one', true)
     const start = j.name('start')
@@ -223,8 +223,17 @@ describe('revision-pair examples', () => {
     const end = j.name('end')
     j.decide(start, end, 'a', 'accept')
     const result = extractExamples(j.operations, 'notebook')
-    expect(result.examples).toHaveLength(1)
-    expect(result.issues[0].reason).toContain('only part')
+    expect(result.examples).toHaveLength(3)
+    expect(result.issues).toEqual([])
+    const decision = result.examples.find(
+      (e) => e.provenance.labelSource === 'cell-decision'
+    )!
+    expect(decision.diff).toHaveLength(1)
+    expect(
+      previewExample([], decision).diff.cells.some(
+        (c) => c.compareCell?.value === 'new'
+      )
+    ).toBe(false)
   })
   it('fails closed on unknown history rather than training on recovered content', () => {
     const j = exampleJournal()
@@ -261,9 +270,10 @@ describe('revision-pair examples', () => {
     })
     j.operations.push(branch)
     j.name('B', [branch.op_id])
+    j.cell('a', 'merged content')
     j.name('merged')
     const result = extractExamples(j.operations, 'notebook')
-    expect(result.examples).toHaveLength(2)
+    expect(result.examples).toHaveLength(3)
     expect(result.issues).toHaveLength(1)
     expect(result.issues[0].reason).toContain('incomparable')
   })

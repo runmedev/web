@@ -3,6 +3,7 @@ import {
   comparePositionIds,
   validatePositionId,
 } from '../operationLog/positions'
+import type { VersionRef } from '../operationLog/records'
 import type {
   CellCreatePayload,
   CellIdentityPayload,
@@ -12,8 +13,8 @@ import type {
   RunmeOperation,
 } from '../operationLog/types'
 import {
+  type ClassifierInput,
   type ExampleCell,
-  type TrainingExample,
   applyExampleEdits,
   exampleJson,
   prepareExample,
@@ -102,9 +103,13 @@ export function replayContent(
  */
 export function prepareContentExample(
   operations: RunmeOperation[],
-  example: Pick<TrainingExample, 'start' | 'end'>
+  example: { start: VersionRef; end: VersionRef }
 ): PreparedExample {
-  const planned = prepareExample(operations, example)
+  return planContentExample(prepareExample(operations, example))
+}
+
+/** Convert a normalized, possibly scoped plan to native content payloads. */
+export function planContentExample(planned: ClassifierInput): PreparedExample {
   const toContent = (
     cell: Pick<ExampleCell, 'kind' | 'language' | 'value'>
   ): OperationCell => ({

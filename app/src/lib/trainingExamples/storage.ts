@@ -30,9 +30,12 @@ export async function generateExampleIndex(
     ...extracted,
     examples: extracted.examples.map((example) => ({
       ...example,
-      source: job.driveFileId
-        ? { driveFileId: job.driveFileId }
-        : { localUri: job.localUri },
+      provenance: {
+        ...example.provenance,
+        source: job.driveFileId
+          ? { driveFileId: job.driveFileId }
+          : { localUri: job.localUri },
+      },
     })),
   }
 }

@@ -1,5 +1,8 @@
 import { useEffect, useRef, useState, useSyncExternalStore } from 'react'
-import { getExampleSelection, subscribeExampleSelections } from '../../lib/trainingExamples/registry'
+import {
+  getExampleSelection,
+  subscribeExampleSelections,
+} from '../../lib/trainingExamples/registry'
 import { ChevronLeftIcon, ChevronRightIcon } from '@heroicons/react/20/solid'
 
 import {
@@ -34,7 +37,9 @@ export function TrainingExamplesView({
   docUri: string
   store: LocalNotebooks
 }) {
-  const selection = useSyncExternalStore(subscribeExampleSelections, () => getExampleSelection(docUri))
+  const selection = useSyncExternalStore(subscribeExampleSelections, () =>
+    getExampleSelection(docUri)
+  )
   const [index, setIndex] = useState<ExampleIndex>()
   const [selectedId, setSelectedId] = useState('')
   const [loadedPreview, setPreview] = useState<{
@@ -47,16 +52,36 @@ export function TrainingExamplesView({
   const [previewLoading, setPreviewLoading] = useState(false)
   const [refresh, setRefresh] = useState(0)
   const [collapsed, setCollapsed] = useState(false)
+  const [notebookFilter, setNotebookFilter] = useState('')
+  const [cellFilter, setCellFilter] = useState('')
   const view = useRef<HTMLDivElement>(null)
-  const selected = index?.examples.find((example) => example.id === selectedId)
+  const notebookKey = (
+    example: NonNullable<typeof index>['examples'][number]
+  ) => JSON.stringify(example.provenance.source)
+  const notebookExamples =
+    index?.examples.filter(
+      (e) => !notebookFilter || notebookKey(e) === notebookFilter
+    ) ?? []
+  const filtered = notebookExamples.filter(
+    (e) => !cellFilter || e.provenance.cellIds.includes(cellFilter)
+  )
+  const selected =
+    filtered.find((example) => example.id === selectedId) ?? filtered[0]
+  const activeId = selected?.id
   // Guard in render, not only in the effect: selection must not paint even one
   // frame of the previous diff under the next example's label.
   const preview =
-    loadedPreview?.exampleId === selectedId && loadedPreview.docUri === docUri
+    loadedPreview &&
+    loadedPreview.exampleId === activeId &&
+    loadedPreview.docUri === docUri
       ? loadedPreview.value
       : undefined
-  const position =
-    index?.examples.findIndex((example) => example.id === selectedId) ?? -1
+  const position = filtered.findIndex((example) => example.id === activeId)
+
+  useEffect(() => {
+    setNotebookFilter('')
+    setCellFilter('')
+  }, [docUri, selection])
 
   // An explicit refresh freezes a new derived index. Do not move the user's
   // selection in response to background edits while they inspect an example.
@@ -70,9 +95,14 @@ export function TrainingExamplesView({
       await getNotebookDataController()
         .getNotebookData(docUri)
         ?.flushPendingPersist()
-      const result = selection ? { examples: selection.examples, issues: [], sourceChecksum: '', ruleVersion: 'recipe' } : await loadTrainingExamples(
-        await store.trainingExampleJob(docUri)
-      )
+      const result = selection
+        ? {
+            examples: selection.examples,
+            issues: [],
+            sourceChecksum: '',
+            ruleVersion: 'recipe',
+          }
+        : await loadTrainingExamples(await store.trainingExampleJob(docUri))
       if (!active) return
       setIndex(result)
       setSelectedId((old) =>
@@ -100,8 +130,7 @@ export function TrainingExamplesView({
     setPreviewLoading(Boolean(selected))
     if (selected) {
       setError('')
-      void (selection ? Promise.resolve(selection.jobs[selected.id]) : store.trainingExampleJob(docUri))
-        .then((job) => loadTrainingExamplePreview(job, selected))
+      void loadTrainingExamplePreview(selected)
         .then((result) => {
           if (active) {
             setPreview({ exampleId: selected.id, docUri, value: result })
@@ -150,7 +179,8 @@ export function TrainingExamplesView({
         >
           <h2 className="font-semibold">Training examples</h2>
           <p className="text-xs text-nb-text-muted">
-            {selection ? 'Recipe-selected examples. ' : ''}Computed in memory. No sidecar is written; exporting and uploading are separate actions.
+            {selection ? 'Recipe-selected examples. ' : ''}Computed in memory.
+            No sidecar is written; exporting and uploading are separate actions.
           </p>
           <button
             className={button}
@@ -162,21 +192,67 @@ export function TrainingExamplesView({
           {index && (
             <>
               <label className="block text-sm">
+                Notebook
+                <select
+                  aria-label="Filter by notebook"
+                  value={notebookFilter}
+                  className="mt-1 w-full rounded border border-nb-border p-2"
+                  onChange={(event) => {
+                    setNotebookFilter(event.target.value)
+                    setCellFilter('')
+                  }}
+                >
+                  <option value="">All notebooks</option>
+                  {[...new Set(index.examples.map(notebookKey))].map((key) => {
+                    const example = index.examples.find(
+                      (e) => notebookKey(e) === key
+                    )!
+                    const source = example.provenance.source
+                    return (
+                      <option key={key} value={key}>
+                        {selection?.jobs[example.id]?.name ??
+                          ('driveFileId' in source
+                            ? source.driveFileId
+                            : source.localUri)}
+                      </option>
+                    )
+                  })}
+                </select>
+              </label>
+              <label className="block text-sm">
+                Cell
+                <select
+                  aria-label="Filter by cell"
+                  value={cellFilter}
+                  className="mt-1 w-full rounded border border-nb-border p-2"
+                  onChange={(event) => setCellFilter(event.target.value)}
+                >
+                  <option value="">All cells</option>
+                  {[
+                    ...new Set(
+                      notebookExamples.flatMap((e) => e.provenance.cellIds)
+                    ),
+                  ].map((id) => (
+                    <option key={id} value={id}>
+                      {id}
+                    </option>
+                  ))}
+                </select>
+              </label>
+              <label className="block text-sm">
                 Example
                 <select
                   aria-label="Example"
                   className="mt-1 w-full rounded border border-nb-border p-2"
-                  disabled={!index.examples.length}
-                  value={selectedId}
+                  disabled={!filtered.length}
+                  value={activeId ?? ''}
                   onChange={(event) => setSelectedId(event.target.value)}
                 >
-                  {!index.examples.length && (
-                    <option value="">No examples</option>
-                  )}
-                  {index.examples.map((example, i) => (
+                  {!filtered.length && <option value="">No examples</option>}
+                  {filtered.map((example, i) => (
                     <option key={example.id} value={example.id}>
                       {i + 1} · {example.accepted ? 'Accepted' : 'Rejected'} ·{' '}
-                      {example.provenance.source}
+                      {example.provenance.labelSource}
                     </option>
                   ))}
                 </select>
@@ -189,20 +265,18 @@ export function TrainingExamplesView({
                   className={button}
                   aria-label="Previous example"
                   disabled={position <= 0}
-                  onClick={() => setSelectedId(index.examples[position - 1].id)}
+                  onClick={() => setSelectedId(filtered[position - 1].id)}
                 >
                   ←
                 </button>
                 <span aria-live="polite">
-                  {position < 0 ? 0 : position + 1} / {index.examples.length}
+                  {position < 0 ? 0 : position + 1} / {filtered.length}
                 </span>
                 <button
                   className={button}
                   aria-label="Next example"
-                  disabled={
-                    position < 0 || position >= index.examples.length - 1
-                  }
-                  onClick={() => setSelectedId(index.examples[position + 1].id)}
+                  disabled={position < 0 || position >= filtered.length - 1}
+                  onClick={() => setSelectedId(filtered[position + 1].id)}
                 >
                   →
                 </button>
@@ -217,7 +291,7 @@ export function TrainingExamplesView({
                     </span>
                   </p>
                   <p className="text-sm">
-                    Label source: {selected.provenance.source}
+                    Label source: {selected.provenance.labelSource}
                   </p>
                   <details className="text-xs">
                     <summary>Revision pair and evidence</summary>
@@ -261,9 +335,8 @@ export function TrainingExamplesView({
         )}
         {!loading && index?.examples.length === 0 && (
           <p>
-            No eligible examples yet. Name two different revisions or
-            accept/undo a comparison whose changes are confined to one cell,
-            then refresh examples.
+            No eligible examples yet. Name a revision, comment on a cell
+            version, or accept/undo a cell change, then refresh examples.
           </p>
         )}
         {preview && selected && (

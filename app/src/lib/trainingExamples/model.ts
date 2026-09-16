@@ -1,22 +1,17 @@
-import md5 from 'md5'
-
 import { canonicalJson } from '../operationLog/canonicalJson'
 import { materializeOperationLog } from '../operationLog/materialize'
-import { committedOperationIds, orderOperationSet } from '../operationLog/order'
-import {
-  type CommentRecord,
-  type VersionRef,
-  serializedRecord,
-} from '../operationLog/records'
-import {
-  buildNotebookRevisions,
-  revisionFollows,
-  revisionKey,
-} from '../operationLog/revisions'
+import { type NotebookRecord, type VersionRef } from '../operationLog/records'
 import type { JsonValue, RunmeOperation } from '../operationLog/types'
 import { resolveVersion } from '../operationLog/versions'
 
-export const EXAMPLE_RULE_VERSION = 'revision-pair-content-v2'
+export const EXAMPLE_RULE_VERSION = 'cell-version-content-v3'
+
+export type ExampleSource = { driveFileId: string } | { localUri: string }
+export type LabelSource =
+  | 'named-revision'
+  | 'cell-decision'
+  | 'comment'
+  | 'synthetic-reverse'
 
 export interface ExampleContent {
   kind: 'code' | 'markup'
@@ -39,14 +34,17 @@ export type ExampleEdit =
 
 export interface TrainingExample {
   id: string
-  /** Pure history results are bound to a portable source by the runtime. */
-  source?: { driveFileId: string } | { localUri: string }
-  start: VersionRef
-  end: VersionRef
+  /** Self-contained, sanitized records. Never append these to the source log. */
+  base: NotebookRecord[]
+  diff: NotebookRecord[]
   accepted: boolean
   provenance: {
-    source: 'named-revision' | 'cell-decision' | 'synthetic-reverse'
+    source: ExampleSource
+    labelSource: LabelSource
     recordIds: string[]
+    cellIds: string[]
+    start: VersionRef | null
+    end: VersionRef
     derivedFrom?: string
   }
 }
@@ -168,7 +166,7 @@ export function compressSnapshots(
 /** Mask opaque cell IDs consistently across both endpoints of a single example. */
 export function prepareExample(
   operations: RunmeOperation[],
-  example: Pick<TrainingExample, 'start' | 'end'>
+  example: { start: VersionRef; end: VersionRef }
 ): ClassifierInput {
   const before = exampleSnapshot(operations, example.start)
   const after = exampleSnapshot(operations, example.end)
@@ -181,115 +179,4 @@ export function prepareExample(
   return { initial, operations: compressSnapshots(initial, normalize(after)) }
 }
 
-/** Rebuild the derived index. Historical naming repartitions adjacent pairs;
- * it must not append obsolete partitions to the dataset forever.
- */
-export function extractExamples(
-  operations: RunmeOperation[],
-  notebookId: string,
-  options: { syntheticReverse?: boolean; sources?: Array<'named-revision' | 'cell-decision'> } = {}
-): ExtractedExamples {
-  const examples: TrainingExample[] = [],
-    issues: ExampleIssue[] = []
-  const snapshots = new Map<string, ExampleCell[]>()
-  const snapshot = (version: VersionRef) => {
-    const key = exampleJson(version)
-    if (!snapshots.has(key))
-      snapshots.set(key, exampleSnapshot(operations, version))
-    return snapshots.get(key)!
-  }
-  const add = (
-    start: VersionRef,
-    end: VersionRef,
-    accepted: boolean,
-    provenance: TrainingExample['provenance']
-  ) => {
-    if (provenance.source !== 'synthetic-reverse' && options.sources &&
-        !options.sources.includes(provenance.source)) return
-    const edits = compressSnapshots(snapshot(start), snapshot(end))
-    if (!edits.length) return
-    const value = { start, end, accepted, provenance }
-    const id = md5(exampleJson([EXAMPLE_RULE_VERSION, notebookId, value]))
-    if (!examples.some((example) => example.id === id))
-      examples.push({ id, ...value })
-  }
-  // Group equivalent content histories; distinct checkpoint aliases do not
-  // create additional examples. Native VersionRefs remain the stored identity.
-  const groups = new Map<
-    string,
-    ReturnType<typeof buildNotebookRevisions>[number]
-  >()
-  for (const revision of buildNotebookRevisions(operations)
-    .filter((r) => r.name?.trim() && r.version)
-    .sort((a, b) => (a.id < b.id ? -1 : 1))) {
-    const key = revisionKey(operations, revision.operationIds)
-    if (!groups.has(key)) groups.set(key, revision)
-  }
-  const named = [...groups.values()]
-  for (const end of options.sources && !options.sources.includes('named-revision') ? [] : named) {
-    const ancestors = named.filter((start) => revisionFollows(start, end))
-    const nearest = ancestors.filter(
-      (start) => !ancestors.some((other) => revisionFollows(start, other))
-    )
-    if (nearest.length > 1) {
-      issues.push({
-        recordIds: [end.id],
-        reason: 'Multiple incomparable named predecessors; pair deferred',
-      })
-    } else if (nearest.length === 1) {
-      const start = nearest[0]
-      add(start.version!, end.version!, true, {
-        source: 'named-revision',
-        recordIds: [start.id, end.id],
-      })
-    }
-  }
-  const committed = committedOperationIds(operations)
-  const roots = new Map<string, CommentRecord>()
-  for (const op of orderOperationSet(operations).ordered) {
-    if (!committed.has(op.op_id) || op.kind !== 'comment.record') continue
-    const record = serializedRecord(op) as CommentRecord
-    if (!record.parent_comment_id) roots.set(record.thread_id, record)
-    const comparison =
-      record.comparison ?? roots.get(record.thread_id)?.comparison
-    if (!comparison || record.assessment?.kind !== 'cell') continue
-    if (options.sources && !options.sources.includes('cell-decision')) continue
-    const assessedCell = record.assessment.cell_id
-    const { start, end } = comparison
-    const edits = compressSnapshots(snapshot(start), snapshot(end))
-    if (edits.some((edit) => edit.cell !== assessedCell)) {
-      issues.push({
-        recordIds: [record.op_id],
-        reason:
-          'Cell decision covers only part of the endpoint delta; deferred',
-      })
-      continue
-    }
-    add(start, end, record.assessment.decision === 'accept', {
-      source: 'cell-decision',
-      recordIds: [record.op_id],
-    })
-  }
-  if (options.syntheticReverse) {
-    for (const example of [...examples].filter(
-      (candidate) => candidate.accepted
-    ))
-      add(example.end, example.start, false, {
-        source: 'synthetic-reverse',
-        recordIds: example.provenance.recordIds,
-        derivedFrom: example.id,
-      })
-  }
-  const labels = new Map<string, TrainingExample[]>()
-  for (const example of examples) {
-    const key = exampleJson([snapshot(example.start), snapshot(example.end)])
-    labels.set(key, [...(labels.get(key) ?? []), example])
-  }
-  for (const group of labels.values())
-    if (new Set(group.map((example) => example.accepted)).size > 1)
-      issues.push({
-        recordIds: group.map((example) => example.id),
-        reason: 'Conflicting labels for the same content transition',
-      })
-  return { examples: examples.sort((a, b) => (a.id < b.id ? -1 : 1)), issues }
-}
+export { extractExamples } from './extract'

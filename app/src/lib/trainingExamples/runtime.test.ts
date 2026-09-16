@@ -31,11 +31,17 @@ describe('notebook-centric training API', () => {
   const source = { driveFileId: 'drive-source' }
   const example = {
     id: 'example',
-    source,
-    start: { kind: 'operation' as const, op_id: 'a:1' },
-    end: { kind: 'operation' as const, op_id: 'a:2' },
+    base: [],
+    diff: [],
     accepted: true,
-    provenance: { source: 'named-revision' as const, recordIds: ['a:3'] },
+    provenance: {
+      source,
+      labelSource: 'named-revision' as const,
+      recordIds: ['a:3'],
+      cellIds: ['a'],
+      start: null,
+      end: { kind: 'operation' as const, op_id: 'a:2' },
+    },
   }
   function setup() {
     vi.clearAllMocks()
@@ -73,7 +79,7 @@ describe('notebook-centric training API', () => {
       sources: ['named-revision'],
       syntheticReverse: false,
     })
-    expect(result.examples[0].source).toEqual(source)
+    expect(result.examples[0].provenance.source).toEqual(source)
     expect(open).not.toHaveBeenCalled()
     expect(client.load).toHaveBeenCalledWith(
       job,
@@ -85,10 +91,42 @@ describe('notebook-centric training API', () => {
       diff: { cells: [] },
     })
     expect(await api.prepare(example)).toEqual({ initial: [], operations: [] })
-    await api.show([example])
+    await api.preview([example])
     expect(getExampleSelection(job.localUri)?.examples).toEqual([example])
     expect(open).toHaveBeenCalledWith(job.localUri)
     await expect(api.show([example, example])).rejects.toThrow('Duplicate')
+  })
+  it('runs the short CUJ with Runme URLs and returns an array', async () => {
+    const { api } = setup()
+    client.load.mockResolvedValue({ examples: [example], issues: [] })
+    const url =
+      'https://web.runme.dev/?doc=' +
+      encodeURIComponent('https://drive.google.com/file/d/drive-source/view')
+    const examples = []
+    for (const notebookUrl of [url])
+      examples.push(...(await api.extract(notebookUrl)))
+    await api.preview(examples)
+    expect(examples).toEqual([example])
+    expect(client.load.mock.calls[0][0]).toEqual(job)
+    client.load.mockResolvedValue({
+      examples: [],
+      issues: [{ reason: 'ambiguous baseline' }],
+    })
+    await expect(api.extract(url)).rejects.toThrow('ambiguous baseline')
+  })
+  it('prepares self-contained examples without reading source storage', async () => {
+    setup()
+    client.preview.mockResolvedValue({ input: { initial: [], operations: [] } })
+    const api = createTrainingExamplesApi({
+      localStore: () => null,
+      driveStore: () => null,
+      openNotebook: vi.fn(),
+    })
+    await expect(api.prepare(example)).resolves.toEqual({
+      initial: [],
+      operations: [],
+    })
+    expect(client.preview).toHaveBeenCalledWith(example, undefined)
   })
   it('fails on invalid source selectors and missing source locators', async () => {
     const { api } = setup()
@@ -96,7 +134,10 @@ describe('notebook-centric training API', () => {
       api.extract({ source, sources: ['unknown' as any] })
     ).rejects.toThrow('Unknown')
     await expect(
-      api.prepare({ ...example, source: undefined })
+      api.prepare({
+        ...example,
+        provenance: { ...example.provenance, source: undefined as any },
+      })
     ).rejects.toThrow('source')
     await expect(
       api.extract({ source: { driveFileId: '../invalid' } })
