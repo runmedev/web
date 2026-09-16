@@ -3,8 +3,7 @@
  * No real provider credentials, notebook data, or raw tokens enter artifacts.
  */
 import { spawn } from 'node:child_process'
-import { existsSync, mkdirSync, readdirSync } from 'node:fs'
-import { homedir } from 'node:os'
+import { mkdirSync } from 'node:fs'
 import { dirname, join, resolve } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { type Browser, chromium } from 'playwright-core'
@@ -37,22 +36,6 @@ function check(message: string, valid: boolean) {
   passed++
   console.log(`[PASS] ${message}`)
 }
-/** Reuse the browser installed by agent-browser in CI even if its revision differs. */
-function chromiumPath(): string | undefined {
-  if (process.env.CUJ_CHROMIUM_PATH) return process.env.CUJ_CHROMIUM_PATH
-  if (existsSync(chromium.executablePath())) return chromium.executablePath()
-  const cache = join(homedir(), '.cache/ms-playwright')
-  if (!existsSync(cache)) return undefined
-  for (const entry of readdirSync(cache)
-    .filter((name) => name.startsWith('chromium-'))
-    .sort()
-    .reverse()) {
-    for (const path of ['chrome-linux64/chrome', 'chrome-linux/chrome']) {
-      const candidate = join(cache, entry, path)
-      if (existsSync(candidate)) return candidate
-    }
-  }
-}
 try {
   for (let attempt = 0; ; attempt++) {
     if (
@@ -66,7 +49,9 @@ try {
   }
   browser = await chromium.launch({
     headless: true,
-    executablePath: chromiumPath(),
+    // Use the revision installed by this workspace's playwright-core CLI.
+    // agent-browser installs its own Chrome and is not a Playwright dependency.
+    executablePath: process.env.CUJ_CHROMIUM_PATH,
     args: ['--no-sandbox'],
   })
   for (const flow of ['pkce', 'implicit']) {

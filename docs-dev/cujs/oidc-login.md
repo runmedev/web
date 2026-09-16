@@ -12,6 +12,16 @@ and signs out again. Each combination records a screenshot and video in
 code exchange that validates S256 PKCE, or signs an implicit response with a
 nonce and access-token hash. No real identity or provider credential is used.
 
+## Browser prerequisites
+
+Run `pnpm -C app exec playwright-core install --with-deps chromium` before this
+scenario. CI runs the same command after installing the locked workspace
+dependencies. It installs Playwright's matching Chromium and video encoder;
+`agent-browser install` installs an independent browser and is not sufficient.
+The scenario uses Playwright's default browser resolution (including
+`PLAYWRIGHT_BROWSERS_PATH`) instead of guessing a revision from another tool's
+cache. `CUJ_CHROMIUM_PATH` remains an explicit local browser override.
+
 ## Critical design decisions
 
 - Runme and Drive flow settings are independent. An omitted Runme flow preserves

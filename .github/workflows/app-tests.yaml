@@ -139,6 +139,14 @@ jobs:
           agent-browser --version
           agent-browser install
 
+      - name: Install Playwright browser for OAuth CUJ
+        shell: bash
+        run: |
+          set -euo pipefail
+          # Match the workspace Playwright version, including its video encoder.
+          # agent-browser uses an independent Chrome installation.
+          pnpm -C app exec playwright-core install --with-deps chromium
+
       - name: Install ffmpeg
         shell: bash
         run: |
