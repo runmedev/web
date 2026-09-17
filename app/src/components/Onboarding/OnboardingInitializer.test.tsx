@@ -1,4 +1,6 @@
 // @vitest-environment jsdom
+import { captureStartupDocumentRequest } from '../../lib/startupNavigation'
+
 import { render } from '@testing-library/react'
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 
@@ -32,6 +34,7 @@ describe('OnboardingInitializer', () => {
   beforeEach(() => {
     window.localStorage.clear()
     window.history.replaceState(null, '', '/')
+    captureStartupDocumentRequest()
     mocks.currentDoc = null
     mocks.setCurrentDoc.mockReset()
     mocks.showDocument.mockReset()
@@ -81,5 +84,17 @@ describe('OnboardingInitializer', () => {
     )
     render(<OnboardingInitializer />)
     expect(mocks.showDocument).not.toHaveBeenCalled()
+  })
+  it('preserves explicit navigation after bootstrap consumes its URL', () => {
+    window.history.replaceState(
+      null,
+      '',
+      '/?doc=https%3A%2F%2Fdrive.google.com%2Ffile%2Fd%2Fshared%2Fview'
+    )
+    captureStartupDocumentRequest()
+    window.history.replaceState(null, '', '/?session=restored')
+    render(<OnboardingInitializer />)
+    expect(mocks.showDocument).not.toHaveBeenCalled()
+    expect(mocks.setCurrentDoc).not.toHaveBeenCalled()
   })
 })

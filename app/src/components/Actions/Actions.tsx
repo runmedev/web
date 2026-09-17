@@ -1,3 +1,4 @@
+import { hasStartupDocumentRequest } from '../../lib/startupNavigation'
 import {
   type ChangeEvent,
   type DragEvent as ReactDragEvent,
@@ -4433,6 +4434,15 @@ export default function Actions() {
   const tabTriggerRefs = useRef<Map<string, HTMLDivElement>>(new Map())
   const [propertiesUri, setPropertiesUri] = useState<string | null>(null)
   const pendingSelectedTabUriRef = useRef<string | null>(null)
+  // Pending intents restored on an ordinary reload are already acknowledged;
+  // only fresh URL navigation should override the user's saved selection.
+  const focusedDriveLinkIntentsRef = useRef(
+    new Set<string>(
+      hasStartupDocumentRequest()
+        ? []
+        : driveLinkSnapshot.intents.map((intent) => intent.id)
+    )
+  )
   useEffect(() => {
     if (typeof window === 'undefined') {
       return
@@ -4587,7 +4597,23 @@ export default function Actions() {
       showDocument(DRIVE_LINK_STATUS_TAB_URI, {
         title: 'Drive Link Status',
       })
-      if (!currentDocUri || !currentDocIsOpen) {
+      // An explicit shared URL takes precedence over a restored selection.
+      // Focus each URL intent once, so auth/retry updates do not keep pulling
+      // the user back after they deliberately select another tab.
+      const newUrlIntents = driveLinkSnapshot.intents.filter(
+        (intent) =>
+          intent.source === 'url' &&
+          intent.focus &&
+          !focusedDriveLinkIntentsRef.current.has(intent.id)
+      )
+      newUrlIntents.forEach((intent) =>
+        focusedDriveLinkIntentsRef.current.add(intent.id)
+      )
+      if (newUrlIntents.length > 0) {
+        pendingSelectedTabUriRef.current = null
+        setSelectedTabUri(DRIVE_LINK_STATUS_TAB_URI)
+        setCurrentDoc(DRIVE_LINK_STATUS_TAB_URI)
+      } else if (!currentDocUri || !currentDocIsOpen) {
         setCurrentDoc(DRIVE_LINK_STATUS_TAB_URI)
       }
       return
@@ -4602,6 +4628,7 @@ export default function Actions() {
     closeWorkspaceDocument,
     currentDocIsOpen,
     currentDocUri,
+    driveLinkSnapshot.intents,
     setCurrentDoc,
     showDocument,
     statusTabVisible,

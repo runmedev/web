@@ -1,16 +1,20 @@
+import { v4 as uuidv4 } from "uuid";
+
 export const SESSION_QUERY_PARAM = "session";
 const SESSION_STORAGE_KEY = "runme/sessionId";
+const STALE_RESTORE_CACHE_KEY = "runme/staleSessionRestoreCache";
 
 let sessionId: string | null = null;
 let claimedSessionId: string | null = null;
 let claimPromise: Promise<string> | null = null;
 let releaseSessionLock: (() => void) | null = null;
 let releaseListenerRegistered = false;
+let sessionLockHeld = false;
 
 // Keep the word lists local instead of depending on unique-names-generator.
 // That package is a good fit functionally, but adding it caused long registry
-// proxy stalls in this workspace for a small runtime need. Web Locks are used
-// below to avoid live-tab collisions, so these lists do not need to be huge.
+// proxy stalls in this workspace for a small runtime need. A UUID suffix
+// prevents accidental reuse of an older durable session.
 const SESSION_PREFIXES = [
   "amber",
   "blue",
@@ -87,10 +91,14 @@ function randomIndex(maxExclusive: number): number {
 }
 
 export function createSessionId(): string {
-  return [
-    SESSION_PREFIXES[randomIndex(SESSION_PREFIXES.length)],
-    SESSION_NOUNS[randomIndex(SESSION_NOUNS.length)],
-  ].join("-");
+  return (
+    [
+      SESSION_PREFIXES[randomIndex(SESSION_PREFIXES.length)],
+      SESSION_NOUNS[randomIndex(SESSION_NOUNS.length)],
+    ].join("-") +
+    "-" +
+    (globalThis.crypto?.randomUUID?.() ?? uuidv4())
+  );
 }
 
 function getSessionStorage(): Storage | null {
@@ -137,7 +145,16 @@ function initializeSessionId(): string {
     return stored;
   }
 
-  const created = createSessionId();
+  // The URL is a restore hint only. No durable state is read before its lock
+  // is acquired. Keep existing tab-local identity first for OAuth callbacks.
+  const requested =
+    typeof window === "undefined"
+      ? null
+      : new URL(window.location.href).searchParams.get(SESSION_QUERY_PARAM);
+  const created =
+    requested && /^[a-zA-Z0-9_-]{1,100}$/.test(requested) && hasWebLocks()
+      ? requested
+      : createSessionId();
   writeStoredSessionId(created);
   return created;
 }
@@ -149,8 +166,13 @@ function hasWebLocks(): boolean {
   );
 }
 
-function buildSessionLockName(id: string): string {
+export function buildSessionLockName(id: string): string {
   return `runme:session:${id}`;
+}
+
+/** Short gate prevents GC's temporary owner lock from looking like a live tab. */
+export function buildSessionClaimLockName(id: string): string {
+  return `runme:session-claim:${id}`;
 }
 
 function updateSessionQueryParam(id: string): void {
@@ -171,15 +193,67 @@ function updateSessionQueryParam(id: string): void {
   );
 }
 
+/** Disable writes before releasing ownership. BFCache resumes must claim anew. */
+function releaseOnPageHide(): void {
+  sessionLockHeld = false;
+  releaseSessionLock?.();
+  releaseSessionLock = null;
+}
+
+function reloadOnPageShow(event: PageTransitionEvent): void {
+  if (!event.persisted) return;
+  markSessionRestoreCacheStale();
+  window.location.reload();
+}
+
 function registerSessionLockRelease(): void {
-  if (releaseListenerRegistered || typeof window === "undefined") {
-    return;
-  }
+  if (releaseListenerRegistered || typeof window === "undefined") return;
   releaseListenerRegistered = true;
-  window.addEventListener("pagehide", () => {
-    releaseSessionLock?.();
-    releaseSessionLock = null;
-  });
+  window.addEventListener("pagehide", releaseOnPageHide);
+  window.addEventListener("pageshow", reloadOnPageShow);
+}
+
+/** Durable state is writable only while this document holds the session lock. */
+export function hasSessionLock(): boolean {
+  return sessionLockHeld;
+}
+
+/**
+ * BFCache relinquishes ownership. Remember across reload that another owner may
+ * have updated the durable record; do not discard fallback state until a valid
+ * record has been read under the newly acquired lock.
+ */
+export function markSessionRestoreCacheStale(): void {
+  try {
+    getSessionStorage()?.setItem(STALE_RESTORE_CACHE_KEY, "1");
+  } catch {
+    // Unavailable sessionStorage has no readable restore cache to invalidate.
+  }
+}
+
+/** Consume the one-reload hint; ordinary reloads still prefer tab-local state. */
+export function consumeStaleSessionRestoreCache(): boolean {
+  try {
+    const storage = getSessionStorage();
+    const stale = storage?.getItem(STALE_RESTORE_CACHE_KEY) === "1";
+    storage?.removeItem(STALE_RESTORE_CACHE_KEY);
+    return stale;
+  } catch {
+    return false;
+  }
+}
+
+/** Clear every notebook restore hint after a fork or stale-cache recovery. */
+export function clearSessionRestoreState(): void {
+  try {
+    const storage = getSessionStorage();
+    storage?.removeItem("runme/openNotebooks");
+    storage?.removeItem("runme/currentDoc");
+    // The workspace controller also caches notebook tabs independently.
+    storage?.removeItem("runme/workspaceDocuments");
+  } catch {
+    /* Tab-local persistence may be disabled. */
+  }
 }
 
 async function tryClaimSessionId(id: string): Promise<boolean> {
@@ -208,6 +282,7 @@ async function tryClaimSessionId(id: string): Promise<boolean> {
               return;
             }
 
+            sessionLockHeld = true;
             registerSessionLockRelease();
             const released = new Promise<void>((release) => {
               releaseSessionLock = release;
@@ -219,13 +294,13 @@ async function tryClaimSessionId(id: string): Promise<boolean> {
         .catch(() => settle(false));
     });
   } catch {
-    return true;
+    return false;
   }
 }
 
 async function claimSessionId(): Promise<string> {
   const seen = new Set<string>();
-  const maxAttempts = SESSION_PREFIXES.length * SESSION_NOUNS.length;
+  const maxAttempts = 8;
 
   for (let attempt = 0; attempt < maxAttempts; attempt += 1) {
     const candidate = attempt === 0 ? getSessionId() : createSessionId();
@@ -234,7 +309,21 @@ async function claimSessionId(): Promise<string> {
     }
     seen.add(candidate);
 
-    if (await tryClaimSessionId(candidate)) {
+    // Serialize the claim with GC for this ID, without waiting for a live
+    // owner's lifetime lock. Only the short claim/delete decision holds this gate.
+    const claimed = hasWebLocks()
+      ? await Promise.resolve()
+          .then(() =>
+            navigator.locks.request(
+              buildSessionClaimLockName(candidate),
+              {},
+              () => tryClaimSessionId(candidate),
+            ),
+          )
+          .catch(() => false)
+      : await tryClaimSessionId(candidate);
+    if (claimed) {
+      if (candidate !== sessionId) clearSessionRestoreState();
       sessionId = candidate;
       claimedSessionId = candidate;
       writeStoredSessionId(candidate);
@@ -243,9 +332,10 @@ async function claimSessionId(): Promise<string> {
     }
   }
 
-  // If every readable name is actively locked, fall back to the current
-  // candidate so the app still has a stable session label.
-  claimedSessionId = getSessionId();
+  // Lock errors never authorize durable reads/writes or reuse of another tab.
+  clearSessionRestoreState();
+  sessionId = createSessionId();
+  claimedSessionId = sessionId;
   writeStoredSessionId(claimedSessionId);
   updateSessionQueryParam(claimedSessionId);
   return claimedSessionId;
@@ -254,8 +344,9 @@ async function claimSessionId(): Promise<string> {
 /**
  * getSessionId returns the Runme browser session identifier for this page.
  *
- * The id is scoped to sessionStorage so a page refresh preserves the same
- * browser session. Browser tab duplication may copy both the URL and
+ * The id is restored from sessionStorage, then the URL after an app restart.
+ * Newly allocated IDs include a UUID so old durable records are never reused
+ * by chance. Browser tab duplication may copy both the URL and
  * sessionStorage, so Web Locks remain the ownership authority and force a new
  * persisted id when another live tab already owns the stored one.
  */
@@ -291,7 +382,9 @@ export function ensureSessionQueryParam(): string {
 }
 
 export function __resetTabIdForTests(): void {
-  releaseSessionLock?.();
+  releaseOnPageHide();
+  window.removeEventListener("pagehide", releaseOnPageHide);
+  window.removeEventListener("pageshow", reloadOnPageShow);
   sessionId = null;
   claimedSessionId = null;
   claimPromise = null;
