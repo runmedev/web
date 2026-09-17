@@ -1,5 +1,7 @@
 import { useEffect, useRef } from 'react'
 
+import { hasStartupDocumentRequest } from '../../lib/startupNavigation'
+
 import { useCurrentDoc } from '../../contexts/CurrentDocContext'
 import { useWorkspaceDocumentContext } from '../../contexts/WorkspaceDocumentContext'
 import {
@@ -12,10 +14,7 @@ import {
 export function OnboardingInitializer() {
   const { getCurrentDoc, setCurrentDoc } = useCurrentDoc()
   const { showDocument } = useWorkspaceDocumentContext()
-  const explicitDocumentRequested = useRef(
-    typeof window !== 'undefined' &&
-      new URLSearchParams(window.location.search).has('doc')
-  )
+  const explicitDocumentRequested = useRef(hasStartupDocumentRequest())
 
   useEffect(() => {
     if (explicitDocumentRequested.current || hasOpenedOnboarding()) {

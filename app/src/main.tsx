@@ -25,6 +25,7 @@ import { normalizeAppIndexUrl } from "./lib/appBase";
 import { ensurePersistentStorage } from "./lib/persistentStorage";
 import { registerPwaServiceWorker } from "./lib/pwa";
 import { initializeNotebookSessionPersistence } from "./lib/notebookSessionPersistence";
+import { captureStartupDocumentRequest } from "./lib/startupNavigation";
 import { ensureSessionQueryParam } from "./lib/tabIdentity";
 
 type AppConfigApi = {
@@ -70,6 +71,7 @@ const noopBridge: RendererContext<void> = {
 };
 setContext(noopBridge);
 
+captureStartupDocumentRequest();
 normalizeAppIndexUrl();
 ensureSessionQueryParam();
 googleAnalytics.initialize();

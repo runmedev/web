@@ -29,7 +29,7 @@ screenshot. The suite uploads these artifacts through its existing pipeline.
 
 `durableNotebookSessions.test.ts` covers migration, malformed and oversized records,
 quota failures, unavailable locks, invalid URL IDs, pagehide write suppression,
-30-day expiry, a 50-inactive-session cap, frozen live owners, and ownership or
+7-day expiry, a 50-inactive-session cap, frozen live owners, and ownership or
 activity changing during cleanup. Deleting restore metadata never deletes notebook
 content. No cleanup runs while the app is closed; the next visit removes expired
 records. Browser storage clearing and cross-origin/profile restoration are outside

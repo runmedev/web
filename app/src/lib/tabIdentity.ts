@@ -1,3 +1,5 @@
+import { v4 as uuidv4 } from "uuid";
+
 export const SESSION_QUERY_PARAM = "session";
 const SESSION_STORAGE_KEY = "runme/sessionId";
 
@@ -94,7 +96,7 @@ export function createSessionId(): string {
       SESSION_NOUNS[randomIndex(SESSION_NOUNS.length)],
     ].join("-") +
     "-" +
-    crypto.randomUUID()
+    (globalThis.crypto?.randomUUID?.() ?? uuidv4())
   );
 }
 
@@ -165,6 +167,11 @@ function hasWebLocks(): boolean {
 
 export function buildSessionLockName(id: string): string {
   return `runme:session:${id}`;
+}
+
+/** Short gate prevents GC's temporary owner lock from looking like a live tab. */
+export function buildSessionClaimLockName(id: string): string {
+  return `runme:session-claim:${id}`;
 }
 
 function updateSessionQueryParam(id: string): void {
@@ -274,7 +281,20 @@ async function claimSessionId(): Promise<string> {
     }
     seen.add(candidate);
 
-    if (await tryClaimSessionId(candidate)) {
+    // Serialize the claim with GC for this ID, without waiting for a live
+    // owner's lifetime lock. Only the short claim/delete decision holds this gate.
+    const claimed = hasWebLocks()
+      ? await Promise.resolve()
+          .then(() =>
+            navigator.locks.request(
+              buildSessionClaimLockName(candidate),
+              {},
+              () => tryClaimSessionId(candidate),
+            ),
+          )
+          .catch(() => false)
+      : await tryClaimSessionId(candidate);
+    if (claimed) {
       if (candidate !== sessionId) clearCopiedRestoreState();
       sessionId = candidate;
       claimedSessionId = candidate;

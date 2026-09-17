@@ -69,7 +69,10 @@ record to restore. Notebook sharing continues to use `?doc=` links.
 ## Copied URLs and Web Locks
 
 Before hydration, request the exclusive `runme:session:<id>` Web Lock with
-`ifAvailable: true`. Hold its callback promise for the document's lifetime.
+`ifAvailable: true`. Hold its callback promise for the document's lifetime. A separate short
+`runme:session-claim:<id>` lock serializes the claim decision with cleanup, so
+GC's temporary ownership is not mistaken for another live tab. Startup waits for
+this short gate; GC skips busy gates. Neither holds the gate for the tab lifetime.
 
 | Situation | Behavior |
 | --- | --- |
@@ -103,7 +106,9 @@ using its old in-memory workspace. The browser also releases locks on crashes.
    `runme/workspaceDocuments`. The latter is a separate workspace cache that
    otherwise resurrects cloned notebook tabs. Clear it for expired sessions too.
    After a URL-only restart, rebuild notebook workspace tabs from the controller.
-3. Initialize the persistence adapter before rendering providers/controllers.
+3. Capture explicit `?doc=` navigation before asynchronous bootstrap consumes
+   the query, so onboarding/documentation cannot replace the requested view.
+   Initialize the persistence adapter before rendering providers/controllers.
 4. Use surviving sessionStorage for a same-tab reload; otherwise read the durable
    record. Import legacy per-tab references once. Never import old shared keys.
 5. Hydrate the controller and selection. Preserve retryable notebook entries when
@@ -120,7 +125,7 @@ Malformed records are not hydrated or overwritten while their session is open.
 
 ## Retention and cleanup
 
-Inactive records expire after **30 days since last recorded activity**. Keep at
+Inactive records expire after **7 days since last recorded activity**. Keep at
 most **50 inactive records**, deleting the least recently active excess records.
 Active locked records are exempt from both rules. Thus inactive metadata is
 bounded to roughly 3.2 MiB plus keys; currently open sessions add their own bounded
@@ -157,7 +162,7 @@ cross-origin restore requires a separate authenticated synchronization design.
   and verify the original durable bytes and notebook state are unchanged.
 - Cover cloned sessionStorage, invalid IDs, lock API failures, pagehide writes,
   malformed/quota-denied metadata, empty-list persistence, and migration.
-- Test 30-day expiry, the inactive count limit, sleeping lock holders, and a
+- Test 7-day expiry, the inactive count limit, sleeping lock holders, and a
   session acquired or refreshed during collection. Verify notebook data survives.
 - Run the repo build/package tests and relevant app/browser suites.
 

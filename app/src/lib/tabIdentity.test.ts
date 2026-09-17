@@ -3,6 +3,7 @@ import { afterEach, describe, expect, it, vi } from 'vitest'
 
 import {
   __resetTabIdForTests,
+  createSessionId,
   ensureSessionQueryParam,
   getClaimedSessionId,
   getSessionId,
@@ -110,5 +111,16 @@ describe('tab identity', () => {
       { ifAvailable: true },
       expect.any(Function)
     )
+  })
+  it('generates a durable-safe ID without the secure-context randomUUID API', () => {
+    vi.spyOn(globalThis.crypto, 'randomUUID').mockImplementation(
+      undefined as never
+    )
+    // In insecure contexts getRandomValues remains available but randomUUID does not.
+    Object.defineProperty(globalThis.crypto, 'randomUUID', {
+      configurable: true,
+      value: undefined,
+    })
+    expect(createSessionId()).toMatch(/^[a-z]+-[a-z]+-[0-9a-f-]{36}$/)
   })
 })

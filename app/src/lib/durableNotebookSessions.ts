@@ -1,7 +1,7 @@
-import { buildSessionLockName } from './tabIdentity'
+import { buildSessionClaimLockName, buildSessionLockName } from './tabIdentity'
 
 export const SESSION_RECORD_PREFIX = 'runme/notebook-session/v1/'
-export const SESSION_RETENTION_MS = 30 * 24 * 60 * 60 * 1000
+export const SESSION_RETENTION_MS = 7 * 24 * 60 * 60 * 1000
 export const MAX_INACTIVE_SESSIONS = 50
 export const MAX_SESSION_BYTES = 64 * 1024
 
@@ -96,21 +96,30 @@ export async function collectInactiveNotebookSessions(
       for (const candidate of candidates) {
         const id = candidate.key.slice(SESSION_RECORD_PREFIX.length)
         await locks.request(
-          buildSessionLockName(id),
+          buildSessionClaimLockName(id),
           { ifAvailable: true },
-          (ownerLock) => {
-            if (!ownerLock) return
-            const record = parseDurableSession(storage.getItem(candidate.key))
-            // A recently reopened-and-closed session may have changed since the
-            // scan. Defer its ranking to the next pass instead of pruning fresh data.
-            if (record && record.lastActiveAt !== candidate.time) return
-            const expired =
-              !record || now - record.lastActiveAt > SESSION_RETENTION_MS
-            if (expired || retainedInactive >= MAX_INACTIVE_SESSIONS) {
-              storage.removeItem(candidate.key)
-            } else {
-              retainedInactive++
-            }
+          async (claimGate) => {
+            if (!claimGate) return
+            await locks.request(
+              buildSessionLockName(id),
+              { ifAvailable: true },
+              (ownerLock) => {
+                if (!ownerLock) return
+                const record = parseDurableSession(
+                  storage.getItem(candidate.key)
+                )
+                // A recently reopened-and-closed session may have changed since the
+                // scan. Defer its ranking to the next pass instead of pruning fresh data.
+                if (record && record.lastActiveAt !== candidate.time) return
+                const expired =
+                  !record || now - record.lastActiveAt > SESSION_RETENTION_MS
+                if (expired || retainedInactive >= MAX_INACTIVE_SESSIONS) {
+                  storage.removeItem(candidate.key)
+                } else {
+                  retainedInactive++
+                }
+              }
+            )
           }
         )
       }

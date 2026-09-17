@@ -12,6 +12,7 @@ import {
 import { NotebookSessionPersistence } from './notebookSessionPersistence'
 import {
   __resetTabIdForTests,
+  buildSessionClaimLockName,
   getClaimedSessionId,
   hasSessionLock,
 } from './tabIdentity'
@@ -19,18 +20,27 @@ import {
 /** Hold locks until their callbacks settle, just as browser Web Locks do. */
 function mockLocks() {
   const held = new Set<string>()
+  const waiters = new Map<string, (() => void)[]>()
   const request = vi.fn(
     async (
       name: string,
-      _options: LockOptions,
+      options: LockOptions,
       callback: LockGrantedCallback
     ) => {
-      if (held.has(name)) return callback(null)
+      while (held.has(name)) {
+        if (options.ifAvailable) return callback(null)
+        await new Promise<void>((resolve) =>
+          waiters.set(name, [...(waiters.get(name) ?? []), resolve])
+        )
+      }
       held.add(name)
       try {
         return await callback({ name, mode: 'exclusive' } as Lock)
       } finally {
         held.delete(name)
+        const pending = waiters.get(name) ?? []
+        waiters.delete(name)
+        pending.forEach((resolve) => resolve())
       }
     }
   )
@@ -198,19 +208,24 @@ describe('durable notebook sessions', () => {
     expect(sessionStorage.getItem('runme/workspaceDocuments')).toBeNull()
   })
 
-  it('expires unlocked records but preserves stale locked sessions and notebook data', async () => {
+  it('expires records after seven days but preserves stale locked sessions and notebook data', async () => {
     localStorage.setItem(
       key('expired'),
-      JSON.stringify(record(now - SESSION_RETENTION_MS - 1))
+      JSON.stringify(record(now - 8 * 24 * 60 * 60 * 1000))
     )
     localStorage.setItem(
       key('sleeping'),
-      JSON.stringify(record(now - SESSION_RETENTION_MS - 1))
+      JSON.stringify(record(now - 8 * 24 * 60 * 60 * 1000))
+    )
+    localStorage.setItem(
+      key('recent'),
+      JSON.stringify(record(now - 6 * 24 * 60 * 60 * 1000))
     )
     localStorage.setItem('runme/notebook-content', 'keep')
     manager.held.add('runme:session:sleeping')
     await collectInactiveNotebookSessions(localStorage, manager.locks, now)
     expect(localStorage.getItem(key('expired'))).toBeNull()
+    expect(localStorage.getItem(key('recent'))).not.toBeNull()
     expect(localStorage.getItem(key('sleeping'))).not.toBeNull()
     expect(localStorage.getItem('runme/notebook-content')).toBe('keep')
   })
@@ -313,5 +328,46 @@ describe('durable notebook sessions', () => {
     }) as LockManager['request'])
     await collectInactiveNotebookSessions(localStorage, manager.locks, now)
     expect(localStorage.getItem(key('refreshed'))).not.toBeNull()
+  })
+  it('waits for a short cleanup gate instead of forking a saved session', async () => {
+    localStorage.setItem(key('gold-pebble'), JSON.stringify(record()))
+    history.replaceState(null, '', '/?session=gold-pebble')
+    let release!: () => void
+    let acquired!: () => void
+    const acquiredPromise = new Promise<void>((resolve) => {
+      acquired = resolve
+    })
+    const cleanup = manager.locks.request(
+      buildSessionClaimLockName('gold-pebble'),
+      {},
+      async () => {
+        // GC owns the temporary session lock while making its deletion decision.
+        manager.held.add('runme:session:gold-pebble')
+        acquired()
+        await new Promise<void>((resolve) => {
+          release = resolve
+        })
+        manager.held.delete('runme:session:gold-pebble')
+      }
+    )
+    await acquiredPromise
+    const claiming = getClaimedSessionId()
+    await Promise.resolve()
+    release()
+    await cleanup
+    expect(await claiming).toBe('gold-pebble')
+    const persistence = new NotebookSessionPersistence()
+    persistence.enableDurable('gold-pebble')
+    expect(persistence.loadCurrentDoc()).toBe(entry.uri)
+  })
+
+  it('skips collection while a new owner is claiming the session', async () => {
+    localStorage.setItem(
+      key('claiming'),
+      JSON.stringify(record(now - SESSION_RETENTION_MS - 1))
+    )
+    manager.held.add(buildSessionClaimLockName('claiming'))
+    await collectInactiveNotebookSessions(localStorage, manager.locks, now)
+    expect(localStorage.getItem(key('claiming'))).not.toBeNull()
   })
 })
