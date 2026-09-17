@@ -388,6 +388,11 @@ const seedRuntime = run(
     localStorage.removeItem('${GOOGLE_AUTH_STORAGE_KEY}');
     localStorage.setItem('${GOOGLE_DRIVE_ACCOUNT_STORAGE_KEY}', 'viewer@acme.example');
     localStorage.removeItem('${SHARED_NOTEBOOK_TRUST_STORAGE_KEY}');
+    // Reproduce a recreated tab whose durable selection is still Welcome.
+    // The explicit shared link must focus its status even with an existing tab.
+    localStorage.setItem('runme/notebook-session/v1/' + sessionStorage.getItem('runme/sessionId'), JSON.stringify({
+      version: 1, lastActiveAt: Date.now(), currentDoc: 'app://onboarding', openNotebooks: []
+    }));
     sessionStorage.removeItem('${CURRENT_DOC_STORAGE_KEY}');
     localStorage.setItem('${WORKSPACE_STORAGE_KEY}', JSON.stringify({ items: [] }));
     return 'ok';

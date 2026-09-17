@@ -505,6 +505,53 @@ beforeEach(() => {
 })
 
 describe('Actions tabs', () => {
+
+  it.each([
+    ['url', true, true, true],
+    ['url', false, true, false],
+    ['manual', true, true, false],
+    ['url', true, false, false],
+  ] as const)(
+    'focuses a %s intent with focus=%s and explicit navigation=%s only once',
+    async (source, focus, explicitNavigation, shouldFocus) => {
+      const statusUri = 'status://drive-link'
+      if (explicitNavigation)
+        window.history.replaceState(null, '', '/?doc=https%3A%2F%2Fdrive.google.com%2Ffile%2Fd%2Fshared%2Fview')
+      contextMocks.currentDoc = VERSION_INFO_DOCUMENT_URI
+      contextMocks.workspaceDocuments = [
+        { uri: VERSION_INFO_DOCUMENT_URI, title: 'Version Information' },
+        { uri: statusUri, title: 'Drive Link Status' },
+      ]
+      const snapshot = vi.spyOn(driveLinkCoordinator, 'getSnapshot').mockReturnValue({
+        intents: [{
+          id: 'new-link',
+          remoteUri: 'https://drive.google.com/file/d/shared/view',
+          action: 'open_shared_file', source, focus, status: 'waiting_for_auth',
+          createdAt: '2026-09-17T00:00:00Z',
+          updatedAt: '2026-09-17T00:00:00Z', retryCount: 0,
+        }],
+        authBlocked: true, lastErrorMessage: null,
+      })
+      try {
+        const view = render(<Actions />)
+        const statusTab = screen.getByRole('tab', { name: 'Drive Link Status' })
+        const previousTab = screen.getByRole('tab', { name: 'Version Information' })
+        await waitFor(() =>
+          expect(statusTab.getAttribute('aria-selected')).toBe(String(shouldFocus))
+        )
+        // A pending intent must not override a subsequent deliberate tab switch.
+        fireEvent.mouseDown(previousTab, { button: 0, ctrlKey: false })
+        view.rerender(<Actions />)
+        await waitFor(() =>
+          expect(previousTab.getAttribute('aria-selected')).toBe('true')
+        )
+        expect(statusTab.getAttribute('aria-selected')).toBe('false')
+      } finally {
+        snapshot.mockRestore()
+      }
+    }
+  )
+
   it('opens suggestion review as a separate workspace tab', async () => {
     const uri = 'local://file/suggestions'
     const suggestionUri = getOperationLogSuggestionDocumentUri(uri)

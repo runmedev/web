@@ -114,6 +114,9 @@ state. The browser also releases locks on crashes.
 3. Capture explicit `?doc=` navigation before asynchronous bootstrap consumes
    the query, so onboarding/documentation cannot replace the requested view.
    Initialize the persistence adapter before rendering providers/controllers.
+   Each new focused URL Drive intent selects its status view once, overriding a
+   restored selection. Subsequent auth/retry updates must not steal focus back
+   after the user selects a different tab.
 4. Use surviving sessionStorage for a same-tab reload; otherwise read the durable
    record. Import legacy per-tab references once. Never import old shared keys.
 5. Hydrate the controller and selection. Preserve retryable notebook entries when
