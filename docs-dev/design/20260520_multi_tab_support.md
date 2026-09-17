@@ -1,5 +1,10 @@
 # Multi-Tab Notebook Ownership
 
+> Persistence update: [Durable notebook sessions](20260917_durable_notebook_sessions.md)
+> extends per-tab restore state across host restarts using exclusive Web Locks and
+> bounded retention. Its persistence lifecycle supersedes the sessionStorage-only
+> restore guidance below; notebook ownership and controller boundaries still apply.
+
 Date: 2026-05-20
 
 Issue: https://github.com/runmedev/web/issues/215

@@ -48,7 +48,7 @@ describe('tab identity', () => {
 
     expect(sessionId).toBeTruthy()
     expect(claimed).toBe(sessionId)
-    expect(sessionId).toMatch(/^[a-z]+-[a-z]+$/)
+    expect(sessionId).toMatch(/^[a-z]+-[a-z]+-[0-9a-f-]{36}$/)
     expect(window.sessionStorage.getItem('runme/sessionId')).toBe(sessionId)
     expect(window.location.search).toContain('doc=local%3A%2F%2Fnote')
     expect(window.location.search).toContain(
@@ -58,7 +58,11 @@ describe('tab identity', () => {
   })
 
   it('retries with a new readable session id when another tab holds the lock', async () => {
-    const randomValues = [0, 0, 1, 1]
+    window.sessionStorage.setItem('runme/sessionId', 'amber-anchor')
+    vi.spyOn(globalThis.crypto, 'randomUUID').mockReturnValue(
+      '00000000-0000-4000-8000-000000000001'
+    )
+    const randomValues = [1, 1]
     vi.spyOn(globalThis.crypto, 'getRandomValues').mockImplementation(
       <T extends ArrayBufferView | null>(array: T): T => {
         if (array instanceof Uint32Array) {
@@ -89,18 +93,20 @@ describe('tab identity', () => {
     const claimed = await getClaimedSessionId()
 
     expect(initial).toBe('amber-anchor')
-    expect(claimed).toBe('blue-beacon')
+    expect(claimed).toBe('blue-beacon-00000000-0000-4000-8000-000000000001')
     expect(window.sessionStorage.getItem('runme/sessionId')).toBe(
-      'blue-beacon'
+      'blue-beacon-00000000-0000-4000-8000-000000000001'
     )
-    expect(window.location.search).toBe('?session=blue-beacon')
+    expect(window.location.search).toBe(
+      '?session=blue-beacon-00000000-0000-4000-8000-000000000001'
+    )
     expect(request).toHaveBeenCalledWith(
       'runme:session:amber-anchor',
       { ifAvailable: true },
       expect.any(Function)
     )
     expect(request).toHaveBeenCalledWith(
-      'runme:session:blue-beacon',
+      'runme:session:blue-beacon-00000000-0000-4000-8000-000000000001',
       { ifAvailable: true },
       expect.any(Function)
     )

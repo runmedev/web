@@ -24,6 +24,7 @@ import { appLogger } from "./lib/logging/runtime";
 import { normalizeAppIndexUrl } from "./lib/appBase";
 import { ensurePersistentStorage } from "./lib/persistentStorage";
 import { registerPwaServiceWorker } from "./lib/pwa";
+import { initializeNotebookSessionPersistence } from "./lib/notebookSessionPersistence";
 import { ensureSessionQueryParam } from "./lib/tabIdentity";
 
 type AppConfigApi = {
@@ -60,7 +61,10 @@ window.app = {
 // https://github.com/runmedev/web/blob/e6a7e5346eddeb02c5f9d9bc917d16d6bda6d294/packages/renderers/src/messaging.ts#L35
 const noopBridge: RendererContext<void> = {
   postMessage: (msg: unknown) => {
-    console.error("Unexpected call to noopBridge; this indicates a console-view messaging call before a specific bridge is wired up.", msg);
+    console.error(
+      "Unexpected call to noopBridge; this indicates a console-view messaging call before a specific bridge is wired up.",
+      msg,
+    );
   },
   onDidReceiveMessage: () => ({ dispose: () => {} }),
 };
@@ -101,7 +105,8 @@ void ensurePersistentStorage().then((status) => {
 maybeSetAppConfig().finally(() => {
   getBrowserAdapter()
     .init()
-    .then(() => {
+    .then(async () => {
+      await initializeNotebookSessionPersistence();
       createRoot(document.getElementById("root")!).render(
         <App
           branding={{

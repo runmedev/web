@@ -1,8 +1,16 @@
+import { NotebookStoreItem, NotebookStoreItemType } from "../storage/notebook";
 import {
-  NotebookStoreItem,
-  NotebookStoreItemType,
-} from "../storage/notebook";
+  type DurableNotebookSession,
+  MAX_SESSION_BYTES,
+  SESSION_RECORD_PREFIX,
+  SESSION_RETENTION_MS,
+  collectInactiveNotebookSessions,
+  getDurableSessionStorage,
+  parseDurableSession,
+} from "./durableNotebookSessions";
+import { appLogger } from "./logging/runtime";
 import type { OpenNotebookEntry } from "./notebookDataController";
+import { getClaimedSessionId, hasSessionLock } from "./tabIdentity";
 
 const CURRENT_DOC_STORAGE_KEY = "runme/currentDoc";
 const OPEN_NOTEBOOKS_STORAGE_KEY = "runme/openNotebooks";
@@ -63,11 +71,102 @@ function parseOpenNotebooks(raw: string | null): OpenNotebookEntry[] {
  *
  * Runtime state still lives in `CurrentDocContext` and
  * `NotebookDataController`; this class only hydrates them on startup and saves
- * snapshots after changes. It only uses sessionStorage so same-origin tabs can
- * diverge.
+ * snapshots after changes. Startup enables a durable record only after owning
+ * the session Web Lock. sessionStorage remains a migration/fallback cache.
  */
 export class NotebookSessionPersistence {
+  private durable: {
+    id: string;
+    storage: Storage;
+    record: DurableNotebookSession;
+  } | null = null;
+  private warned = false;
+
+  /** Must finish before React/controller hydration; never persist an empty startup. */
+  enableDurable(id: string): void {
+    if (!hasSessionLock()) return;
+    const storage = getDurableSessionStorage();
+    if (!storage) return;
+    try {
+      const raw = storage.getItem(SESSION_RECORD_PREFIX + id);
+      const existing = parseDurableSession(raw);
+      if (raw !== null && !existing) {
+        this.warnPersistence();
+        return; // Preserve damaged bytes while the tab can still open notebooks.
+      }
+      const expired =
+        existing && Date.now() - existing.lastActiveAt > SESSION_RETENTION_MS;
+      const record: DurableNotebookSession =
+        existing && !expired
+          ? existing
+          : {
+              version: 1,
+              lastActiveAt: Date.now(),
+              currentDoc: expired ? null : this.loadCurrentDoc(),
+              openNotebooks: expired
+                ? []
+                : this.loadOpenNotebooks().map(
+                    ({ uri, requestedUri, name }) => ({
+                      uri,
+                      requestedUri,
+                      name,
+                    }),
+                  ),
+            };
+      // A real reload keeps tab-local state; URL-only recreation needs the
+      // durable fallback. This also migrates updates from an older app build.
+      if (!expired) {
+        const session = getSessionStorage();
+        if (session?.getItem(CURRENT_DOC_STORAGE_KEY) != null)
+          record.currentDoc = this.loadCurrentDoc();
+        if (session?.getItem(OPEN_NOTEBOOKS_STORAGE_KEY) != null)
+          record.openNotebooks = this.loadOpenNotebooks().map(
+            ({ uri, requestedUri, name }) => ({ uri, requestedUri, name }),
+          );
+      }
+      if (expired) getSessionStorage()?.removeItem("runme/workspaceDocuments");
+      this.durable = { id, storage, record };
+      this.touch();
+    } catch {
+      this.warnPersistence();
+    }
+  }
+
+  /** Refresh the retention timestamp while active, including an unchanged workspace. */
+  touch(): void {
+    if (!this.durable || !hasSessionLock()) return;
+    this.durable.record.lastActiveAt = Date.now();
+    try {
+      const raw = JSON.stringify(this.durable.record);
+      if (raw.length * 2 > MAX_SESSION_BYTES) {
+        this.warnPersistence();
+        return; // Never silently truncate the user's open list.
+      }
+      this.durable.storage.setItem(
+        SESSION_RECORD_PREFIX + this.durable.id,
+        raw,
+      );
+    } catch {
+      this.warnPersistence();
+    }
+  }
+
+  private warnPersistence(): void {
+    if (this.warned) return;
+    this.warned = true;
+    appLogger.warn(
+      "Notebook session could not be saved for app restart recovery",
+      {
+        attrs: {
+          scope: "notebook-session",
+          code: "SESSION_PERSISTENCE_UNAVAILABLE",
+        },
+      },
+    );
+  }
+
   loadCurrentDoc(): string | null {
+    if (this.durable) return this.durable.record.currentDoc;
     const session = getSessionStorage();
     const fromSession = session?.getItem(CURRENT_DOC_STORAGE_KEY);
     if (fromSession !== undefined && fromSession !== null) {
@@ -77,6 +176,10 @@ export class NotebookSessionPersistence {
   }
 
   saveCurrentDoc(uri: string | null): void {
+    if (this.durable) {
+      this.durable.record.currentDoc = uri;
+      this.touch();
+    }
     const session = getSessionStorage();
     if (!session) {
       return;
@@ -93,6 +196,11 @@ export class NotebookSessionPersistence {
   }
 
   loadOpenNotebooks(): OpenNotebookEntry[] {
+    if (this.durable)
+      return this.durable.record.openNotebooks.map((item) => ({
+        ...item,
+        state: "loading",
+      }));
     const session = getSessionStorage();
     const fromSession = session?.getItem(OPEN_NOTEBOOKS_STORAGE_KEY);
     if (fromSession !== undefined && fromSession !== null) {
@@ -102,6 +210,12 @@ export class NotebookSessionPersistence {
   }
 
   saveOpenNotebooks(entries: OpenNotebookEntry[]): void {
+    if (this.durable) {
+      this.durable.record.openNotebooks = entries.map(
+        ({ uri, requestedUri, name }) => ({ uri, requestedUri, name }),
+      );
+      this.touch();
+    }
     const session = getSessionStorage();
     if (!session) {
       return;
@@ -128,4 +242,30 @@ export function __setNotebookSessionPersistenceForTests(
 
 export function __resetNotebookSessionPersistenceForTests(): void {
   persistence = new NotebookSessionPersistence();
+}
+
+/** Bootstrap once before any notebook controller or React provider reads restore state. */
+export async function initializeNotebookSessionPersistence(): Promise<void> {
+  const id = await getClaimedSessionId();
+  persistence.enableDurable(id);
+  const storage = getDurableSessionStorage();
+  if (!hasSessionLock() || !storage) return;
+  const collect = () => {
+    void collectInactiveNotebookSessions(storage, navigator.locks).catch(() => {
+      appLogger.warn("Notebook session cleanup deferred", {
+        attrs: { scope: "notebook-session", code: "SESSION_CLEANUP_DEFERRED" },
+      });
+    });
+  };
+  collect();
+  const heartbeat = window.setInterval(() => persistence.touch(), 60_000);
+  const cleanup = window.setInterval(collect, 60 * 60_000);
+  window.addEventListener(
+    "pagehide",
+    () => {
+      window.clearInterval(heartbeat);
+      window.clearInterval(cleanup);
+    },
+    { once: true },
+  );
 }
