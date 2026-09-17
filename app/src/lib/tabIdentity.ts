@@ -2,6 +2,7 @@ import { v4 as uuidv4 } from "uuid";
 
 export const SESSION_QUERY_PARAM = "session";
 const SESSION_STORAGE_KEY = "runme/sessionId";
+const STALE_RESTORE_CACHE_KEY = "runme/staleSessionRestoreCache";
 
 let sessionId: string | null = null;
 let claimedSessionId: string | null = null;
@@ -200,7 +201,9 @@ function releaseOnPageHide(): void {
 }
 
 function reloadOnPageShow(event: PageTransitionEvent): void {
-  if (event.persisted) window.location.reload();
+  if (!event.persisted) return;
+  markSessionRestoreCacheStale();
+  window.location.reload();
 }
 
 function registerSessionLockRelease(): void {
@@ -215,8 +218,33 @@ export function hasSessionLock(): boolean {
   return sessionLockHeld;
 }
 
-/** A duplicate starts empty, even if the browser cloned sessionStorage. */
-function clearCopiedRestoreState(): void {
+/**
+ * BFCache relinquishes ownership. Remember across reload that another owner may
+ * have updated the durable record; do not discard fallback state until a valid
+ * record has been read under the newly acquired lock.
+ */
+export function markSessionRestoreCacheStale(): void {
+  try {
+    getSessionStorage()?.setItem(STALE_RESTORE_CACHE_KEY, "1");
+  } catch {
+    // Unavailable sessionStorage has no readable restore cache to invalidate.
+  }
+}
+
+/** Consume the one-reload hint; ordinary reloads still prefer tab-local state. */
+export function consumeStaleSessionRestoreCache(): boolean {
+  try {
+    const storage = getSessionStorage();
+    const stale = storage?.getItem(STALE_RESTORE_CACHE_KEY) === "1";
+    storage?.removeItem(STALE_RESTORE_CACHE_KEY);
+    return stale;
+  } catch {
+    return false;
+  }
+}
+
+/** Clear every notebook restore hint after a fork or stale-cache recovery. */
+export function clearSessionRestoreState(): void {
   try {
     const storage = getSessionStorage();
     storage?.removeItem("runme/openNotebooks");
@@ -295,7 +323,7 @@ async function claimSessionId(): Promise<string> {
           .catch(() => false)
       : await tryClaimSessionId(candidate);
     if (claimed) {
-      if (candidate !== sessionId) clearCopiedRestoreState();
+      if (candidate !== sessionId) clearSessionRestoreState();
       sessionId = candidate;
       claimedSessionId = candidate;
       writeStoredSessionId(candidate);
@@ -305,7 +333,7 @@ async function claimSessionId(): Promise<string> {
   }
 
   // Lock errors never authorize durable reads/writes or reuse of another tab.
-  clearCopiedRestoreState();
+  clearSessionRestoreState();
   sessionId = createSessionId();
   claimedSessionId = sessionId;
   writeStoredSessionId(claimedSessionId);

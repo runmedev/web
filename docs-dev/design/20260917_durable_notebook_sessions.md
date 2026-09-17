@@ -94,8 +94,13 @@ tab-local state and disable durable restore/writes/cleanup. Live notebook use
 continues under its existing ownership rules.
 
 On pagehide, disable durable writes before releasing the session lock. On a
-BFCache pageshow, reload so the page claims ownership and hydrates again before
-using its old in-memory workspace. The browser also releases locks on crashes.
+BFCache pageshow, mark tab-local restore hints stale and reload so the page claims
+ownership and hydrates again before using its old in-memory workspace. After
+reclaiming the lock, a valid durable snapshot takes precedence over the stale
+tab-local cache, including the separate workspaceDocuments cache. This prevents
+a returning cached page from overwriting another owner's intervening edits.
+If durable storage is unavailable or malformed, preserve tab-local fallback
+state. The browser also releases locks on crashes.
 
 ## Startup and persistence ordering
 

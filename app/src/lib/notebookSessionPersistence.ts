@@ -10,7 +10,12 @@ import {
 } from "./durableNotebookSessions";
 import { appLogger } from "./logging/runtime";
 import type { OpenNotebookEntry } from "./notebookDataController";
-import { getClaimedSessionId, hasSessionLock } from "./tabIdentity";
+import {
+  clearSessionRestoreState,
+  consumeStaleSessionRestoreCache,
+  getClaimedSessionId,
+  hasSessionLock,
+} from "./tabIdentity";
 
 const CURRENT_DOC_STORAGE_KEY = "runme/currentDoc";
 const OPEN_NOTEBOOKS_STORAGE_KEY = "runme/openNotebooks";
@@ -84,6 +89,7 @@ export class NotebookSessionPersistence {
 
   /** Must finish before React/controller hydration; never persist an empty startup. */
   enableDurable(id: string): void {
+    const staleCache = consumeStaleSessionRestoreCache();
     if (!hasSessionLock()) return;
     const storage = getDurableSessionStorage();
     if (!storage) return;
@@ -94,6 +100,10 @@ export class NotebookSessionPersistence {
         this.warnPersistence();
         return; // Preserve damaged bytes while the tab can still open notebooks.
       }
+      // Returning from BFCache may follow another owner's edits. Once a valid
+      // durable snapshot is available, discard all stale local restore hints.
+      // Without a usable snapshot, preserve the existing ephemeral fallback.
+      if (staleCache && existing) clearSessionRestoreState();
       const expired =
         existing && Date.now() - existing.lastActiveAt > SESSION_RETENTION_MS;
       const record: DurableNotebookSession =

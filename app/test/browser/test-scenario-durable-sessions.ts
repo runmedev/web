@@ -228,12 +228,39 @@ try {
   await ready(page, resumeUrl)
   await page.getByRole('heading', { name: 'edited after restart' }).waitFor()
   check('Autosaved edit survives another full browser restart', true)
+  // Exercise BFCache lifecycle events explicitly: the cached page relinquishes
+  // its session, another tab closes the notebooks, then the old page returns.
+  // Synthetic events make this deterministic without relying on Chromium's
+  // eligibility heuristics, while using the real reload and persistence paths.
+  await page.evaluate(() =>
+    window.dispatchEvent(new PageTransitionEvent('pagehide', { persisted: true }))
+  )
+  const takeover = await context!.newPage()
+  await ready(takeover, resumeUrl)
+  await takeover.getByRole('heading', { name: 'edited after restart' }).waitFor()
+  check(
+    'Another tab can claim a session relinquished for BFCache',
+    new URL(takeover.url()).searchParams.get('session') === id
+  )
   // Close all notebooks, then prove empty is durable rather than resurrected.
   for (const file of [...files].reverse())
-    await page
+    await takeover
       .getByRole('button', { name: 'Close ' + file.name, exact: true })
       .click()
+  await takeover.getByText('No open notebooks yet', { exact: true }).waitFor()
+  await takeover.close()
+  await Promise.all([
+    page.waitForEvent('load'),
+    page.evaluate(() =>
+      window.dispatchEvent(new PageTransitionEvent('pageshow', { persisted: true }))
+    ),
+  ])
   await page.getByText('No open notebooks yet', { exact: true }).waitFor()
+  check(
+    'BFCache return restores the newer empty session instead of stale tabs',
+    new URL(page.url()).searchParams.get('session') === id &&
+      (await page.getByRole('tab', { name: /\.runme$/ }).count()) === 0
+  )
   await finish('edited')
   page = await launch()
   await ready(page, resumeUrl)

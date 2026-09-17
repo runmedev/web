@@ -15,6 +15,7 @@ import {
   buildSessionClaimLockName,
   getClaimedSessionId,
   hasSessionLock,
+  markSessionRestoreCacheStale,
 } from './tabIdentity'
 
 /** Hold locks until their callbacks settle, just as browser Web Locks do. */
@@ -123,6 +124,49 @@ describe('durable notebook sessions', () => {
     expect(persistence.loadCurrentDoc()).toBeNull()
     persistence.saveOpenNotebooks([])
     expect(localStorage.getItem(key('gold-pebble'))).toBe(original)
+  })
+
+
+  it('restores newer durable state after BFCache without resurrecting stale tab caches', async () => {
+    const id = await getClaimedSessionId()
+    const original = new NotebookSessionPersistence()
+    original.enableDurable(id)
+    original.saveOpenNotebooks([entry])
+    original.saveCurrentDoc(entry.uri)
+    sessionStorage.setItem('runme/workspaceDocuments', JSON.stringify([entry]))
+    window.dispatchEvent(new Event('pagehide'))
+
+    // A second owner closes the notebook while this page is in BFCache.
+    localStorage.setItem(key(id), JSON.stringify({
+      ...record(), currentDoc: null, openNotebooks: [],
+    }))
+    markSessionRestoreCacheStale()
+    __resetTabIdForTests()
+    await Promise.resolve()
+    const resumed = new NotebookSessionPersistence()
+    resumed.enableDurable(await getClaimedSessionId())
+
+    expect(resumed.loadOpenNotebooks()).toEqual([])
+    expect(resumed.loadCurrentDoc()).toBeNull()
+    expect(sessionStorage.getItem('runme/workspaceDocuments')).toBeNull()
+    expect(sessionStorage.getItem('runme/openNotebooks')).toBeNull()
+    expect(sessionStorage.getItem('runme/currentDoc')).toBeNull()
+    expect(JSON.parse(localStorage.getItem(key(id))!)).toMatchObject({
+      currentDoc: null, openNotebooks: [],
+    })
+  })
+
+  it('preserves BFCache fallback state when there is no valid durable snapshot', async () => {
+    const id = await getClaimedSessionId()
+    localStorage.setItem(key(id), '{bad')
+    sessionStorage.setItem('runme/openNotebooks', JSON.stringify([entry]))
+    sessionStorage.setItem('runme/currentDoc', entry.uri)
+    markSessionRestoreCacheStale()
+    const resumed = new NotebookSessionPersistence()
+    resumed.enableDurable(id)
+    expect(resumed.loadOpenNotebooks()).toEqual([{ ...entry, state: 'loading' }])
+    expect(resumed.loadCurrentDoc()).toBe(entry.uri)
+    expect(localStorage.getItem(key(id))).toBe('{bad')
   })
 
   it('migrates the surviving legacy tab, projecting references and excluding runtime ownership', async () => {

@@ -36,3 +36,5 @@ records. Browser storage clearing and cross-origin/profile restoration are outsi
 this browser-local recovery contract.
 
 See [the design](../design/20260917_durable_notebook_sessions.md) for the rationale.
+
+BFCache regression: after releasing ownership, another tab can change the session. A returning cached page must reload from the newer durable record, clearing stale notebook/workspace restore hints only after validating that record under its lock. Preserve ephemeral fallback state if durable storage is unavailable or malformed.
