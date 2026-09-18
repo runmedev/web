@@ -79,6 +79,7 @@ function fetchWithTimeout(
 }
 
 const SCENARIO_DRIVERS = [
+  join(SCRIPT_DIR, "test-scenario-runner-unavailable.ts"),
   join(SCRIPT_DIR, "test-scenario-durable-sessions.ts"),
   join(SCRIPT_DIR, "test-scenario-oidc-login.ts"),
   join(SCRIPT_DIR, "test-scenario-authentication-settings.ts"),

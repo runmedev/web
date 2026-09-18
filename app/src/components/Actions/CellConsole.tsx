@@ -11,7 +11,7 @@ import {
   ExecuteRequestSchema,
   WinsizeSchema,
 } from "@buf/stateful_runme.bufbuild_es/runme/runner/v2/runner_pb";
-import { ClientMessages } from "@runmedev/renderers";
+import { ClientMessages, type ConnectionState } from "@runmedev/renderers";
 
 import { MimeType, RunmeMetadataKey, parser_pb } from "../../runme/client";
 import { isLinkedResourceLanguageId } from "../../lib/linkedResource";
@@ -76,6 +76,8 @@ function buildMessagingBridge(
       }
 
       if (msg.type === ClientMessages.terminalStdin) {
+        // Do not queue keystrokes to be delivered unexpectedly after reconnect.
+        if (stream.connectionStateSnapshot !== "connected") return;
         const input =
           typeof msg.output?.input === "string" ? msg.output.input : "";
         const req = create(ExecuteRequestSchema, {
@@ -120,6 +122,16 @@ const CellConsole = ({ cellData, onExitCode, onPid }: CellConsoleProps) => {
 
   const runID = cellData.getRunID();
   const stream = cellData.getStreams() as any;
+  // Connection state belongs to the live transport. It must not become saved
+  // stderr or an execution.finish: an unreachable runner may still be working.
+  const connectionState: ConnectionState = useSyncExternalStore(
+    (listener) => {
+      const subscription = stream?.connectionState?.subscribe(listener);
+      return () => subscription?.unsubscribe();
+    },
+    () => stream?.connectionStateSnapshot ?? "closed",
+  );
+  const canSendInput = !!stream && connectionState === "connected";
 
   if (
     !cell ||
@@ -242,7 +254,7 @@ const CellConsole = ({ cellData, onExitCode, onPid }: CellConsoleProps) => {
   const handleSubmit = (event: React.FormEvent<HTMLFormElement>) => {
     event.preventDefault();
     const activeStream = cellData.getStreams() as any;
-    if (!activeStream) {
+    if (!activeStream || activeStream.connectionStateSnapshot !== "connected") {
       return;
     }
     const input = stdinValue.endsWith("\n") ? stdinValue : `${stdinValue}\n`;
@@ -255,13 +267,35 @@ const CellConsole = ({ cellData, onExitCode, onPid }: CellConsoleProps) => {
 
   return (
     <div className="space-y-3">
+      {stream && connectionState === "unavailable" ? (
+        <div
+          id={`runner-connection-error-${cell.refId}`}
+          data-testid="cell-runner-unavailable"
+          role="alert"
+          className="rounded-nb-sm border border-red-300 bg-red-50 p-3 text-sm text-red-800"
+        >
+          <strong>Runner unavailable.</strong> Cannot connect to the runner.
+          Check that it is running and that its address and your network
+          connection are correct. Retrying automatically; queued execution will
+          continue when connected. An existing process may still be running.
+        </div>
+      ) : stream && connectionState === "connecting" ? (
+        <div
+          id={`runner-connecting-${cell.refId}`}
+          data-testid="cell-runner-connecting"
+          role="status"
+          className="text-sm text-nb-text-muted"
+        >
+          Connecting to runner…
+        </div>
+      ) : null}
       <div
         className="w-full"
         data-runkey={`console-${cell.refId}-${runID ?? "idle"}`}
         data-testid="cell-console"
         ref={containerRef}
       />
-      {stream ? (
+      {canSendInput ? (
         <form
           className="rounded-nb-sm border border-nb-border bg-[#fff8ef] p-3"
           data-testid="cell-stdin-form"
