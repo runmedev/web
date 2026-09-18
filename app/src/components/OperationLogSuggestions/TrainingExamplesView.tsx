@@ -14,12 +14,84 @@ import type {
   ExamplePreview,
 } from '../../lib/trainingExamples/protocol'
 import { getNotebookDataController } from '../../lib/notebookDataController'
+import { getCellTitle } from '../../lib/cellContent'
+import { extractNotebookOutline } from '../../lib/notebookOutline'
+import type { TrainingExample } from '../../lib/trainingExamples/model'
+import type { ExampleSelection } from '../../lib/trainingExamples/registry'
 import type LocalNotebooks from '../../storage/local'
 import { parser_pb } from '../../runme/client'
 import { ChangedCell } from './OperationLogSuggestionView'
 
 const button =
   'rounded border border-nb-border px-2 py-1 text-sm disabled:opacity-40'
+
+type CellOption = { key: string; source: string; cellId: string; label: string }
+const sourceKey = (example: TrainingExample) =>
+  JSON.stringify(example.provenance.source)
+
+/** Capture document order/titles on load or explicit refresh, not each render.
+ * Source-qualified keys keep identical cell IDs in different notebooks separate.
+ * Deleted/unavailable cells remain selectable after the cells in the document.
+ */
+async function loadCellOptions(
+  examples: TrainingExample[],
+  selection: ExampleSelection | undefined,
+  docUri: string,
+  store: LocalNotebooks
+): Promise<CellOption[]> {
+  const sources = new Map<string, TrainingExample[]>()
+  for (const example of examples) {
+    const key = sourceKey(example)
+    if (!sources.has(key)) sources.set(key, [])
+    sources.get(key)!.push(example)
+  }
+  return (
+    await Promise.all(
+      [...sources].map(async ([source, group]) => {
+        const ids = new Set(
+          group.flatMap((example) => example.provenance.cellIds)
+        )
+        const job = selection?.jobs[group[0].id]
+        const uri = job?.localUri ?? (!selection ? docUri : undefined)
+        let cells: parser_pb.Cell[] = []
+        if (uri) {
+          const snapshot = getNotebookDataController()
+            .getNotebookData(uri)
+            ?.getSnapshot()
+          try {
+            cells = snapshot?.loaded
+              ? snapshot.notebook.cells
+              : (await store.loadOperationLogSnapshot(uri)).cells
+          } catch {
+            // Optional navigation metadata must not prevent self-contained previews.
+          }
+        }
+        const prefix = sources.size > 1 ? `${job?.name ?? source} · ` : ''
+        const option = (cellId: string, label: string): CellOption => ({
+          key: JSON.stringify([source, cellId]),
+          source,
+          cellId,
+          label: prefix + label,
+        })
+        const result: CellOption[] = []
+        cells.forEach((cell, index) => {
+          if (!ids.delete(cell.refId)) return
+          const title =
+            extractNotebookOutline([cell])[0]?.text ?? getCellTitle(cell.value)
+          result.push(
+            option(
+              cell.refId,
+              `Cell ${index + 1} · ${title.length > 80 ? title.slice(0, 77) + '…' : title}`
+            )
+          )
+        })
+        for (const id of ids)
+          result.push(option(id, `Unavailable cell · ${id}`))
+        return result
+      })
+    )
+  ).flat()
+}
 
 /** Kind/language transitions can change meaning without changing source text. */
 function contentType(cell?: parser_pb.Cell): string {
@@ -54,16 +126,20 @@ export function TrainingExamplesView({
   const [collapsed, setCollapsed] = useState(false)
   const [notebookFilter, setNotebookFilter] = useState('')
   const [cellFilter, setCellFilter] = useState('')
+  const [cellOptions, setCellOptions] = useState<CellOption[]>([])
   const view = useRef<HTMLDivElement>(null)
-  const notebookKey = (
-    example: NonNullable<typeof index>['examples'][number]
-  ) => JSON.stringify(example.provenance.source)
+  const changedCell = useRef<HTMLElement>(null)
+  const notebookKey = sourceKey
   const notebookExamples =
     index?.examples.filter(
       (e) => !notebookFilter || notebookKey(e) === notebookFilter
     ) ?? []
+  const cellOption = cellOptions.find((option) => option.key === cellFilter)
   const filtered = notebookExamples.filter(
-    (e) => !cellFilter || e.provenance.cellIds.includes(cellFilter)
+    (e) =>
+      !cellOption ||
+      (sourceKey(e) === cellOption.source &&
+        e.provenance.cellIds.includes(cellOption.cellId))
   )
   const selected =
     filtered.find((example) => example.id === selectedId) ?? filtered[0]
@@ -77,6 +153,24 @@ export function TrainingExamplesView({
       ? loadedPreview.value
       : undefined
   const position = filtered.findIndex((example) => example.id === activeId)
+  const focusedRow = preview?.diff.cells.find(
+    (row) => row.kind !== 'unchanged' || row.moved
+  )
+
+  // Wait for the selected preview to mount before scrolling. Only the diff pane
+  // moves; keep keyboard focus in the selector/navigation control being used.
+  useEffect(() => {
+    const container = view.current
+    const target = changedCell.current
+    if (!preview || !container) return
+    const top = target
+      ? container.scrollTop +
+        target.getBoundingClientRect().top -
+        container.getBoundingClientRect().top -
+        12
+      : 0
+    container.scrollTo?.({ top: Math.max(0, top), behavior: 'instant' })
+  }, [preview])
 
   useEffect(() => {
     setNotebookFilter('')
@@ -89,6 +183,7 @@ export function TrainingExamplesView({
     let active = true
     setLoading(true)
     setIndex(undefined)
+    setCellOptions([])
     setPreview(undefined)
     setError('')
     void (async () => {
@@ -104,6 +199,14 @@ export function TrainingExamplesView({
           }
         : await loadTrainingExamples(await store.trainingExampleJob(docUri))
       if (!active) return
+      const options = await loadCellOptions(
+        result.examples,
+        selection,
+        docUri,
+        store
+      )
+      if (!active) return
+      setCellOptions(options)
       setIndex(result)
       setSelectedId((old) =>
         result.examples.some((example) => example.id === old)
@@ -134,7 +237,6 @@ export function TrainingExamplesView({
         .then((result) => {
           if (active) {
             setPreview({ exampleId: selected.id, docUri, value: result })
-            view.current?.scrollTo?.(0, 0)
           }
         })
         .catch((error) => {
@@ -228,15 +330,16 @@ export function TrainingExamplesView({
                   onChange={(event) => setCellFilter(event.target.value)}
                 >
                   <option value="">All cells</option>
-                  {[
-                    ...new Set(
-                      notebookExamples.flatMap((e) => e.provenance.cellIds)
-                    ),
-                  ].map((id) => (
-                    <option key={id} value={id}>
-                      {id}
-                    </option>
-                  ))}
+                  {cellOptions
+                    .filter(
+                      (option) =>
+                        !notebookFilter || option.source === notebookFilter
+                    )
+                    .map((option) => (
+                      <option key={option.key} value={option.key}>
+                        {option.label}
+                      </option>
+                    ))}
                 </select>
               </label>
               <label className="block text-sm">
@@ -351,7 +454,12 @@ export function TrainingExamplesView({
             </p>
             <div id="training-examples-diff-cells" className="space-y-3">
               {preview.diff.cells.map((row) => (
-                <section key={row.id} aria-label={`${row.kind} cell`}>
+                <section
+                  key={row.id}
+                  ref={row.id === focusedRow?.id ? changedCell : undefined}
+                  aria-label={`${row.kind} cell`}
+                  data-example-focus={row.id === focusedRow?.id || undefined}
+                >
                   {(row.moved ||
                     row.changedFields.includes('language') ||
                     row.changedFields.includes('kind')) && (

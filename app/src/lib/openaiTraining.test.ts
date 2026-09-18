@@ -5,6 +5,7 @@ import {
   clearOpenAIAuth,
   getOpenAIAuthStatus,
   getTrainingJob,
+  revealOpenAIKeyForSettings,
   saveOpenAIAuth,
   submitTrainingJob,
   uploadOpenAIJsonl,
@@ -25,17 +26,20 @@ describe('explicit OpenAI training requests', () => {
   })
   afterEach(() => vi.unstubAllGlobals())
   it('stores, replaces and clears keys without exposing them through status', () => {
+    expect(revealOpenAIKeyForSettings()).toBe('')
     saveOpenAIAuth('test-secret', 'https://api.openai.com/v1/')
     expect(getOpenAIAuthStatus()).toEqual({
       configured: true,
       baseUrl: 'https://api.openai.com/v1',
     })
+    expect(revealOpenAIKeyForSettings()).toBe('test-secret')
     saveOpenAIAuth('replacement', 'https://api.openai.com/v1')
     expect(localStorage.getItem('runme.openai.credentials.v1')).not.toContain(
       'test-secret'
     )
     clearOpenAIAuth()
     expect(getOpenAIAuthStatus().configured).toBe(false)
+    expect(revealOpenAIKeyForSettings()).toBe('')
   })
   it('uses saved auth for exactly one submission with no credentials in the result', async () => {
     saveOpenAIAuth('test-secret', 'https://api.openai.com/v1')

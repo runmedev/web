@@ -128,6 +128,19 @@ describe('notebook-centric training API', () => {
     })
     expect(client.preview).toHaveBeenCalledWith(example, undefined)
   })
+  it.each([
+    'drive-source',
+    'https://drive.google.com/file/d/drive-source/view',
+    '  https://web.runme.dev/?doc=https%3A%2F%2Fdrive.google.com%2Ffile%2Fd%2Fdrive-source%2Fview  ',
+    '[design.runme](https://runme.gateway.unified-0s.internal.api.openai.org/?doc=https%3A%2F%2Fdrive.google.com%2Ffile%2Fd%2Fdrive-source%2Fview)',
+    '[design.runme](https://drive.google.com/file/d/drive-source/view)',
+    '[local notebook](local://file/source)',
+  ])('extracts from a copied notebook reference: %s', async (reference) => {
+    const { api } = setup()
+    client.load.mockResolvedValue({ examples: [example], issues: [] })
+    expect(await api.extract(reference)).toEqual([example])
+    expect(client.load.mock.calls[0][0]).toEqual(job)
+  })
   it('fails on invalid source selectors and missing source locators', async () => {
     const { api } = setup()
     await expect(

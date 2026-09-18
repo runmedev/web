@@ -56,6 +56,11 @@ export function getOpenAIAuthStatus() {
   }
 }
 
+/** Read the saved secret only for an explicit reveal action in Authentication Settings. */
+export function revealOpenAIKeyForSettings(): string {
+  return readCredentials()?.apiKey ?? ''
+}
+
 /** Save only after explicit consent in Authentication Settings. */
 export function saveOpenAIAuth(apiKey: string, baseUrl: string): void {
   const endpoint = validateOpenAIBaseUrl(baseUrl)

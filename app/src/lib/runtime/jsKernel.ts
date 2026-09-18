@@ -145,15 +145,18 @@ export class JSKernel {
       result = await runner(...argValues);
     } catch (err) {
       exitCode = 1;
+      // Drive/GAPI can reject with a plain response object rather than Error.
+      // Preserve its diagnostic fields instead of coercing to [object Object].
+      const diagnostic = this.formatArgs([err]);
       appLogger.error("JSKernel execution failed", {
         attrs: {
           scope: "appkernel.jskernel",
-          error: String(err),
+          error: diagnostic.trimEnd(),
           runId,
           codeLength: code.length,
         },
       });
-      stderr(`${String(err)}\n`);
+      stderr(diagnostic);
     } finally {
       if (this.activeRunId === runId) {
         this.activeRunId = null;
@@ -187,11 +190,14 @@ export class JSKernel {
     return (
       args
         .map((a) => {
+          if (a instanceof Error) {
+            return String(a);
+          }
           if (typeof a === "string") {
             return a;
           }
           try {
-            return JSON.stringify(a, replacer);
+            return JSON.stringify(a, replacer) ?? String(a);
           } catch {
             return String(a);
           }

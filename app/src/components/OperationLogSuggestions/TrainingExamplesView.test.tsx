@@ -10,6 +10,9 @@ import {
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 
 import type LocalNotebooks from '../../storage/local'
+import type { NotebookSnapshot } from '../../lib/notebookData'
+import { create } from '@bufbuild/protobuf'
+import { parser_pb } from '../../runme/client'
 import { exampleJournal } from '../../lib/trainingExamples/fixtures.test-helper'
 import { extractExamples } from '../../lib/trainingExamples/model'
 import { previewExample } from '../../lib/trainingExamples/preview'
@@ -24,6 +27,7 @@ const api = vi.hoisted(() => ({
   load: vi.fn(),
   preview: vi.fn(),
   flush: vi.fn(async () => {}),
+  snapshot: vi.fn<() => NotebookSnapshot | undefined>(() => undefined),
 }))
 vi.mock('../../lib/trainingExamples/client', () => ({
   loadTrainingExamples: api.load,
@@ -31,10 +35,14 @@ vi.mock('../../lib/trainingExamples/client', () => ({
 }))
 vi.mock('../../lib/notebookDataController', () => ({
   getNotebookDataController: () => ({
-    getNotebookData: () => ({ flushPendingPersist: api.flush }),
+    getNotebookData: () => ({
+      flushPendingPersist: api.flush,
+      getSnapshot: api.snapshot,
+    }),
   }),
 }))
 const store = {
+  loadOperationLogSnapshot: vi.fn(async () => ({ cells: [] })),
   trainingExampleJob: vi.fn(async (localUri) => ({
     localUri,
     sourcePath: 'test',
@@ -66,9 +74,99 @@ function fixture() {
   return { result, j }
 }
 
-beforeEach(() => vi.clearAllMocks())
+beforeEach(() => {
+  vi.clearAllMocks()
+  api.snapshot.mockReturnValue(undefined)
+})
 
 describe('training examples viewer', () => {
+  it('scrolls to the selected example change after its preview renders', async () => {
+    fixture()
+    const rect = vi
+      .spyOn(HTMLElement.prototype, 'getBoundingClientRect')
+      .mockImplementation(function (this: HTMLElement) {
+        return {
+          top: this.hasAttribute('data-example-focus') ? 900 : 100,
+        } as DOMRect
+      })
+    try {
+      const { container } = render(
+        <TrainingExamplesView docUri="local://file/test" store={store} />
+      )
+      const pane = container.querySelector(
+        '#training-examples-diff'
+      ) as HTMLElement
+      const scroll = vi.fn()
+      pane.scrollTo = scroll
+      await waitFor(() =>
+        expect(scroll).toHaveBeenCalledWith({ top: 788, behavior: 'instant' })
+      )
+      expect(container.querySelector('[data-example-focus]')).toHaveAttribute(
+        'aria-label',
+        'inserted cell'
+      )
+      scroll.mockClear()
+      fireEvent.click(screen.getByRole('button', { name: 'Next example' }))
+      await screen.findByRole('heading', { name: 'Example 2 · Rejected' })
+      await waitFor(() =>
+        expect(scroll).toHaveBeenCalledWith({ top: 788, behavior: 'instant' })
+      )
+      expect(container.querySelector('[data-example-focus]')).toHaveAttribute(
+        'aria-label',
+        'modified cell'
+      )
+    } finally {
+      rect.mockRestore()
+    }
+  })
+  it('orders cells by document position and labels them using first content lines', async () => {
+    const { result } = fixture()
+    result.examples = ['b', 'gone', 'a', 'empty'].map((id) => ({
+      ...result.examples[0],
+      id,
+      provenance: { ...result.examples[0].provenance, cellIds: [id] },
+    }))
+    api.snapshot.mockReturnValue({
+      uri: 'local://file/test',
+      name: 'test.runme',
+      loaded: true,
+      notebook: create(parser_pb.NotebookSchema, {
+        cells: [
+          create(parser_pb.CellSchema, {
+            refId: 'a',
+            kind: parser_pb.CellKind.MARKUP,
+            value: '\n## Introduction ###\nMore text',
+          }),
+          create(parser_pb.CellSchema, {
+            refId: 'unassessed',
+            value: 'Context',
+          }),
+          create(parser_pb.CellSchema, {
+            refId: 'b',
+            value: '// Query logs\nfetchLogs()',
+          }),
+          create(parser_pb.CellSchema, { refId: 'empty', value: '' }),
+        ],
+      }),
+    })
+    render(<TrainingExamplesView docUri="local://file/test" store={store} />)
+    await screen.findByText('1 / 4')
+    const options = within(
+      screen.getByLabelText('Filter by cell')
+    ).getAllByRole('option')
+    expect(options.map((option) => option.textContent)).toEqual([
+      'All cells',
+      'Cell 1 · Introduction',
+      'Cell 3 · Query logs',
+      'Cell 4 · Untitled cell',
+      'Unavailable cell · gone',
+    ])
+    fireEvent.change(screen.getByLabelText('Filter by cell'), {
+      target: { value: (options[1] as HTMLOptionElement).value },
+    })
+    await screen.findByText('1 / 1')
+    expect(api.preview.mock.calls.at(-1)?.[0].provenance.cellIds).toEqual(['a'])
+  })
   it('shows a recipe-selected list without extracting or writing on open', async () => {
     const { result } = fixture()
     const uri = 'local://file/recipe'
@@ -89,6 +187,44 @@ describe('training examples viewer', () => {
     expect(api.preview.mock.calls[0][0]).toEqual(chosen[0])
     expect(store.trainingExampleJob).not.toHaveBeenCalled()
     expect(screen.getByText('1 / 1')).toBeTruthy()
+  })
+  it('keeps the same cell ID in two source notebooks as separate filters', async () => {
+    const { result } = fixture()
+    const first = result.examples[0]
+    const second = {
+      ...first,
+      id: 'second-source',
+      provenance: {
+        ...first.provenance,
+        source: { driveFileId: 'second-drive' },
+      },
+    }
+    const uri = 'local://file/shared-cell-id'
+    setExampleSelection(uri, {
+      examples: [first, second],
+      jobs: {
+        [first.id]: {
+          localUri: 'local://file/one',
+          sourcePath: 'one',
+          name: 'one.runme',
+        },
+        [second.id]: {
+          localUri: 'local://file/two',
+          sourcePath: 'two',
+          name: 'two.runme',
+        },
+      },
+    })
+    render(<TrainingExamplesView docUri={uri} store={store} />)
+    await screen.findByText('1 / 2')
+    const select = screen.getByLabelText('Filter by cell')
+    const options = within(select).getAllByRole('option') as HTMLOptionElement[]
+    expect(options).toHaveLength(3)
+    expect(options[1].textContent).toContain('one.runme')
+    expect(options[2].textContent).toContain('two.runme')
+    fireEvent.change(select, { target: { value: options[2].value } })
+    await screen.findByText('1 / 1')
+    expect(api.preview.mock.calls.at(-1)?.[0].id).toBe('second-source')
   })
   it('navigates all examples with the corresponding label and real review cell diff', async () => {
     fixture()
@@ -141,19 +277,24 @@ describe('training examples viewer', () => {
     await screen.findByText('1 / 1')
     expect(
       within(screen.getByLabelText('Filter by cell')).getByRole('option', {
-        name: 'b',
+        name: /Unavailable cell · b/,
       })
     ).toBeTruthy()
     expect(
       within(screen.getByLabelText('Filter by cell')).queryByRole('option', {
-        name: 'a',
+        name: /Unavailable cell · a/,
       })
     ).toBeNull()
     fireEvent.change(screen.getByLabelText('Filter by notebook'), {
       target: { value: '' },
     })
     fireEvent.change(screen.getByLabelText('Filter by cell'), {
-      target: { value: 'a' },
+      target: {
+        value: JSON.stringify([
+          JSON.stringify(result.examples[0].provenance.source),
+          'a',
+        ]),
+      },
     })
     await screen.findByText('1 / 2')
     fireEvent.click(screen.getByRole('button', { name: 'Next example' }))

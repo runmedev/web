@@ -27,7 +27,9 @@ Only run trusted notebook code. The target endpoint must allow browser CORS.
 2. Choose **Review suggestions**, then **Training examples**.
 3. Confirm the left panel shows the example count and a labeled example selector.
    Navigate with the selector and previous/next buttons. End buttons are disabled
-   at the boundaries.
+   at the boundaries. Each example scrolls the diff pane to its first changed
+   cell (including deletions and moves), without stealing keyboard focus from
+   the navigation control or scrolling the entire page.
 4. Confirm each label stays attached to the correct diff while rapidly navigating.
    The viewer replays the example's self-contained `base` and `diff` NotebookRecord
    arrays, not the latest document head. A loading state
@@ -50,10 +52,15 @@ Only run trusted notebook code. The target endpoint must allow browser CORS.
    example until **Refresh examples** is clicked.
 10. Run `extract(notebookUrl)` for each source and collect the returned arrays;
     `preview(examples)` displays that exact list. Filter by notebook and cell and
-    check filtered navigation. The short API throws if there are extraction
+    check filtered navigation. Check that a copied Markdown notebook link, a bare Drive URL, and a Runme
+    share URL (including surrounding whitespace) resolve to the same source.
+    The short API throws if there are extraction
     diagnostics; `extract({source: {driveFileId}})` returns examples plus issues
     for inspection. `prepare(example)` replays the records without accessing the
     source notebook. Extraction must not write a sidecar or change history.
+    The Cell filter follows current document order and shows a cell number and
+    outline heading (or first non-empty line). Missing cells remain selectable
+    at the end. Equal cell IDs in different source notebooks filter separately.
 11. Encode rows using `await trainingExamples.encodeSftExample(input, accepted)`
     and `await trainingExamples.encodeJsonl(rows)`. Verify one JSON object per line,
     final LF, and no label in the prompt. Assign whole document families to train
@@ -70,6 +77,10 @@ Only run trusted notebook code. The target endpoint must allow browser CORS.
 
 ## Failure cases
 
+- Invalid or inaccessible source: the AppKernel cell reports the actual API
+  error, including structured rejection details, instead of `[object Object]`.
+  Correct the link and rerun that cell; it must clear the previous error and
+  open the selected examples with a readable example count.
 - No eligible pair: show actionable empty state, not a broken diff.
 - Missing/corrupt history or unsupported records: fail extraction without
   changing source history; the notebook remains independently editable.

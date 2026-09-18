@@ -16,6 +16,29 @@ function collectStdout(): {
 }
 
 describe("JSKernel", () => {
+  it("renders structured API rejections instead of [object Object]", async () => {
+    const stderr = vi.fn();
+    const kernel = new JSKernel({ hooks: { onStderr: stderr } });
+    const result = await kernel.run(
+      'throw { status: 404, result: { error: { message: "Notebook not found" } } };',
+    );
+    expect(result.exitCode).toBe(1);
+    expect(stderr).toHaveBeenCalledWith(
+      '{"status":404,"result":{"error":{"message":"Notebook not found"}}}\n',
+    );
+  });
+
+  it("preserves Error and string diagnostics", async () => {
+    const stderr = vi.fn();
+    const kernel = new JSKernel({ hooks: { onStderr: stderr } });
+    await kernel.run('throw new Error("Invalid notebook link");');
+    expect(stderr).toHaveBeenLastCalledWith("Error: Invalid notebook link\n");
+    await kernel.run('throw "Missing source";');
+    expect(stderr).toHaveBeenLastCalledWith("Missing source\n");
+    await kernel.run('throw undefined;');
+    expect(stderr).toHaveBeenLastCalledWith("undefined\n");
+  });
+
   it("merges injected app helpers with built-in app helpers", async () => {
     const stdout = vi.fn();
     const kernel = new JSKernel({

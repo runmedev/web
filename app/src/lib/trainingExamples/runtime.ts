@@ -2,6 +2,7 @@ import { driveFileUrl, parseDriveItem } from '../../storage/drive'
 import type { DriveNotebookStore } from '../../storage/drive'
 import type LocalNotebooks from '../../storage/local'
 import { getNotebookDataController } from '../notebookDataController'
+import { normalizeNotebookReferenceUri } from '../shareLinks'
 import {
   getTrainingJob,
   submitTrainingJob,
@@ -134,9 +135,8 @@ export function createTrainingExamplesApi(deps: {
     input: string | ({ source: Source } & ExtractionOptions)
   ) {
     if (typeof input !== 'string') return extractDetailed(input)
-    let reference = input
-    if (/^https?:/.test(reference))
-      reference = new URL(reference).searchParams.get('doc') ?? reference
+    // Accept the same copied Markdown links and share URLs as notebooks.open.
+    const reference = normalizeNotebookReferenceUri(input)
     const source: Source = reference.startsWith('local://file/')
       ? { localUri: reference }
       : { driveFileId: parseDriveItem(reference).id }

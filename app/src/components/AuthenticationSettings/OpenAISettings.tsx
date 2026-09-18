@@ -2,6 +2,7 @@ import { useState } from 'react'
 import {
   clearOpenAIAuth,
   getOpenAIAuthStatus,
+  revealOpenAIKeyForSettings,
   saveOpenAIAuth,
 } from '../../lib/openaiTraining'
 
@@ -9,6 +10,10 @@ import {
 export function OpenAISettings() {
   const [status, setStatus] = useState(getOpenAIAuthStatus)
   const [apiKey, setApiKey] = useState('')
+  // Keep the saved secret out of the input until explicitly revealed. Revealing
+  // must not turn it into a draft replacement or enable the Save action.
+  const [showApiKey, setShowApiKey] = useState(false)
+  const [revealedSavedKey, setRevealedSavedKey] = useState('')
   const [baseUrl, setBaseUrl] = useState(status.baseUrl)
   const [message, setMessage] = useState('')
   const inputClass =
@@ -18,6 +23,8 @@ export function OpenAISettings() {
       if (clear) clearOpenAIAuth()
       else saveOpenAIAuth(apiKey, baseUrl)
       setApiKey('')
+      setShowApiKey(false)
+      setRevealedSavedKey('')
       setStatus(getOpenAIAuthStatus())
       setMessage(clear ? 'OpenAI API key cleared.' : 'OpenAI API key saved.')
     } catch (error) {
@@ -50,11 +57,15 @@ export function OpenAISettings() {
         OpenAI API key
         <input
           className={inputClass}
-          type="password"
+          id="openai-api-key"
+          type={showApiKey ? 'text' : 'password'}
           autoComplete="off"
           spellCheck={false}
-          value={apiKey}
-          onChange={(event) => setApiKey(event.target.value)}
+          value={apiKey || revealedSavedKey}
+          onChange={(event) => {
+            setApiKey(event.target.value)
+            setRevealedSavedKey('')
+          }}
           placeholder={
             status.configured
               ? 'Key saved; enter a replacement'
@@ -62,6 +73,20 @@ export function OpenAISettings() {
           }
         />
       </label>
+      <button
+        type="button"
+        className="rounded-nb-sm border border-nb-border px-3 py-2 text-sm disabled:opacity-50"
+        aria-controls="openai-api-key"
+        disabled={!showApiKey && !status.configured && !apiKey}
+        onClick={() => {
+          setRevealedSavedKey(
+            !showApiKey && !apiKey ? revealOpenAIKeyForSettings() : ''
+          )
+          setShowApiKey(!showApiKey)
+        }}
+      >
+        {showApiKey ? 'Hide OpenAI key' : 'Show OpenAI key'}
+      </button>
       <p className="text-xs text-nb-text-muted">
         Stored unencrypted in localStorage for this browser origin, not in
         notebooks or Google Drive. Same-origin scripts and executed notebook
