@@ -70,4 +70,43 @@ describe('self-contained native record examples', () => {
     ;(transactional.diff[0] as RunmeOperation).transaction_id = 'transaction'
     expect(() => prepareRecordExample(transactional)).toThrow()
   })
+  it('rejects a recoverable but incomplete base and malformed cell payload', () => {
+    const missing = records()
+    ;(missing.base[0] as RunmeOperation).kind = 'cell.update'
+    expect(() => prepareRecordExample(missing)).toThrow('Missing')
+    const malformed = records()
+    ;((malformed.base[0] as RunmeOperation).payload as any).cell.value = 123
+    expect(() => prepareRecordExample(malformed)).toThrow(
+      'Invalid cell content'
+    )
+  })
+  it('strips metadata from native diff payloads and normalizes recipe identities', () => {
+    const example = records()
+    for (const record of [
+      ...example.base,
+      ...example.diff,
+    ] as RunmeOperation[]) {
+      const payload = record.payload as any
+      payload.cell_id = payload.cell_id.replace('cell-', 'opaque-')
+      if (payload.position) payload.position[0][1] = 'secret-position-author'
+      if (payload.cell) {
+        payload.cell.metadata = { accepted: false, author: 'hidden-author' }
+        payload.cell.outputs = ['hidden-output']
+      }
+    }
+    const original = JSON.stringify(example)
+    const input = prepareRecordExample(example)
+    for (const hidden of [
+      'opaque-',
+      'hidden-author',
+      'secret-position-author',
+      'hidden-output',
+      'accepted',
+    ])
+      expect(JSON.stringify(input)).not.toContain(hidden)
+    expect(JSON.stringify(example)).toBe(original)
+    expect(
+      replayContent(input.initial, input.operations).map((c) => c.cell.value)
+    ).toEqual(after.map((c) => c.value))
+  })
 })

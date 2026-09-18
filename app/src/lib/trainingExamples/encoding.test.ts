@@ -5,6 +5,39 @@ import { exampleJournal } from './fixtures.test-helper'
 import { prepareContentExample, replayContent } from './payloads'
 
 describe('native payload classifier encoding', () => {
+  it('sanitizes directly supplied native payloads before encoding', () => {
+    const row = encodeSftExample(
+      {
+        initial: [
+          {
+            cell_id: 'opaque-id',
+            position: [[0, 'secret-actor', 42]],
+            cell: {
+              kind: 'code',
+              language_id: 'bash',
+              value: 'echo ok',
+              metadata: { label: 'rejected' },
+            },
+          },
+        ],
+        operations: [],
+      },
+      false
+    )
+    for (const hidden of ['opaque-id', 'secret-actor', 'rejected'])
+      expect(row.messages[0].content).not.toContain(hidden)
+    expect(() =>
+      encodeSftExample(
+        {
+          initial: [],
+          operations: [
+            { kind: 'cell.delete', payload: { cell_id: 'missing' } },
+          ],
+        },
+        false
+      )
+    ).toThrow('Missing')
+  })
   it('replays native create/update/delete/move payloads without attribution or intermediate edits', () => {
     const j = exampleJournal()
     j.cell('opaque-a', 'before', true)

@@ -1,10 +1,9 @@
-import { validateOperation } from '../operationLog/codec'
-import { materializeOperationLog } from '../operationLog/materialize'
+import { validateLamportValues, validateOperation } from '../operationLog/codec'
 import { createRunmeOperation } from '../operationLog/mutations'
 import type { NotebookRecord } from '../operationLog/records'
 import type { JsonValue, RunmeOperation } from '../operationLog/types'
 import type { PreparedExample } from './payloads'
-import { replayContent } from './payloads'
+import { normalizePreparedExample, replayContent } from './payloads'
 
 /** Valid native records with deterministic training-only identity/causality.
  * Fixed envelope values remove author/time leakage without changing the source.
@@ -59,25 +58,18 @@ export function prepareRecordExample(example: {
       throw new Error('Invalid self-contained content records')
     ids.add(record.op_id)
   }
-  const base = materializeOperationLog(example.base as RunmeOperation[])
-  const input: PreparedExample = {
-    initial: base.notebook.cells.map((cell) => ({
-      cell_id: cell.cell_id,
-      position: cell.position,
-      cell: {
-        kind: cell.kind,
-        language_id: cell.language_id,
-        value: cell.value,
-        metadata: {},
-      },
-    })),
-    // validateOperation and the content-kind whitelist above validate the
-    // discriminated payload before this boundary cast.
-    operations: (example.diff as RunmeOperation[]).map((op) => ({
+  validateLamportValues(all as RunmeOperation[])
+  const operations = (records: NotebookRecord[]) =>
+    (records as RunmeOperation[]).map((op) => ({
       kind: op.kind,
       payload: op.payload,
-    })) as unknown as PreparedExample['operations'],
+    })) as unknown as PreparedExample['operations']
+  // Unlike editor recovery, strict replay rejects an update/delete of a missing
+  // base cell rather than silently materializing a smaller training snapshot.
+  const base = replayContent([], operations(example.base))
+  const input: PreparedExample = {
+    initial: base,
+    operations: operations(example.diff),
   }
-  replayContent(input.initial, input.operations)
-  return input
+  return normalizePreparedExample(input)
 }

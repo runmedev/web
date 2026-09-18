@@ -33,6 +33,13 @@ export interface PreparedExample {
 
 /** A whitelist deliberately drops outputs, metadata and lossless proto fields. */
 function content(cell: OperationCell): OperationCell {
+  if (
+    !cell ||
+    !['code', 'markup'].includes(cell.kind) ||
+    typeof cell.language_id !== 'string' ||
+    typeof cell.value !== 'string'
+  )
+    throw new Error('Invalid cell content')
   return {
     kind: cell.kind,
     language_id: cell.language_id,
@@ -48,6 +55,8 @@ export function replayContent(
 ): CellCreatePayload[] {
   const result = new Map<string, CellCreatePayload>()
   for (const cell of initial) {
+    if (typeof cell.cell_id !== 'string' || !cell.cell_id)
+      throw new Error('Invalid cell identity')
     if (result.has(cell.cell_id)) throw new Error('Duplicate cell identity')
     validatePositionId(cell.position)
     result.set(cell.cell_id, {
@@ -58,6 +67,8 @@ export function replayContent(
   }
   for (const operation of operations) {
     const { payload } = operation
+    if (!payload || typeof payload.cell_id !== 'string' || !payload.cell_id)
+      throw new Error('Invalid cell identity')
     const existing = result.get(payload.cell_id)
     if (operation.kind === 'cell.create') {
       if (existing) throw new Error('Duplicate create target')
@@ -96,6 +107,70 @@ export function replayContent(
     throw new Error('Duplicate content position')
   }
   return ordered
+}
+
+/** Sanitize recipe-provided native payloads as well as extracted examples.
+ * A single order-preserving position map removes actor IDs without changing
+ * which cell a move targets. Never trust callers to strip metadata themselves.
+ */
+export function normalizePreparedExample(
+  input: PreparedExample
+): PreparedExample {
+  replayContent(input.initial, input.operations)
+  const ids = new Map<string, string>()
+  const positions = [...input.initial.map((cell) => cell.position)]
+  for (const cell of input.initial)
+    ids.set(cell.cell_id, `cell-${ids.size + 1}`)
+  for (const op of input.operations) {
+    if (!ids.has(op.payload.cell_id))
+      ids.set(op.payload.cell_id, `cell-${ids.size + 1}`)
+    if (op.kind === 'cell.create' || op.kind === 'cell.move')
+      positions.push(op.payload.position)
+  }
+  positions.sort(comparePositionIds)
+  const ranks = new Map<string, number>()
+  for (const position of positions) {
+    const key = exampleJson(position)
+    if (!ranks.has(key)) ranks.set(key, ranks.size)
+  }
+  const position = (
+    value: CellCreatePayload['position']
+  ): CellCreatePayload['position'] => [
+    [ranks.get(exampleJson(value))! * 1024, 'content', 1],
+  ]
+  return {
+    initial: input.initial.map((cell) => ({
+      cell_id: ids.get(cell.cell_id)!,
+      position: position(cell.position),
+      cell: content(cell.cell),
+    })),
+    operations: input.operations.map((op): ContentOperation => {
+      const cell_id = ids.get(op.payload.cell_id)!
+      switch (op.kind) {
+        case 'cell.create':
+          return {
+            kind: op.kind,
+            payload: {
+              cell_id,
+              position: position(op.payload.position),
+              cell: content(op.payload.cell),
+            },
+          }
+        case 'cell.update':
+          return {
+            kind: op.kind,
+            payload: { cell_id, cell: content(op.payload.cell) },
+          }
+        case 'cell.move':
+          return {
+            kind: op.kind,
+            payload: { cell_id, position: position(op.payload.position) },
+          }
+        case 'cell.delete':
+          return { kind: op.kind, payload: { cell_id } }
+      }
+    }),
+  }
 }
 
 /** Normalize identities and positions into a training-only namespace, then

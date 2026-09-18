@@ -1,5 +1,6 @@
 import md5 from 'md5'
 
+import { materializeOperationLog } from '../operationLog/materialize'
 import { committedOperationIds, orderOperationSet } from '../operationLog/order'
 import {
   type CommentRecord,
@@ -88,9 +89,19 @@ export function extractExamples(
     ? { localUri: notebookId }
     : { driveFileId: notebookId }
   const committed = committedOperationIds(operations)
-  const ordered = orderOperationSet(operations).ordered.filter((op) =>
-    committed.has(op.op_id)
+  const history = orderOperationSet(operations)
+  // The editor can recover partial history, but a dataset must never silently
+  // train on that recovery. Leave the source untouched and require a full log.
+  if (
+    history.pending.length ||
+    history.ordered.some((op) => !committed.has(op.op_id))
   )
+    throw new Error(
+      'Cannot extract examples from incomplete history or transactions'
+    )
+  if (materializeOperationLog(operations).unknownOperationIds.length)
+    throw new Error('Cannot extract examples from unsupported history')
+  const ordered = history.ordered.filter((op) => committed.has(op.op_id))
   const groups = new Map<
     string,
     ReturnType<typeof buildNotebookRevisions>[number]
@@ -122,23 +133,26 @@ export function extractExamples(
       (r) => !earlier.some((other) => revisionFollows(r, other))
     )
   }
-  // A version persists through unrelated cell edits. Key evidence by the last
-  // cell mutation, not the enclosing notebook version or its checkpoint alias.
+  // Content, position and visibility are independent CRDT registers. A last
+  // operation ID alone conflates concurrent content edits followed by the same
+  // move. Track each register's winning mutation, excluding unrelated cells.
   const cellVersion = (v: VersionRef, cellId: string) => {
-    const mutation = resolve(v)
-      .filter(
-        (op) =>
-          [
-            'cell.create',
-            'cell.update',
-            'cell.delete',
-            'cell.restore',
-            'cell.move',
-          ].includes(op.kind) &&
-          (op.payload as { cell_id?: string }).cell_id === cellId
+    const registers: Record<string, string> = {}
+    for (const op of resolve(v)) {
+      const payload = op.payload as { cell_id?: string; position?: unknown }
+      if (payload.cell_id !== cellId) continue
+      if (op.kind === 'cell.create' || op.kind === 'cell.update')
+        registers.content = op.op_id
+      if (
+        op.kind === 'cell.create' ||
+        op.kind === 'cell.move' ||
+        (op.kind === 'cell.restore' && payload.position)
       )
-      .at(-1)
-    return mutation?.op_id ?? 'absent'
+        registers.position = op.op_id
+      if (['cell.create', 'cell.delete', 'cell.restore'].includes(op.kind))
+        registers.visibility = op.op_id
+    }
+    return exampleJson(registers)
   }
   const evidence = new Map<string, Candidate[]>()
   const add = (candidate: Candidate) => {

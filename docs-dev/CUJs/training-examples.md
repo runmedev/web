@@ -93,6 +93,28 @@ Only run trusted notebook code. The target endpoint must allow browser CORS.
   are not cell labels. Ordinary anchored comments provide weak negative evidence.
 - Historical naming: regenerate baselines; deduplicate unchanged cell versions
   across unrelated edits and aliases of the same named snapshot.
+- Concurrent content and position edits must remain distinct cell versions:
+  a comment on a moved cell must not label a later merged content update.
+- Incomplete dependencies/transactions anywhere in the selected history fail
+  extraction instead of exporting a valid prefix. Recipe-provided records and
+  payloads are validated and sanitized too; malformed base cells, raw metadata,
+  opaque identities and position actors must not slip into classifier input.
+
+## PR #379 review verification (2026-09-18)
+
+- Rebased on main `0b987b3` and compared against the current design notebook,
+  including its revised Generating Examples section and comment history.
+- Fixed incomplete-history partial export, concurrent-register label collisions,
+  native-payload metadata leakage, and moved-cell navigation focusing a neighbor.
+- Full app suite: 1,614 tests passed; workspace console package: 7 tests passed.
+  Production build passed. Typecheck reports the same 125 existing diagnostics
+  on this branch and a separate clean-main checkout, with no feature diagnostics.
+- Real in-app browser against the built app, using a local synthetic `.runme`
+  notebook: named baseline, commented intermediate edit, named final edit yielded
+  3 accepted and 1 rejected example; preparation and encoding yielded 4 JSONL
+  rows; source revision unchanged. The viewer showed the historical rejected
+  edit rather than the current head, cell order/snippets, and an independent
+  Cell filter. No user data was uploaded and no training job was submitted.
 
 ## Automated coverage
 

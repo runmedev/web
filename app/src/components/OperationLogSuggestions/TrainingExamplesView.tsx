@@ -153,8 +153,13 @@ export function TrainingExamplesView({
       ? loadedPreview.value
       : undefined
   const position = filtered.findIndex((example) => example.id === activeId)
+  const changedIds = new Set(
+    preview?.input.operations.map((op) => op.payload.cell_id)
+  )
   const focusedRow = preview?.diff.cells.find(
-    (row) => row.kind !== 'unchanged' || row.moved
+    // Reordering one cell shifts its neighbors too. Focus the actual operation
+    // target, not the first neighbor that the generic diff marks as moved.
+    (row) => changedIds.has(row.compareCell?.refId ?? row.baseCell?.refId ?? '')
   )
 
   // Wait for the selected preview to mount before scrolling. Only the diff pane

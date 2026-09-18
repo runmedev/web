@@ -80,6 +80,33 @@ beforeEach(() => {
 })
 
 describe('training examples viewer', () => {
+  it('focuses the moved operation target rather than a displaced neighbor', async () => {
+    const j = exampleJournal()
+    j.cell('a', 'moved target', true)
+    j.cell('b', 'displaced neighbor', true, 200)
+    j.name('before')
+    j.append('cell.move', { cell_id: 'a', position: [[300, 'test', 1]] })
+    j.name('after')
+    const result = extractExamples(j.operations, 'test')
+    result.examples = result.examples.filter((e) =>
+      e.diff.some((op) => 'kind' in op && op.kind === 'cell.move')
+    )
+    api.load.mockResolvedValue(result)
+    api.preview.mockImplementation(async (example) =>
+      previewExample([], example)
+    )
+    const { container } = render(
+      <TrainingExamplesView docUri="local://file/test" store={store} />
+    )
+    await waitFor(() =>
+      expect(container.querySelector('[data-example-focus]')).toHaveTextContent(
+        'moved target'
+      )
+    )
+    expect(
+      container.querySelector('[data-example-focus]')
+    ).not.toHaveTextContent('displaced neighbor')
+  })
   it('scrolls to the selected example change after its preview renders', async () => {
     fixture()
     const rect = vi

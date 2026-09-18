@@ -51,4 +51,26 @@ describe('explicit read-only example extraction', () => {
       generateExampleIndex({ read: async () => undefined }, job)
     ).rejects.toThrow('unavailable')
   })
+  it.each([
+    'missing-dependency',
+    'incomplete-transaction',
+    'unknown-operation',
+  ])(
+    'does not export a valid prefix when later history has %s',
+    async (problem) => {
+      const j = exampleJournal()
+      j.cell('a', 'one', true)
+      j.name('baseline')
+      j.cell('a', 'later')
+      const last = j.operations.at(-1)!
+      if (problem === 'missing-dependency') last.deps.push('missing:1')
+      if (problem === 'incomplete-transaction')
+        last.transaction_id = 'unfinished'
+      if (problem === 'unknown-operation') last.kind = 'future.content'
+      const bytes = serializeOperationLog(exampleHeader, j.operations)
+      await expect(
+        generateExampleIndex({ read: async () => bytes }, job)
+      ).rejects.toThrow(/incomplete|unsupported/)
+    }
+  )
 })

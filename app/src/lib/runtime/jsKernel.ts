@@ -1,105 +1,110 @@
-import * as d3 from "d3";
-import { appLogger } from "../logging/runtime";
+import * as d3 from 'd3'
+
+import { appLogger } from '../logging/runtime'
 
 type KernelHooks = {
-  onStdout?: (data: string) => void;
-  onStderr?: (data: string) => void;
-  onExit?: (exitCode: number) => void;
-};
+  onStdout?: (data: string) => void
+  onStderr?: (data: string) => void
+  onExit?: (exitCode: number) => void
+}
 
 type RunOptions = {
   /** Additional globals to inject for this run only. */
-  globals?: Record<string, unknown>;
+  globals?: Record<string, unknown>
   /** Optional DOM container exposed via app.render. */
-  container?: HTMLElement | null;
-};
-
-export type JSKernelRunResult = {
-  exitCode: number;
-  result?: unknown;
-};
-
-type RunnersApi = {
-  get: () => string;
-  update: (name: string, endpoint: string) => string;
-  delete: (name: string) => string;
-  getDefault: () => string;
-  setDefault: (name: string) => string;
-};
-
-function asObjectRecord(value: unknown): Record<string, unknown> {
-  if (!value || typeof value !== "object" || Array.isArray(value)) {
-    return {};
-  }
-  return value as Record<string, unknown>;
+  container?: HTMLElement | null
 }
 
-type AppGlobals = Record<string, unknown>;
+export type JSKernelRunResult = {
+  exitCode: number
+  result?: unknown
+}
+
+type RunnersApi = {
+  get: () => string
+  update: (name: string, endpoint: string) => string
+  delete: (name: string) => string
+  getDefault: () => string
+  setDefault: (name: string) => string
+}
+
+function asObjectRecord(value: unknown): Record<string, unknown> {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) {
+    return {}
+  }
+  return value as Record<string, unknown>
+}
+
+type AppGlobals = Record<string, unknown>
 
 /**
  * Minimal JS runtime for executing snippets with a controlled set of globals.
  * Injects d3, app helpers, and a mocked console that forwards to callbacks.
  */
 export class JSKernel {
-  private readonly hooks: Required<KernelHooks>;
-  private readonly baseGlobals: Record<string, unknown>;
-  private runCounter = 0;
-  private activeRunId: number | null = null;
+  private readonly hooks: Required<KernelHooks>
+  private readonly baseGlobals: Record<string, unknown>
+  private runCounter = 0
+  private activeRunId: number | null = null
 
   constructor({
     globals = {},
     hooks = {},
   }: {
-    globals?: Record<string, unknown>;
-    hooks?: KernelHooks;
+    globals?: Record<string, unknown>
+    hooks?: KernelHooks
   } = {}) {
     this.baseGlobals = {
       d3,
       ...globals,
-    };
+    }
     this.hooks = {
       onStdout: hooks.onStdout ?? (() => {}),
       onStderr: hooks.onStderr ?? (() => {}),
       onExit: hooks.onExit ?? (() => {}),
-    };
+    }
   }
 
-  async run(code: string, options: RunOptions = {}): Promise<JSKernelRunResult> {
-    const runId = ++this.runCounter;
-    this.activeRunId = runId;
+  async run(
+    code: string,
+    options: RunOptions = {}
+  ): Promise<JSKernelRunResult> {
+    const runId = ++this.runCounter
+    this.activeRunId = runId
 
     const stdout = (data: string) => {
       if (this.activeRunId !== runId) {
-        return;
+        return
       }
-      this.hooks.onStdout(data);
-    };
+      this.hooks.onStdout(data)
+    }
     const stderr = (data: string) => {
       if (this.activeRunId !== runId) {
-        return;
+        return
       }
-      this.hooks.onStderr(data);
-    };
+      this.hooks.onStderr(data)
+    }
 
     const appRunners = (options.globals?.runmeRunners ??
-      this.baseGlobals.runmeRunners) as RunnersApi | undefined;
-    const appGlobals = ((options.globals?.app ?? this.baseGlobals.app) ??
-      {}) as AppGlobals;
+      this.baseGlobals.runmeRunners) as RunnersApi | undefined
+    const appGlobals = (options.globals?.app ??
+      this.baseGlobals.app ??
+      {}) as AppGlobals
     const appHelpers = this.createAppHelpers(
       runId,
       options.container,
       stdout,
       appRunners,
-      appGlobals,
-    );
+      appGlobals
+    )
     const mergedApp = {
       ...asObjectRecord(this.baseGlobals.app),
       ...asObjectRecord(options.globals?.app),
       ...appHelpers,
-    };
+    }
     const globalHelp =
       (options.globals?.help as (() => unknown) | undefined) ??
-      (this.baseGlobals.help as (() => unknown) | undefined);
+      (this.baseGlobals.help as (() => unknown) | undefined)
 
     const mergedGlobals: Record<string, unknown> = {
       ...this.baseGlobals,
@@ -111,68 +116,68 @@ export class JSKernel {
         (() =>
           stdout(
             [
-              "App JS console helpers:",
-              "- d3: D3.js",
-              "- app.clear(): clear the render container",
-              "- app.render(fn): render into the container with a D3 selection",
-              "- console.log/info/table/warn/error: write to this console",
-              "- app.runners.get(): list configured runners",
-              "- app.runners.update(name, endpoint): add/update a runner",
-              "- app.runners.delete(name): remove a runner",
-              "- app.runners.getDefault(): show default runner",
-              "- app.runners.setDefault(name): set default runner",
-              "- notebooks.list(): list known notebooks",
-              "- notebooks.get([target]): get notebook document and handle; omitted target = current UI notebook",
-              "- notebooks.update({ target, operations, ... }): apply notebook mutations",
-              "- notebooks.execute({ target, refIds }): run selected cells",
-              "- notebooks.requestWriteAccess({ target }): cooperatively acquire notebook write access",
-              "- help(): show this message",
-            ].join("\n") + "\n",
+              'App JS console helpers:',
+              '- d3: D3.js',
+              '- app.clear(): clear the render container',
+              '- app.render(fn): render into the container with a D3 selection',
+              '- console.log/info/table/warn/error: write to this console',
+              '- app.runners.get(): list configured runners',
+              '- app.runners.update(name, endpoint): add/update a runner',
+              '- app.runners.delete(name): remove a runner',
+              '- app.runners.getDefault(): show default runner',
+              '- app.runners.setDefault(name): set default runner',
+              '- notebooks.list(): list known notebooks',
+              '- notebooks.get([target]): get notebook document and handle; omitted target = current UI notebook',
+              '- notebooks.update({ target, operations, ... }): apply notebook mutations',
+              '- notebooks.execute({ target, refIds }): run selected cells',
+              '- notebooks.requestWriteAccess({ target }): cooperatively acquire notebook write access',
+              '- help(): show this message',
+            ].join('\n') + '\n'
           )),
-    };
+    }
 
-    const argNames = Object.keys(mergedGlobals);
-    const argValues = argNames.map((key) => mergedGlobals[key]);
+    const argNames = Object.keys(mergedGlobals)
+    const argValues = argNames.map((key) => mergedGlobals[key])
 
-    let exitCode = 0;
-    let result: unknown;
+    let exitCode = 0
+    let result: unknown
     try {
       // eslint-disable-next-line @typescript-eslint/no-implied-eval
       const runner = new Function(
         ...argNames,
-        `"use strict"; return (async () => {\n${code}\n})();`,
-      );
-      result = await runner(...argValues);
+        `"use strict"; return (async () => {\n${code}\n})();`
+      )
+      result = await runner(...argValues)
     } catch (err) {
-      exitCode = 1;
+      exitCode = 1
       // Drive/GAPI can reject with a plain response object rather than Error.
       // Preserve its diagnostic fields instead of coercing to [object Object].
-      const diagnostic = this.formatArgs([err]);
-      appLogger.error("JSKernel execution failed", {
+      const diagnostic = this.formatError(err)
+      appLogger.error('JSKernel execution failed', {
         attrs: {
-          scope: "appkernel.jskernel",
+          scope: 'appkernel.jskernel',
           error: diagnostic.trimEnd(),
           runId,
           codeLength: code.length,
         },
-      });
-      stderr(diagnostic);
+      })
+      stderr(diagnostic)
     } finally {
       if (this.activeRunId === runId) {
-        this.activeRunId = null;
+        this.activeRunId = null
       }
-      this.hooks.onExit(exitCode);
+      this.hooks.onExit(exitCode)
     }
     return {
       exitCode,
       result,
-    };
+    }
   }
 
   // Proxy console that routes messages into the kernel's stdout/stderr hooks.
   private createConsoleProxy(
     stdout: (data: string) => void,
-    stderr: (data: string) => void,
+    stderr: (data: string) => void
   ) {
     return {
       log: (...args: unknown[]) => stdout(this.formatArgs(args)),
@@ -181,86 +186,126 @@ export class JSKernel {
         stdout(this.formatTable(data, columns)),
       warn: (...args: unknown[]) => stderr(this.formatArgs(args)),
       error: (...args: unknown[]) => stderr(this.formatArgs(args)),
-    };
+    }
+  }
+
+  /** API rejection objects may contain request headers or response bodies.
+   * Keep diagnostic fields, never serialize the entire transport into a notebook.
+   */
+  private formatError(error: unknown): string {
+    if (!error || typeof error !== 'object' || error instanceof Error)
+      return this.formatArgs([error])
+    const fields = new Set([
+      'name',
+      'message',
+      'code',
+      'status',
+      'statusText',
+      'reason',
+      'error',
+      'errors',
+      'result',
+    ])
+    const seen = new WeakSet<object>()
+    const project = (value: unknown, depth: number): unknown => {
+      if (typeof value === 'string') return value.slice(0, 2048)
+      if (
+        value === null ||
+        typeof value === 'number' ||
+        typeof value === 'boolean'
+      )
+        return value
+      if (!value || typeof value !== 'object' || depth > 5 || seen.has(value))
+        return undefined
+      seen.add(value)
+      if (Array.isArray(value))
+        return value.slice(0, 10).map((item) => project(item, depth + 1))
+      return Object.fromEntries(
+        Object.entries(value)
+          .filter(([key]) => fields.has(key))
+          .map(([key, item]) => [key, project(item, depth + 1)])
+      )
+    }
+    return this.formatArgs([project(error, 0)])
   }
 
   private formatArgs(args: unknown[]): string {
     const replacer = (_key: string, value: unknown) =>
-      typeof value === "bigint" ? value.toString() : value;
+      typeof value === 'bigint' ? value.toString() : value
     return (
       args
         .map((a) => {
           if (a instanceof Error) {
-            return String(a);
+            return String(a)
           }
-          if (typeof a === "string") {
-            return a;
+          if (typeof a === 'string') {
+            return a
           }
           try {
-            return JSON.stringify(a, replacer) ?? String(a);
+            return JSON.stringify(a, replacer) ?? String(a)
           } catch {
-            return String(a);
+            return String(a)
           }
         })
-        .join(" ") + "\n"
-    );
+        .join(' ') + '\n'
+    )
   }
 
   private formatTable(data: unknown, columns?: string[]): string {
     if (!Array.isArray(data)) {
-      return this.formatArgs([data]);
+      return this.formatArgs([data])
     }
 
     const normalizedRows: Array<{
-      index: number;
-      values: Record<string, unknown>;
+      index: number
+      values: Record<string, unknown>
     }> = data.map((row, index) => {
-      if (row && typeof row === "object" && !Array.isArray(row)) {
-        return { index, values: row as Record<string, unknown> };
+      if (row && typeof row === 'object' && !Array.isArray(row)) {
+        return { index, values: row as Record<string, unknown> }
       }
-      return { index, values: { value: row } };
-    });
+      return { index, values: { value: row } }
+    })
 
     const selectedColumns =
       columns && columns.length > 0
         ? columns
         : Array.from(
             normalizedRows.reduce((seen, row) => {
-              Object.keys(row.values).forEach((key) => seen.add(key));
-              return seen;
-            }, new Set<string>()),
-          );
-    const headers = ["(index)", ...selectedColumns];
+              Object.keys(row.values).forEach((key) => seen.add(key))
+              return seen
+            }, new Set<string>())
+          )
+    const headers = ['(index)', ...selectedColumns]
     const lines = [
-      headers.join("\t"),
+      headers.join('\t'),
       ...normalizedRows.map((row) =>
         [row.index, ...selectedColumns.map((key) => row.values[key])]
           .map((value) =>
-            typeof value === "string" ? value : this.formatTableCell(value),
+            typeof value === 'string' ? value : this.formatTableCell(value)
           )
-          .join("\t"),
+          .join('\t')
       ),
-    ];
-    return `${lines.join("\n")}\n`;
+    ]
+    return `${lines.join('\n')}\n`
   }
 
   private formatTableCell(value: unknown): string {
     if (value === undefined) {
-      return "";
+      return ''
     }
-    if (typeof value === "bigint") {
-      return value.toString();
+    if (typeof value === 'bigint') {
+      return value.toString()
     }
-    if (value && typeof value === "object") {
+    if (value && typeof value === 'object') {
       try {
         return JSON.stringify(value, (_key, item) =>
-          typeof item === "bigint" ? item.toString() : item,
-        );
+          typeof item === 'bigint' ? item.toString() : item
+        )
       } catch {
-        return String(value);
+        return String(value)
       }
     }
-    return String(value);
+    return String(value)
   }
 
   private createAppHelpers(
@@ -268,69 +313,69 @@ export class JSKernel {
     container: HTMLElement | null | undefined,
     stdout: (data: string) => void,
     runners?: RunnersApi,
-    appGlobals: AppGlobals = {},
+    appGlobals: AppGlobals = {}
   ) {
     const nestedAppGlobals =
-      appGlobals.app && typeof appGlobals.app === "object"
+      appGlobals.app && typeof appGlobals.app === 'object'
         ? (appGlobals.app as AppGlobals)
-        : {};
+        : {}
     const runnersHelpers =
       runners &&
       (() => ({
         get: () => {
-          const res = runners.get();
-          stdout(res + "\n");
-          return res;
+          const res = runners.get()
+          stdout(res + '\n')
+          return res
         },
         update: (name: string, endpoint: string) => {
-          const res = runners.update(name, endpoint);
-          stdout(res + "\n");
-          return res;
+          const res = runners.update(name, endpoint)
+          stdout(res + '\n')
+          return res
         },
         delete: (name: string) => {
-          const res = runners.delete(name);
-          stdout(res + "\n");
-          return res;
+          const res = runners.delete(name)
+          stdout(res + '\n')
+          return res
         },
         getDefault: () => {
-          const res = runners.getDefault();
-          stdout(res + "\n");
-          return res;
+          const res = runners.getDefault()
+          stdout(res + '\n')
+          return res
         },
         setDefault: (name: string) => {
-          const res = runners.setDefault(name);
-          stdout(res + "\n");
-          return res;
+          const res = runners.setDefault(name)
+          stdout(res + '\n')
+          return res
         },
-      }))();
+      }))()
 
     return {
       ...appGlobals,
       ...nestedAppGlobals,
       clear: () => {
         if (this.activeRunId !== runId) {
-          return;
+          return
         }
         if (container) {
-          container.innerHTML = "";
+          container.innerHTML = ''
         }
       },
       render: (
         renderFn: (
-          selection: d3.Selection<HTMLElement, unknown, null, undefined>,
-        ) => void | Promise<void>,
+          selection: d3.Selection<HTMLElement, unknown, null, undefined>
+        ) => void | Promise<void>
       ) => {
         if (this.activeRunId !== runId) {
-          return;
+          return
         }
         if (!container) {
-          return;
+          return
         }
-        container.innerHTML = "";
-        const selection = d3.select(container as HTMLElement);
-        return renderFn(selection);
+        container.innerHTML = ''
+        const selection = d3.select(container as HTMLElement)
+        return renderFn(selection)
       },
       ...(runnersHelpers ? { runners: runnersHelpers } : {}),
-    };
+    }
   }
 }

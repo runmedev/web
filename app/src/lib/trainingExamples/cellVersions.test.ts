@@ -2,12 +2,61 @@ import { describe, expect, it } from 'vitest'
 
 import { parseOperationLog, serializeOperationLog } from '../operationLog/codec'
 import { materializeOperationLog } from '../operationLog/materialize'
+import { createRunmeOperation } from '../operationLog/mutations'
 import type { RunmeOperation } from '../operationLog/types'
 import { exampleHeader, exampleJournal } from './fixtures.test-helper'
 import { extractExamples } from './model'
 import { previewExample } from './preview'
 
 describe('labeled cell versions', () => {
+  it('does not merge labels for concurrent content and position registers', () => {
+    const j = exampleJournal()
+    j.cell('a', 'original', true)
+    j.cell('b', 'context', true, 200)
+    j.name('baseline')
+    const common = [...j.operations]
+    const move = j.append('cell.move', {
+      cell_id: 'a',
+      position: [[300, 'test', 1]],
+    })
+    j.comment('a', move)
+    j.operations.push(
+      createRunmeOperation({
+        actorId: 'branch',
+        actorSequence: 1,
+        dependencies: [common.at(-1)!.op_id],
+        knownOperations: common,
+        kind: 'cell.update',
+        payload: {
+          cell_id: 'a',
+          cell: {
+            kind: 'code',
+            language_id: 'bash',
+            value: 'concurrent content',
+            metadata: {},
+          },
+        },
+      })
+    )
+    j.name('merged')
+    const result = extractExamples(j.operations, 'drive-id')
+    const negative = result.examples.filter((e) => !e.accepted)
+    expect(negative).toHaveLength(1)
+    expect(
+      previewExample([], negative[0]).diff.cells.find(
+        (c) => c.compareCell?.value === 'original'
+      )?.moved
+    ).toBe(true)
+    expect(
+      result.examples.some(
+        (e) =>
+          e.accepted && JSON.stringify(e.diff).includes('concurrent content')
+      )
+    ).toBe(true)
+    expect(extractExamples([...j.operations].reverse(), 'drive-id')).toEqual(
+      result
+    )
+  })
   it('uses an empty implicit baseline and emits one example per changed cell', () => {
     const j = exampleJournal()
     j.cell('a', 'one', true)
