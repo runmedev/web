@@ -58,6 +58,143 @@ describe('Streams', () => {
     vi.useRealTimers()
   })
 
+  it('replays unavailable state and clears it only after successful negotiation', async () => {
+    const streams = new Streams({
+      knownID: 'cell',
+      runID: 'run',
+      sequence: 1,
+      options: {
+        runnerEndpoint: 'ws://localhost:9977/ws',
+        interceptors: [],
+        autoReconnect: true,
+      },
+    })
+    streams.connect(Heartbeat.INITIAL).subscribe()
+    expect(streams.connectionStateSnapshot).toBe('connecting')
+    MockWebSocket.instances[0].failConnection()
+    const states: string[] = []
+    const subscription = streams.connectionState.subscribe((state) =>
+      states.push(state)
+    )
+    expect(states).toEqual(['unavailable'])
+    await vi.advanceTimersByTimeAsync(1_000)
+    MockWebSocket.instances[1].open()
+    expect(streams.connectionStateSnapshot).toBe('unavailable')
+    MockWebSocket.instances[1].receive({
+      openRunResponse: { state: 'RUN_STATE_CREATED' },
+    })
+    expect(streams.connectionStateSnapshot).toBe('connected')
+    MockWebSocket.instances[1].failConnection()
+    expect(streams.connectionStateSnapshot).toBe('unavailable')
+    await vi.advanceTimersByTimeAsync(1_000)
+    MockWebSocket.instances[2].open()
+    MockWebSocket.instances[2].receive({
+      openRunResponse: { state: 'RUN_STATE_RUNNING' },
+    })
+    expect(streams.connectionStateSnapshot).toBe('connected')
+    subscription.unsubscribe()
+    streams.close()
+  })
+
+  it.each([false, true])(
+    'reports a stalled connection or handshake without a false execution failure (open=%s)',
+    async (open) => {
+      const streams = new Streams({
+        knownID: 'cell',
+        runID: 'run',
+        sequence: 1,
+        options: {
+          runnerEndpoint: 'ws://localhost:9977/ws',
+          interceptors: [],
+          autoReconnect: true,
+        },
+      })
+      const errors: unknown[] = []
+      streams.errors.subscribe((error) => errors.push(error))
+      streams.connect(Heartbeat.INITIAL).subscribe()
+      if (open) MockWebSocket.instances[0].open()
+      await vi.advanceTimersByTimeAsync(9_999)
+      expect(streams.connectionStateSnapshot).toBe('connecting')
+      await vi.advanceTimersByTimeAsync(1)
+      expect(streams.connectionStateSnapshot).toBe('unavailable')
+      expect(errors).toEqual([])
+      if (!open) MockWebSocket.instances[0].open()
+      MockWebSocket.instances[0].receive({
+        openRunResponse: { state: 'RUN_STATE_CREATED' },
+      })
+      expect(streams.connectionStateSnapshot).toBe('connected')
+      streams.close()
+      await vi.advanceTimersByTimeAsync(20_000)
+      expect(streams.connectionStateSnapshot).toBe('closed')
+    }
+  )
+
+  it('cancels the pending notice after successful negotiation', async () => {
+    const streams = new Streams({
+      knownID: 'cell',
+      runID: 'run',
+      sequence: 1,
+      options: {
+        runnerEndpoint: 'ws://localhost:9977/ws',
+        interceptors: [],
+        autoReconnect: false,
+      },
+    })
+    streams.connect(Heartbeat.INITIAL).subscribe()
+    MockWebSocket.instances[0].open()
+    MockWebSocket.instances[0].receive({
+      openRunResponse: { state: 'RUN_STATE_CREATED' },
+    })
+    await vi.advanceTimersByTimeAsync(11_000)
+    expect(streams.connectionStateSnapshot).toBe('connected')
+    streams.close()
+  })
+
+  it('cleans up the connection notice when closed before connecting', async () => {
+    const streams = new Streams({
+      knownID: 'cell',
+      runID: 'run',
+      sequence: 1,
+      options: {
+        runnerEndpoint: 'ws://localhost:9977/ws',
+        interceptors: [],
+        autoReconnect: true,
+      },
+    })
+    streams.connect().subscribe()
+    streams.close()
+    await vi.advanceTimersByTimeAsync(20_000)
+    expect(streams.connectionStateSnapshot).toBe('closed')
+    expect(MockWebSocket.instances).toHaveLength(1)
+  })
+
+  it.each([true, false])(
+    'handles a close without a browser error (reconnect=%s)',
+    async (autoReconnect) => {
+      const streams = new Streams({
+        knownID: 'cell',
+        runID: 'run',
+        sequence: 1,
+        options: {
+          runnerEndpoint: 'ws://localhost:9977/ws',
+          interceptors: [],
+          autoReconnect,
+        },
+      })
+      const errors: unknown[] = []
+      streams.errors.subscribe((error) => errors.push(error))
+      streams.connect().subscribe()
+      MockWebSocket.instances[0].dispatchEvent(
+        new CloseEvent('close', { code: 1005 })
+      )
+      expect(streams.connectionStateSnapshot).toBe('unavailable')
+      await vi.advanceTimersByTimeAsync(1_000)
+      expect(MockWebSocket.instances).toHaveLength(autoReconnect ? 2 : 1)
+      expect(errors).toHaveLength(autoReconnect ? 0 : 1)
+      streams.close()
+    }
+  )
+
   it('keeps the first execute request queued while the runner starts', async () => {
     const streams = new Streams({
       knownID: 'cell-first-run',

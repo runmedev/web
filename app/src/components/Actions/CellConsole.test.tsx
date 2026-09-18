@@ -14,7 +14,11 @@ vi.mock("@runmedev/renderers", () => ({
   setContext: vi.fn(),
 }));
 
-import { parser_pb, MimeType, RunmeMetadataKey } from "../../contexts/CellContext";
+import {
+  parser_pb,
+  MimeType,
+  RunmeMetadataKey,
+} from "../../contexts/CellContext";
 import { create } from "@bufbuild/protobuf";
 import CellConsole from "./CellConsole";
 
@@ -58,6 +62,8 @@ function createSubject<T>() {
 
 function createFakeStream() {
   return {
+    connectionState: createSubject<string>(),
+    connectionStateSnapshot: "connected",
     stdout: createSubject<Uint8Array>(),
     stderr: createSubject<Uint8Array>(),
     pid: createSubject<number>(),
@@ -100,7 +106,11 @@ describe("CellConsole", () => {
     roots.push(root);
     act(() => {
       root.render(
-        <CellConsole cellData={cellData as any} onExitCode={() => {}} onPid={() => {}} />,
+        <CellConsole
+          cellData={cellData as any}
+          onExitCode={() => {}}
+          onPid={() => {}}
+        />,
       );
     });
     return div;
@@ -113,6 +123,79 @@ describe("CellConsole", () => {
       }
     });
     document.body.innerHTML = "";
+  });
+
+  it("shows unavailable state, preserves output, and restores stdin on reconnect", async () => {
+    const stream = createFakeStream();
+    stream.connectionStateSnapshot = "unavailable";
+    const cell = create(parser_pb.CellSchema, {
+      refId: "cell-unavailable",
+      kind: parser_pb.CellKind.CODE,
+      languageId: "bash",
+      outputs: [
+        create(parser_pb.CellOutputSchema, {
+          items: [
+            create(parser_pb.CellOutputItemSchema, {
+              mime: MimeType.VSCodeNotebookStdOut,
+              data: new TextEncoder().encode("previous output"),
+            }),
+          ],
+        }),
+      ],
+      metadata: {
+        [RunmeMetadataKey.LastRunID]: "run-unavailable",
+        [RunmeMetadataKey.Pid]: "42",
+      },
+    });
+    if (!customElements.get("console-view"))
+      customElements.define("console-view", FakeConsoleView);
+    let div: HTMLDivElement;
+    await act(async () => {
+      div = renderConsole(new FakeCellData(cell, stream));
+    });
+    expect(screen.getByRole("alert").textContent).toContain(
+      "Runner unavailable",
+    );
+    expect(screen.queryByTestId("cell-stdin-form")).toBeNull();
+    expect(div!.textContent).toContain("previous output");
+    const terminal = div!.querySelector("console-view") as FakeConsoleView;
+    terminal.context.postMessage({
+      type: "terminal:stdin",
+      output: { input: "unsafe" },
+    });
+    expect(stream.sendExecuteRequest).not.toHaveBeenCalled();
+    await act(async () => {
+      stream.connectionStateSnapshot = "connected";
+      stream.connectionState.emit("connected");
+    });
+    expect(screen.queryByRole("alert")).toBeNull();
+    expect(screen.getByTestId("cell-stdin-form")).toBeTruthy();
+    expect(div!.textContent).toContain("previous output");
+    expect(cell.metadata[RunmeMetadataKey.Pid]).toBe("42");
+    expect(cell.metadata[RunmeMetadataKey.ExitCode]).toBeUndefined();
+    await act(async () => {
+      stream.connectionStateSnapshot = "unavailable";
+      stream.connectionState.emit("unavailable");
+    });
+    expect(screen.getByRole("alert")).toBeTruthy();
+    expect(screen.queryByTestId("cell-stdin-form")).toBeNull();
+  });
+
+  it("shows connection progress without offering stdin before negotiation", async () => {
+    const stream = createFakeStream();
+    stream.connectionStateSnapshot = "connecting";
+    const cell = create(parser_pb.CellSchema, {
+      refId: "connecting",
+      kind: parser_pb.CellKind.CODE,
+      languageId: "bash",
+    });
+    await act(async () => {
+      renderConsole(new FakeCellData(cell, stream));
+    });
+    expect(screen.getByRole("status").textContent).toContain(
+      "Connecting to runner",
+    );
+    expect(screen.queryByTestId("cell-stdin-form")).toBeNull();
   });
 
   it("renders existing stdout content from cell outputs", async () => {
@@ -155,7 +238,9 @@ describe("CellConsole", () => {
       await Promise.resolve();
     });
 
-    const consoleEl = div.querySelector("console-view") as FakeConsoleView | null;
+    const consoleEl = div.querySelector(
+      "console-view",
+    ) as FakeConsoleView | null;
     expect(consoleEl).not.toBeNull();
     const spans = consoleEl?.querySelectorAll(".xterm-rows span") ?? [];
     const texts = Array.from(spans).map((s) => s.textContent);
@@ -187,7 +272,9 @@ describe("CellConsole", () => {
       fireEvent.click(screen.getByLabelText("Explain standard input"));
     });
     expect(
-      screen.getByText(/Send one line of standard input to the running process/),
+      screen.getByText(
+        /Send one line of standard input to the running process/,
+      ),
     ).toBeTruthy();
     expect(submit.disabled).toBe(true);
 
@@ -232,9 +319,13 @@ describe("CellConsole", () => {
       await Promise.resolve();
     });
 
-    const consoleEl = div!.querySelector("console-view") as FakeConsoleView | null;
+    const consoleEl = div!.querySelector(
+      "console-view",
+    ) as FakeConsoleView | null;
     const spans = consoleEl?.querySelectorAll(".xterm-rows span") ?? [];
-    const texts = Array.from(spans).map((s) => s.textContent).join("");
+    const texts = Array.from(spans)
+      .map((s) => s.textContent)
+      .join("");
     expect(texts).toContain("Password:");
   });
 });

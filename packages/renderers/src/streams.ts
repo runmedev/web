@@ -14,6 +14,7 @@ import {
   UnaryResponse,
 } from '@connectrpc/connect'
 import {
+  BehaviorSubject,
   Observable,
   Subject,
   Subscription,
@@ -51,6 +52,14 @@ const HEARTBEAT_INTERVAL_MS = 5_000
 const MONITOR_INTERVAL_MS = 1_000
 const MAX_LATENCY_DEADLINE_MS = 4_000
 const RECONNECT_THROTTLE_MS = 1_000
+const CONNECTION_NOTICE_DELAY_MS = 10_000
+
+// Transport availability is transient UI state, not a remote execution result.
+export type ConnectionState =
+  | 'connecting'
+  | 'connected'
+  | 'unavailable'
+  | 'closed'
 
 export type StreamError = Error | pb.WebsocketStatus
 
@@ -136,6 +145,19 @@ class Streams {
   // Returns an observable that emits the latencies for all streams.
   public get latencies() {
     return this._latenciesConnectable
+  }
+
+  private readonly _connectionState = new BehaviorSubject<ConnectionState>(
+    'connecting'
+  )
+
+  /** Replay availability so views mounted after a failed connection see the error. */
+  public get connectionState() {
+    return this._connectionState.asObservable()
+  }
+
+  public get connectionStateSnapshot(): ConnectionState {
+    return this._connectionState.value
   }
 
   // App protocol-level errors
@@ -329,28 +351,44 @@ class Streams {
       let negotiationComplete = false
       let terminalFailure = false
       const intent = this.nextIntent
+      // A blackholed endpoint or stalled negotiation may never emit an error.
+      // Show a bounded diagnostic without inventing an exit code or interrupting
+      // authentication/negotiation that can still complete successfully later.
+      const connectionNotice = setTimeout(() => {
+        this._connectionState.next('unavailable')
+      }, CONNECTION_NOTICE_DELAY_MS)
+      const markUnavailable = () => {
+        clearTimeout(connectionNotice)
+        this._connectionState.next('unavailable')
+      }
 
       // Define event handlers
       const onClose = (event: CloseEvent) => {
-        if (event.code === 1005) {
-          observer.complete()
-          return
-        }
-
+        markUnavailable()
+        if (terminalFailure) return
+        // Even a close without a status code can interrupt an active run. A
+        // normal exit already tears down these listeners, so retry other closes.
         if (this.autoReconnect) {
-          if (terminalFailure) {
-            return
-          }
           // This infinite loop is throttled by the reconnect subject.
           this.connect()
           return
         }
+        observer.error(
+          new Error(
+            `Runner connection closed (code ${event.code}). Check that the runner is running and reachable.`
+          )
+        )
       }
 
-      const onError = (event: Event) => {
+      const onError = () => {
+        markUnavailable()
         // If autoReconnect is disabled, we want to error out immediately.
         if (!this.autoReconnect) {
-          observer.error(event)
+          observer.error(
+            new Error(
+              'Cannot connect to the runner. Check that it is running and reachable.'
+            )
+          )
           return
         }
 
@@ -388,6 +426,8 @@ class Streams {
             return
           }
 
+          clearTimeout(connectionNotice)
+          this._connectionState.next('connected')
           negotiationComplete = true
           this.nextIntent = RunIntent.RESUME
           observer.next(socket)
@@ -476,6 +516,7 @@ class Streams {
       socket.addEventListener('open', onOpen)
 
       return () => {
+        clearTimeout(connectionNotice)
         socket.removeEventListener('close', onClose)
         socket.removeEventListener('error', onError)
         socket.removeEventListener('message', onMessage)
@@ -643,6 +684,7 @@ class Streams {
 
   // Closes streams by completing the reconnect, queue, and latencies subjects.
   public close() {
+    this._connectionState.next('closed')
     this.reconnect.complete()
     this.queue.complete()
     this._latencies.complete()
