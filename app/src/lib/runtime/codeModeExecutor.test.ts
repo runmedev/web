@@ -27,6 +27,42 @@ const createNotebook = () => {
 }
 
 describe('codeModeExecutor', () => {
+  it('dispatches upload, submit and status through the sandbox host without returning credentials', async () => {
+    const fetchMock = vi.spyOn(globalThis, 'fetch')
+      .mockResolvedValueOnce(new Response(JSON.stringify({ id: 'file-train' })))
+      .mockResolvedValueOnce(new Response(JSON.stringify({ id: 'ftjob-123', status: 'queued' })))
+      .mockResolvedValueOnce(new Response(JSON.stringify({ id: 'ftjob-123', status: 'succeeded' })))
+    const results: unknown[] = []
+    vi.spyOn(SandboxJSKernel.prototype, 'run').mockImplementation(async function (this: SandboxJSKernel) {
+      const bridge = (this as unknown as { bridge: { call: (method: string, args: unknown[]) => Promise<unknown> } }).bridge
+      results.push(await bridge.call('trainingExamples.uploadOpenAIJsonl', [{ apiKey: 'test-only', filename: 'train.jsonl', jsonl: JSON.stringify({messages:[{role:'user',content:'test'}], reference_answer:'true'}) + '\n' }]))
+      results.push(await bridge.call('trainingExamples.submitTrainingJob', [{ apiKey: 'test-only', job: { model: 'test-model', training_file: 'file-train' } }]))
+      results.push(await bridge.call('trainingExamples.getTrainingJob', [{ apiKey: 'test-only', id: 'ftjob-123' }]))
+    })
+    const executor = createCodeModeExecutor({ mode: 'sandbox', resolveNotebook: () => null })
+    await executor.execute({ source: 'webmcp', code: '// test host bridge' })
+    expect(results).toEqual([expect.objectContaining({id:'file-train'}), {id:'ftjob-123',status:'queued'}, {id:'ftjob-123',status:'succeeded'}])
+    expect(JSON.stringify(results)).not.toContain('test-only')
+    expect(fetchMock).toHaveBeenCalledTimes(3)
+    expect(fetchMock.mock.calls[1][1]?.signal).toBeInstanceOf(AbortSignal)
+  })
+  it('exposes reference-answer encoding in browser mode without uploading', async () => {
+    const executor = createCodeModeExecutor({ mode: 'browser', resolveNotebook: () => null })
+    const result = await executor.execute({ source:'webmcp', code:'const row = trainingExamples.encodeSftExample({initial:[],operations:[]}, false); console.log(trainingExamples.encodeJsonl([row]));' })
+    expect(result.exitCode).toBe(0)
+    expect(JSON.parse(result.output).reference_answer).toBe('false')
+  })
+  it('dispatches reference-answer encoding through the sandbox bridge', async () => {
+    let encoded: any
+    vi.spyOn(SandboxJSKernel.prototype, 'run').mockImplementation(async function (this: SandboxJSKernel) {
+      const bridge = (this as unknown as {bridge:{call:(method:string,args:unknown[])=>Promise<unknown>}}).bridge
+      encoded = await bridge.call('trainingExamples.encodeSftExample', [{initial:[],operations:[]}, true])
+    })
+    const executor = createCodeModeExecutor({mode:'sandbox',resolveNotebook:()=>null})
+    await executor.execute({source:'webmcp',code:'console.log(await trainingExamples.help())'})
+    expect(encoded.reference_answer).toBe('true')
+    expect(encoded.messages).toHaveLength(1)
+  })
   it('reports the app version in browser mode without an open notebook', async () => {
     const executor = createCodeModeExecutor({
       mode: 'browser',

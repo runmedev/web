@@ -81,6 +81,7 @@ import {
 } from '../lib/operationLog/versions'
 import { captureCommittedRevision as captureReviewRevision } from '../lib/operationLog/versions'
 import { appState } from '../lib/runtime/AppState'
+import type { ExampleJob } from '../lib/trainingExamples/protocol'
 import { RunmeMetadataKey, parser_pb } from '../runme/client'
 import {
   type ConflictDocStorage,
@@ -2555,6 +2556,21 @@ export class LocalNotebooks extends Dexie {
       await this.operationLogStorage.read(record.operationLogRef)
     ).document
     return decodeNotebookFile(content, record.name).notebook
+  }
+
+  /** Expose only the worker's source locator; notebook history stays in OPFS. */
+  async trainingExampleJob(uri: string): Promise<ExampleJob> {
+    const record = await this.files.get(uri)
+    if (!record?.operationLogRef)
+      throw new Error('Training examples require a .runme notebook in OPFS')
+    return {
+      localUri: uri,
+      sourcePath: record.operationLogRef.path,
+      name: record.name,
+      ...(isDriveItemUri(record.remoteId)
+        ? { driveFileId: parseDriveItem(record.remoteId).id }
+        : {}),
+    }
   }
 
   async saveContent(

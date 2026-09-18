@@ -637,6 +637,31 @@ async function handleSandboxAppKernelBridgeCall({
       return notebookDiffApi.restoreAllDeletedCells(args[0] as any)
     case 'notebookDiff.help':
       return notebookDiffApi.help()
+    case 'trainingExamples.extract':
+      return globals.trainingExamples.extract(args[0] as any)
+    case 'trainingExamples.prepare':
+      return globals.trainingExamples.prepare(args[0] as any)
+    case 'trainingExamples.preview':
+      return globals.trainingExamples.preview(args[0] as any)
+    case 'trainingExamples.show':
+      return globals.trainingExamples.show(args[0] as any)
+    case 'trainingExamples.encodeSftExample':
+      return globals.trainingExamples.encodeSftExample(
+        args[0] as any,
+        args[1] as boolean
+      )
+    case 'trainingExamples.encodeJsonl':
+      return globals.trainingExamples.encodeJsonl(args[0] as any)
+    case 'trainingExamples.uploadOpenAIJsonl':
+      return globals.trainingExamples.uploadOpenAIJsonl(args[0] as any)
+    case 'trainingExamples.submitTrainingJob':
+      return globals.trainingExamples.submitTrainingJob(args[0] as any)
+    case 'trainingExamples.getTrainingJob':
+      return globals.trainingExamples.getTrainingJob(args[0] as any)
+    case 'trainingExamples.cancel':
+      return globals.trainingExamples.cancel()
+    case 'trainingExamples.help':
+      return globals.trainingExamples.help()
     default:
       if (method === 'notebooks.createLocal') {
         return (globals.notebooks as any).createLocal(args[0], args[1])

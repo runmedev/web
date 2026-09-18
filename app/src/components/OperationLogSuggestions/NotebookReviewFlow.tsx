@@ -47,6 +47,8 @@ import {
   ReviewConversation,
 } from './ReviewDiscussion'
 import { ChangedCell } from './OperationLogSuggestionView'
+import { TrainingExamplesView } from './TrainingExamplesView'
+import { getExampleSelection, subscribeExampleSelections } from '../../lib/trainingExamples/registry'
 
 type Props = {
   docUri: string
@@ -60,7 +62,45 @@ const button =
 /** The comparison and its feedback are projections of revision-bound comments.
  * Browsing never creates a persisted Review entity.
  */
-export function NotebookReviewFlow({
+export function NotebookReviewFlow(props: Props) {
+  const [examples, setExamples] = useState(Boolean(getExampleSelection(props.docUri)))
+  const [openedExamples, setOpenedExamples] = useState(Boolean(getExampleSelection(props.docUri)))
+  useEffect(() => {
+    // A recipe for another notebook must not switch this notebook's review mode.
+    let previous = getExampleSelection(props.docUri)
+    return subscribeExampleSelections(() => {
+      const selection = getExampleSelection(props.docUri)
+      if (selection && selection !== previous) { setExamples(true); setOpenedExamples(true) }
+      previous = selection
+    })
+  }, [props.docUri])
+  return (
+    <div id="notebook-review-modes" className="flex h-full min-h-0 flex-col">
+      <nav aria-label="Review mode" className="flex shrink-0 gap-2 border-b border-nb-border p-2">
+        <button className={button} aria-pressed={!examples} onClick={() => setExamples(false)}>
+          Compare changes
+        </button>
+        <button className={button} aria-pressed={examples} onClick={() => {
+          setOpenedExamples(true)
+          setExamples(true)
+        }}>
+          Training examples
+        </button>
+      </nav>
+      <div id="notebook-comparison-mode" className="min-h-0 flex-1" style={{ display: examples ? 'none' : undefined }}>
+        <NotebookComparisonFlow {...props} />
+      </div>
+      {openedExamples && (
+        <div id="notebook-examples-mode" className="min-h-0 flex-1" style={{ display: examples ? undefined : 'none' }}>
+          <TrainingExamplesView docUri={props.docUri} store={props.store} />
+        </div>
+      )}
+    </div>
+  )
+}
+
+/** Keep comparison controls mounted when switching to dataset inspection. */
+function NotebookComparisonFlow({
   docUri,
   store,
   readOnly,

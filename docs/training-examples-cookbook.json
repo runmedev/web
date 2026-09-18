@@ -1,0 +1,53 @@
+{
+  "cells": [
+    {
+      "kind": "CELL_KIND_MARKUP",
+      "languageId": "markdown",
+      "refId": "training_intro",
+      "value": "# Produce a classifier dataset from notebook history\n\nRun the JavaScript cells with AppKernel. This recipe reads the training-examples design notebook, extracts labeled cell versions against their preceding named revision (or the empty notebook), prepares content-only native operation payloads and encodes reference-answer JSONL. It never creates a sidecar, uploads data or starts training. Requires the explicit trainingExamples APIs in the current development branch.\n\nThis one-source recipe is a smoke test, not a disjoint train/validation dataset. Assign entire document families (including copies) to separate splits before training. Named revisions provide weak positive evidence; a draft checkpoint is not human approval. Review extraction diagnostics and source text for secrets before export."
+    },
+    {
+      "kind": "CELL_KIND_CODE",
+      "languageId": "javascript",
+      "refId": "training_extract_preview",
+      "metadata": {
+        "runme.dev/runnerName": "appkernel-js",
+        "name": "extract-and-preview"
+      },
+      "value": "const notebookUrls = [\n  \"https://web.runme.dev/?doc=https%3A%2F%2Fdrive.google.com%2Ffile%2Fd%2F1ZxXleLr8obZjsgf8ytAbJ9YM0cI3YSJl%2Fview\",\n];\n\nconst examples = [];\nfor (const notebookUrl of notebookUrls) {\n  const extracted = await trainingExamples.extract(notebookUrl);\n  examples.push(...extracted);\n}\n\nconsole.log({ exampleCount: examples.length });\nif (examples.length > 0) {\n  await trainingExamples.preview(examples);\n}"
+    },
+    {
+      "kind": "CELL_KIND_CODE",
+      "languageId": "javascript",
+      "refId": "training_extract_encode",
+      "metadata": {
+        "runme.dev/runnerName": "appkernel-js",
+        "name": "extract-and-encode"
+      },
+      "value": "const source = { driveFileId: '1ZxXleLr8obZjsgf8ytAbJ9YM0cI3YSJl' };\nconst extracted = await trainingExamples.extract({ source, sources: ['named-revision'], syntheticReverse: false });\nconsole.log({ count: extracted.examples.length, issues: extracted.issues, checksum: extracted.sourceChecksum, ruleVersion: extracted.ruleVersion });\nif (extracted.issues.length) throw new Error('Review extraction diagnostics before exporting');\nif (!extracted.examples.length) throw new Error('Source needs a named revision, explicit cell decision, or commented cell version with a content change');\nconst rows = [];\nfor (const example of extracted.examples) {\n  const input = await trainingExamples.prepare(example);\n  const row = await trainingExamples.encodeSftExample(input, example.accepted);\n  if (row.messages.some(m => m.role === 'assistant')) throw new Error('Unexpected assistant target');\n  rows.push(row);\n}\nconst jsonl = await trainingExamples.encodeJsonl(rows);\nconst parsed = jsonl.trimEnd().split('\\n').map(line => JSON.parse(line));\nif (parsed.length !== rows.length || !jsonl.endsWith('\\n')) throw new Error('JSONL framing mismatch');\nconst digest = await crypto.subtle.digest('SHA-256', new TextEncoder().encode(jsonl));\nconst sha256 = Array.from(new Uint8Array(digest), b => b.toString(16).padStart(2, '0')).join('');\nconsole.log({ rows: rows.length, bytes: new TextEncoder().encode(jsonl).length, sha256, labels: parsed.map(r => r.reference_answer), uploaded: false });\nawait trainingExamples.preview(extracted.examples);"
+    },
+    {
+      "kind": "CELL_KIND_MARKUP",
+      "languageId": "markdown",
+      "refId": "training_inspect",
+      "value": "## Inspect and split\n\nThe examples viewer shows precisely the list passed to preview(). Filter by notebook and cell, then navigate each diff, its label and provenance; expand Classifier input to inspect the model features. Each example stores self-contained base/diff NotebookRecord arrays and a separate provenance object with source, cell IDs, immutable endpoints and label evidence. Explicit cell decisions take precedence over named-revision inference, then ordinary comments; conflicting explicit labels are deferred. Preparation excludes comments, outputs, attribution, timestamps and original cell IDs. It does not redact secrets embedded in cell text.\n\nFor a real dataset, select independent source families for train and validation, prepare/encode them separately and reject identical model inputs across splits. Save source IDs, immutable endpoints, checksums, rule/encoder versions and output hashes in a separate manifest. Do not include that manifest in prompts. Reverse negatives are opt-in synthetic evidence, not observed rejection."
+    },
+    {
+      "kind": "CELL_KIND_CODE",
+      "languageId": "javascript",
+      "refId": "training_upload_definition",
+      "metadata": {
+        "runme.dev/runnerName": "appkernel-js",
+        "name": "define-explicit-upload"
+      },
+      "value": "// Definitions only: executing this cell does not upload or submit anything.\n// Uses the key and endpoint saved in Authentication Settings → OpenAI API.\nasync function uploadReviewedDataset(jsonl, filename) {\n  return await trainingExamples.uploadOpenAIJsonl({ jsonl, filename });\n}\nasync function submitApprovedJob(job) {\n  // Supply the complete target-service request after reviewing resource costs.\n  return await trainingExamples.submitTrainingJob({ job });\n}\nconsole.log('Helpers defined; no upload or training performed.');"
+    },
+    {
+      "kind": "CELL_KIND_MARKUP",
+      "languageId": "markdown",
+      "refId": "training_boundaries",
+      "value": "## Upload and submission boundary\n\nSet the OpenAI API key and approved endpoint in Authentication Settings. It is stored unencrypted in localStorage for this origin, accessible to same-origin scripts and notebook code; only run trusted notebooks. Save and Clear are independent of Google authentication. Helpers accept an optional ephemeral apiKey, but never paste literal credentials into notebook source or outputs.\n\nThe selected row contract is user-only messages plus top-level reference_answer (string true/false), not public assistant-target chat SFT. uploadOpenAIJsonl({jsonl, filename}) validates rows, builds multipart purpose=fine-tune and returns a file ID. submitTrainingJob({job}) submits the complete selected-service request once. getTrainingJob({id}) returns its ID/status. Both browser and sandbox AppKernel support these helpers; the saved key stays in the host. Browser CORS must be enabled by the target service.\n\nSave split IDs and in-flight attempts in an explicit OPFS manifest. Never automatically retry a timed-out POST: reconcile the remote file/job first. Upload success does not establish training-schema acceptance. Submission can incur costs; no code here starts training automatically.\n\n[Complete opt-in upload and submission notebook](https://web.runme.dev/?doc=https%3A%2F%2Fdrive.google.com%2Ffile%2Fd%2F1cX6Z74nlIo67ovKWoIJ3NSNTB_eeXDKP%2Fview)\n\n[Design notebook](https://web.runme.dev/?doc=https%3A%2F%2Fdrive.google.com%2Ffile%2Fd%2F1ZxXleLr8obZjsgf8ytAbJ9YM0cI3YSJl%2Fview)"
+    }
+  ],
+  "metadata": {}
+}

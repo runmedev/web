@@ -593,7 +593,7 @@ describe('SandboxJSKernel', () => {
     )
     expect(srcDoc).toContain('const runmeRunners = {')
     expect(srcDoc).toContain(
-      'notebookDiff, app, runmeRunners, explorer, credentials, drive, help'
+      'notebookDiff, trainingExamples, app, runmeRunners, explorer, credentials, drive, help'
     )
     expect(CODE_MODE_SANDBOX_ALLOWED_METHODS).toContain('runmeRunners.get')
     expect(CODE_MODE_SANDBOX_ALLOWED_METHODS).toContain(
