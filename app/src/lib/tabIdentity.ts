@@ -1,4 +1,4 @@
-import { v4 as uuidv4 } from "uuid";
+import { SESSION_RECORD_PREFIX } from "./sessionStorageKeys";
 
 export const SESSION_QUERY_PARAM = "session";
 const SESSION_STORAGE_KEY = "runme/sessionId";
@@ -10,11 +10,12 @@ let claimPromise: Promise<string> | null = null;
 let releaseSessionLock: (() => void) | null = null;
 let releaseListenerRegistered = false;
 let sessionLockHeld = false;
+let restoringSession = false;
 
 // Keep the word lists local instead of depending on unique-names-generator.
 // That package is a good fit functionally, but adding it caused long registry
-// proxy stalls in this workspace for a small runtime need. A UUID suffix
-// prevents accidental reuse of an older durable session.
+// proxy stalls in this workspace for a small runtime need. Saved records and
+// exclusive ownership locks prevent accidental reuse of a readable name.
 const SESSION_PREFIXES = [
   "amber",
   "blue",
@@ -90,15 +91,41 @@ function randomIndex(maxExclusive: number): number {
   return Math.floor(Math.random() * maxExclusive);
 }
 
-export function createSessionId(): string {
-  return (
-    [
-      SESSION_PREFIXES[randomIndex(SESSION_PREFIXES.length)],
-      SESSION_NOUNS[randomIndex(SESSION_NOUNS.length)],
-    ].join("-") +
-    "-" +
-    (globalThis.crypto?.randomUUID?.() ?? uuidv4())
-  );
+/** Generate an unused readable name; claiming its lock remains authoritative. */
+export function createSessionId(
+  excluded: ReadonlySet<string> = new Set(),
+): string {
+  const size = SESSION_PREFIXES.length * SESSION_NOUNS.length;
+  const start =
+    randomIndex(SESSION_PREFIXES.length) * SESSION_NOUNS.length +
+    randomIndex(SESSION_NOUNS.length);
+  // Probe every pair once, so repeated random values cannot stall allocation.
+  // If all 720 pairs are occupied, extend with words rather than an opaque ID.
+  let prefix = "";
+  for (;;) {
+    for (let offset = 0; offset < size; offset += 1) {
+      const index = (start + offset) % size;
+      const candidate =
+        prefix +
+        SESSION_PREFIXES[Math.floor(index / SESSION_NOUNS.length)] +
+        "-" +
+        SESSION_NOUNS[index % SESSION_NOUNS.length];
+      if (excluded.has(candidate)) continue;
+      try {
+        if (
+          typeof window !== "undefined" &&
+          window.localStorage.getItem(SESSION_RECORD_PREFIX + candidate) !==
+            null
+        )
+          continue;
+      } catch {
+        // Keep the app usable without storage. The claim path fails closed for
+        // durable access if it cannot check whether this name already exists.
+      }
+      return candidate;
+    }
+    prefix += SESSION_PREFIXES[randomIndex(SESSION_PREFIXES.length)] + "-";
+  }
 }
 
 function getSessionStorage(): Storage | null {
@@ -142,6 +169,7 @@ function writeStoredSessionId(id: string): void {
 function initializeSessionId(): string {
   const stored = readStoredSessionId();
   if (stored) {
+    restoringSession = true;
     return stored;
   }
 
@@ -151,10 +179,10 @@ function initializeSessionId(): string {
     typeof window === "undefined"
       ? null
       : new URL(window.location.href).searchParams.get(SESSION_QUERY_PARAM);
-  const created =
-    requested && /^[a-zA-Z0-9_-]{1,100}$/.test(requested) && hasWebLocks()
-      ? requested
-      : createSessionId();
+  restoringSession = Boolean(
+    requested && /^[a-zA-Z0-9_-]{1,100}$/.test(requested) && hasWebLocks(),
+  );
+  const created = restoringSession ? requested! : createSessionId();
   writeStoredSessionId(created);
   return created;
 }
@@ -256,15 +284,20 @@ export function clearSessionRestoreState(): void {
   }
 }
 
-async function tryClaimSessionId(id: string): Promise<boolean> {
+type ClaimResult = "claimed" | "occupied" | "unavailable";
+
+async function tryClaimSessionId(
+  id: string,
+  fresh: boolean,
+): Promise<ClaimResult> {
   if (!hasWebLocks()) {
-    return true;
+    return "claimed";
   }
 
   try {
-    return await new Promise<boolean>((resolve) => {
+    return await new Promise<ClaimResult>((resolve) => {
       let settled = false;
-      const settle = (claimed: boolean) => {
+      const settle = (claimed: ClaimResult) => {
         if (settled) {
           return;
         }
@@ -278,36 +311,54 @@ async function tryClaimSessionId(id: string): Promise<boolean> {
           { ifAvailable: true },
           async (lock) => {
             if (!lock) {
-              settle(false);
+              settle("occupied");
               return;
             }
 
+            // Check under the owner lock: another tab could have created and
+            // closed this session since we generated the candidate. Even corrupt
+            // or expired records reserve the name until normal GC removes them.
+            if (fresh) {
+              try {
+                if (
+                  window.localStorage.getItem(SESSION_RECORD_PREFIX + id) !==
+                  null
+                ) {
+                  settle("occupied");
+                  return;
+                }
+              } catch {
+                settle("unavailable");
+                return;
+              }
+            }
             sessionLockHeld = true;
             registerSessionLockRelease();
             const released = new Promise<void>((release) => {
               releaseSessionLock = release;
             });
-            settle(true);
+            settle("claimed");
             await released;
           },
         )
-        .catch(() => settle(false));
+        .catch(() => settle("unavailable"));
     });
   } catch {
-    return false;
+    return "unavailable";
   }
 }
 
 async function claimSessionId(): Promise<string> {
   const seen = new Set<string>();
-  const maxAttempts = 8;
-
-  for (let attempt = 0; attempt < maxAttempts; attempt += 1) {
-    const candidate = attempt === 0 ? getSessionId() : createSessionId();
+  // Occupied names are ordinary collisions; retry until a free one is found.
+  // Storage/lock API failures instead use the non-durable fallback below.
+  for (let attempt = 0; ; attempt += 1) {
+    const candidate = attempt === 0 ? getSessionId() : createSessionId(seen);
     if (seen.has(candidate)) {
       continue;
     }
     seen.add(candidate);
+    const fresh = attempt !== 0 || !restoringSession;
 
     // Serialize the claim with GC for this ID, without waiting for a live
     // owner's lifetime lock. Only the short claim/delete decision holds this gate.
@@ -317,12 +368,13 @@ async function claimSessionId(): Promise<string> {
             navigator.locks.request(
               buildSessionClaimLockName(candidate),
               {},
-              () => tryClaimSessionId(candidate),
+              () => tryClaimSessionId(candidate, fresh),
             ),
           )
-          .catch(() => false)
-      : await tryClaimSessionId(candidate);
-    if (claimed) {
+          .catch(() => "unavailable" as const)
+      : await tryClaimSessionId(candidate, fresh);
+    if (claimed === "unavailable") break;
+    if (claimed === "claimed") {
       if (candidate !== sessionId) clearSessionRestoreState();
       sessionId = candidate;
       claimedSessionId = candidate;
@@ -334,7 +386,7 @@ async function claimSessionId(): Promise<string> {
 
   // Lock errors never authorize durable reads/writes or reuse of another tab.
   clearSessionRestoreState();
-  sessionId = createSessionId();
+  sessionId = createSessionId(seen);
   claimedSessionId = sessionId;
   writeStoredSessionId(claimedSessionId);
   updateSessionQueryParam(claimedSessionId);
@@ -345,8 +397,8 @@ async function claimSessionId(): Promise<string> {
  * getSessionId returns the Runme browser session identifier for this page.
  *
  * The id is restored from sessionStorage, then the URL after an app restart.
- * Newly allocated IDs include a UUID so old durable records are never reused
- * by chance. Browser tab duplication may copy both the URL and
+ * New readable names skip saved records, then are checked again under their
+ * ownership lock. Browser tab duplication may copy both the URL and
  * sessionStorage, so Web Locks remain the ownership authority and force a new
  * persisted id when another live tab already owns the stored one.
  */
@@ -388,6 +440,7 @@ export function __resetTabIdForTests(): void {
   sessionId = null;
   claimedSessionId = null;
   claimPromise = null;
+  restoringSession = false;
   releaseSessionLock = null;
   releaseListenerRegistered = false;
 }

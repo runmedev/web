@@ -188,6 +188,12 @@ try {
     new URL(copy.url()).searchParams.get('session') !== id
   )
   check(
+    'Forked session uses readable words without a UUID',
+    /^[a-z]+(?:-[a-z]+)+$/.test(
+      new URL(copy.url()).searchParams.get('session') || ''
+    )
+  )
+  check(
     'Duplicate starts without notebook tabs',
     (await copy.getByRole('tab', { name: /\.runme$/ }).count()) === 0
   )

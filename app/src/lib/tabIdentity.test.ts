@@ -1,12 +1,14 @@
 // @vitest-environment jsdom
 import { afterEach, describe, expect, it, vi } from 'vitest'
 
+import { SESSION_RECORD_PREFIX } from './sessionStorageKeys'
 import {
   __resetTabIdForTests,
   createSessionId,
   ensureSessionQueryParam,
   getClaimedSessionId,
   getSessionId,
+  hasSessionLock,
 } from './tabIdentity'
 
 describe('tab identity', () => {
@@ -18,6 +20,7 @@ describe('tab identity', () => {
   afterEach(() => {
     __resetTabIdForTests()
     window.sessionStorage.clear()
+    window.localStorage.clear()
     window.history.replaceState(null, '', '/')
     vi.restoreAllMocks()
     if (originalLocksDescriptor) {
@@ -49,7 +52,7 @@ describe('tab identity', () => {
 
     expect(sessionId).toBeTruthy()
     expect(claimed).toBe(sessionId)
-    expect(sessionId).toMatch(/^[a-z]+-[a-z]+-[0-9a-f-]{36}$/)
+    expect(sessionId).toMatch(/^[a-z]+-[a-z]+$/)
     expect(window.sessionStorage.getItem('runme/sessionId')).toBe(sessionId)
     expect(window.location.search).toContain('doc=local%3A%2F%2Fnote')
     expect(window.location.search).toContain(
@@ -60,9 +63,6 @@ describe('tab identity', () => {
 
   it('retries with a new readable session id when another tab holds the lock', async () => {
     window.sessionStorage.setItem('runme/sessionId', 'amber-anchor')
-    vi.spyOn(globalThis.crypto, 'randomUUID').mockReturnValue(
-      '00000000-0000-4000-8000-000000000001'
-    )
     const randomValues = [1, 1]
     vi.spyOn(globalThis.crypto, 'getRandomValues').mockImplementation(
       <T extends ArrayBufferView | null>(array: T): T => {
@@ -94,25 +94,21 @@ describe('tab identity', () => {
     const claimed = await getClaimedSessionId()
 
     expect(initial).toBe('amber-anchor')
-    expect(claimed).toBe('blue-beacon-00000000-0000-4000-8000-000000000001')
-    expect(window.sessionStorage.getItem('runme/sessionId')).toBe(
-      'blue-beacon-00000000-0000-4000-8000-000000000001'
-    )
-    expect(window.location.search).toBe(
-      '?session=blue-beacon-00000000-0000-4000-8000-000000000001'
-    )
+    expect(claimed).toBe('blue-beacon')
+    expect(window.sessionStorage.getItem('runme/sessionId')).toBe('blue-beacon')
+    expect(window.location.search).toBe('?session=blue-beacon')
     expect(request).toHaveBeenCalledWith(
       'runme:session:amber-anchor',
       { ifAvailable: true },
       expect.any(Function)
     )
     expect(request).toHaveBeenCalledWith(
-      'runme:session:blue-beacon-00000000-0000-4000-8000-000000000001',
+      'runme:session:blue-beacon',
       { ifAvailable: true },
       expect.any(Function)
     )
   })
-  it('generates a durable-safe ID without the secure-context randomUUID API', () => {
+  it('generates a readable ID without the secure-context randomUUID API', () => {
     vi.spyOn(globalThis.crypto, 'randomUUID').mockImplementation(
       undefined as never
     )
@@ -121,6 +117,128 @@ describe('tab identity', () => {
       configurable: true,
       value: undefined,
     })
-    expect(createSessionId()).toMatch(/^[a-z]+-[a-z]+-[0-9a-f-]{36}$/)
+    expect(createSessionId()).toMatch(/^[a-z]+-[a-z]+$/)
+  })
+  /** Deterministic randomness makes collisions reproducible instead of probabilistic. */
+  function alwaysChooseFirstName() {
+    vi.spyOn(globalThis.crypto, 'getRandomValues').mockImplementation(
+      <T extends ArrayBufferView | null>(array: T): T => {
+        if (array instanceof Uint32Array) array[0] = 0
+        return array
+      }
+    )
+  }
+
+  /** Grant gates and lifetime locks, optionally racing a write before ownership. */
+  function installLocks(beforeGrant?: (name: string) => boolean) {
+    const request = vi.fn(
+      async (
+        name: string,
+        _options: LockOptions,
+        callback: LockGrantedCallback
+      ) => {
+        const available = beforeGrant?.(name) ?? true
+        return callback(
+          available ? ({ name, mode: 'exclusive' } as Lock) : null
+        )
+      }
+    )
+    Object.defineProperty(navigator, 'locks', {
+      configurable: true,
+      value: { request },
+    })
+    return request
+  }
+
+  it('skips saved names, including corrupt records, without changing them', async () => {
+    alwaysChooseFirstName()
+    installLocks()
+    localStorage.setItem(
+      SESSION_RECORD_PREFIX + 'amber-anchor',
+      'corrupt but reserved'
+    )
+    localStorage.setItem(SESSION_RECORD_PREFIX + 'amber-beacon', '{}')
+    expect(await getClaimedSessionId()).toBe('amber-brook')
+    expect(hasSessionLock()).toBe(true)
+    expect(localStorage.getItem(SESSION_RECORD_PREFIX + 'amber-anchor')).toBe(
+      'corrupt but reserved'
+    )
+  })
+
+  it('rechecks saved names under the lock before claiming a generated ID', async () => {
+    alwaysChooseFirstName()
+    installLocks((name) => {
+      if (name === 'runme:session:amber-anchor') {
+        localStorage.setItem(
+          SESSION_RECORD_PREFIX + 'amber-anchor',
+          'created by another tab'
+        )
+      }
+      return true
+    })
+    expect(getSessionId()).toBe('amber-anchor')
+    expect(await getClaimedSessionId()).toBe('amber-beacon')
+    expect(hasSessionLock()).toBe(true)
+    expect(localStorage.getItem(SESSION_RECORD_PREFIX + 'amber-anchor')).toBe(
+      'created by another tab'
+    )
+  })
+
+  it('retries active names without looping on repeated random values', async () => {
+    alwaysChooseFirstName()
+    installLocks((name) => name !== 'runme:session:amber-anchor')
+    expect(await getClaimedSessionId()).toBe('amber-beacon')
+    expect(hasSessionLock()).toBe(true)
+  })
+
+  it('keeps retrying after more than eight active-name collisions', async () => {
+    alwaysChooseFirstName()
+    let occupied = 0
+    installLocks(
+      (name) => !name.startsWith('runme:session:') || occupied++ >= 10
+    )
+    expect(await getClaimedSessionId()).toBe('amber-forge')
+    expect(hasSessionLock()).toBe(true)
+  })
+
+  it('falls back without durable access if the lock API rejects requests', async () => {
+    alwaysChooseFirstName()
+    Object.defineProperty(navigator, 'locks', {
+      configurable: true,
+      value: { request: vi.fn().mockRejectedValue(new Error('disabled')) },
+    })
+    expect(await getClaimedSessionId()).toBe('amber-beacon')
+    expect(hasSessionLock()).toBe(false)
+  })
+
+  it.each(['sharp-pebble', 'blue-brook-5a892bdc-35e3-4694-a49a-1ba4db2f695c'])(
+    'allows an explicit URL to resume its existing record: %s',
+    async (id) => {
+      installLocks()
+      localStorage.setItem(SESSION_RECORD_PREFIX + id, '{}')
+      history.replaceState(null, '', '/?session=' + id)
+      expect(await getClaimedSessionId()).toBe(id)
+      expect(hasSessionLock()).toBe(true)
+    }
+  )
+
+  it('uses more words when all two-word names are reserved', () => {
+    alwaysChooseFirstName()
+    for (let i = 0; i < 720; i++) {
+      const name = createSessionId()
+      expect(name).toMatch(/^[a-z]+-[a-z]+$/)
+      localStorage.setItem(SESSION_RECORD_PREFIX + name, '{}')
+    }
+    expect(createSessionId()).toBe('amber-amber-anchor')
+  })
+
+  it('keeps durable access disabled when name availability cannot be checked', async () => {
+    alwaysChooseFirstName()
+    installLocks()
+    vi.spyOn(Storage.prototype, 'getItem').mockImplementation(() => {
+      throw new Error('disabled')
+    })
+    expect(await getClaimedSessionId()).toMatch(/^[a-z]+-[a-z]+$/)
+    expect(hasSessionLock()).toBe(false)
   })
 })
