@@ -639,6 +639,14 @@ async function handleSandboxAppKernelBridgeCall({
       return notebookDiffApi.help()
     case 'trainingExamples.extract':
       return globals.trainingExamples.extract(args[0] as any)
+    case 'suggestionGrader.getSettings':
+      return globals.suggestionGrader.getSettings()
+    case 'suggestionGrader.setSettings':
+      return globals.suggestionGrader.setSettings(args[0] as any)
+    case 'suggestionGrader.grade':
+      return globals.suggestionGrader.grade(args[0] as any)
+    case 'suggestionGrader.help':
+      return globals.suggestionGrader.help()
     case 'trainingExamples.prepare':
       return globals.trainingExamples.prepare(args[0] as any)
     case 'trainingExamples.preview':

@@ -20,6 +20,7 @@ import type LocalNotebooks from '../../storage/local'
 import { NotebookReviewFlow } from './NotebookReviewFlow'
 import { ReviewRevisionPicker } from './ReviewRevisionPicker'
 import type { NotebookRevision } from '../../lib/operationLog/revisions'
+import { saveGraderSettings } from '../../lib/suggestionGrader'
 
 const flush = vi.hoisted(() => vi.fn(async () => undefined))
 vi.mock('../../lib/notebookDataController', () => ({
@@ -275,6 +276,24 @@ describe('comment-first comparison flow', () => {
         onClose={() => {}}
       />
     )
+  it('renders advisory colors and hover text without accepting or undoing', async () => {
+    saveGraderSettings({ enabled: true, model: 'ft:test', organization: '', project: '', apiKey: 'test-key' })
+    const fetcher = vi.spyOn(globalThis, 'fetch').mockResolvedValue(new Response(JSON.stringify({ status: 'completed', output: [{ type: 'message', content: [{ type: 'output_text', text: 'false' }] }] })))
+    try {
+      const f = fixture()
+      mount(f)
+      const undo = await screen.findByRole('button', { name: 'Undo changes to cell 1' })
+      await waitFor(() => expect(undo.className).toContain('bg-red-700'))
+      expect(undo.title).toContain('AI predicts reject')
+      expect(undo.getAttribute('aria-description')).toContain('Advisory only')
+      expect(f.store.decideNotebookComparisonCell).not.toHaveBeenCalled()
+      fireEvent.click(screen.getByRole('button', { name: 'Training examples' }))
+      expect(fetcher).toHaveBeenCalledTimes(1)
+    } finally {
+      saveGraderSettings({ enabled: false, model: '', organization: '', project: '', apiKey: '' })
+      fetcher.mockRestore()
+    }
+  })
   it('accepts a cell in the gutter, hides its diff and preserves its discussion', async () => {
     const f = fixture()
     mount(f)

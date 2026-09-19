@@ -92,6 +92,10 @@ const DEFAULT_SANDBOX_ALLOWED_METHODS = [
   'notebookDiff.restoreAllDeletedCells',
   'notebookDiff.help',
   'trainingExamples.extract',
+  'suggestionGrader.getSettings',
+  'suggestionGrader.setSettings',
+  'suggestionGrader.grade',
+  'suggestionGrader.help',
   'trainingExamples.prepare',
   'trainingExamples.preview',
   'trainingExamples.show',
@@ -474,6 +478,12 @@ export function buildSandboxSrcDoc(options: {
           cancel: () => hostCall("trainingExamples.cancel", []),
           help: () => hostCall("trainingExamples.help", []),
         };
+        const suggestionGrader = {
+          getSettings: () => hostCall("suggestionGrader.getSettings", []),
+          setSettings: (args) => hostCall("suggestionGrader.setSettings", [args]),
+          grade: (args) => hostCall("suggestionGrader.grade", [args]),
+          help: () => hostCall("suggestionGrader.help", []),
+        };
         const notebookDiff = {
           listDriveRevisions: (target) => hostCall("notebookDiff.listDriveRevisions", [target]),
           diffDriveRevision: (args) => hostCall("notebookDiff.diffDriveRevision", [args]),
@@ -639,6 +649,7 @@ export function buildSandboxSrcDoc(options: {
               "suggestions",
               "notebookDiff",
               "trainingExamples",
+              "suggestionGrader",
               "app",
               "runmeRunners",
               "explorer",
@@ -647,7 +658,7 @@ export function buildSandboxSrcDoc(options: {
               "help",
               '"use strict"; return (async () => {\\n' + code + '\\n})();',
             );
-            await runner(consoleProxy, runme, tour, ui, opfs, net, embed, notebooks, documents, documentation, comments, comparisons, revisions, suggestions, notebookDiff, trainingExamples, app, runmeRunners, explorer, credentials, drive, help);
+            await runner(consoleProxy, runme, tour, ui, opfs, net, embed, notebooks, documents, documentation, comments, comparisons, revisions, suggestions, notebookDiff, trainingExamples, suggestionGrader, app, runmeRunners, explorer, credentials, drive, help);
           } catch (error) {
             exitCode = 1;
             post({ type: "stderr", data: String(error) + "\\n" });

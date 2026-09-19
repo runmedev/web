@@ -11,6 +11,7 @@ type PanelKey =
   | 'explorer'
   | 'documentation'
   | 'authentication'
+  | 'grader'
   | 'open-documents'
   | 'outline'
   | null
@@ -411,6 +412,12 @@ describe('SidePanelToolbar drive status button', () => {
     expect(togglePanelMock).toHaveBeenCalledWith('authentication')
   })
 
+  it('opens AI grader settings from the dedicated navigation button', () => {
+    render(<SidePanelToolbar />)
+    fireEvent.click(screen.getByRole('button', { name: 'Toggle AI grader settings panel' }))
+    expect(togglePanelMock).toHaveBeenCalledWith('grader')
+  })
+
   it('places the Documentation Explorer button directly above About', () => {
     render(<SidePanelToolbar />)
 
@@ -556,6 +563,13 @@ describe('SidePanelContent', () => {
     expect(
       screen.getByTestId('authentication-settings-panel-mock')
     ).toBeTruthy()
+  })
+
+  it('renders AI grader configuration in the left panel', () => {
+    activePanelState = 'grader'
+    render(<SidePanelContent />)
+    expect(screen.getByRole('heading', { name: 'AI grader' })).toBeTruthy()
+    expect(screen.getByLabelText('Model ID')).toBeTruthy()
   })
 
   it('renders the Open Documents panel and routes document actions through shared context state', () => {

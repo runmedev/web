@@ -10,6 +10,7 @@ import {
   ServerStackIcon,
   UserCircleIcon,
   KeyIcon,
+  SparklesIcon,
 } from '@heroicons/react/24/outline'
 import { XMarkIcon } from '@heroicons/react/20/solid'
 import { CloudIcon as CloudSolidIcon } from '@heroicons/react/24/solid'
@@ -59,6 +60,7 @@ import {
 } from '../../auth/appLoginConfiguration'
 import { getServiceAccountCredentialStatusError } from '../../auth/googleServiceAccountImpersonation'
 import AuthenticationSettingsPanel from '../AuthenticationSettings/AuthenticationSettingsPanel'
+import { SuggestionGraderSettings } from '../SuggestionGraderSettings/SuggestionGraderSettings'
 import { showToast } from '../../lib/toast'
 
 const sideButtonBase = 'group side-btn'
@@ -650,6 +652,13 @@ export function SidePanelToolbar() {
           <KeyIcon className="h-5 w-5" />
           <span className={tooltipBase}>Authentication Settings</span>
         </button>
+        <button type="button" data-tour-id="left-nav.grader-settings"
+          className={`${sideButtonBase} ${activePanel === 'grader' ? sideButtonActive : sideButtonInactive}`}
+          aria-pressed={activePanel === 'grader'} aria-label="Toggle AI grader settings panel"
+          onClick={() => togglePanel('grader')}>
+          <SparklesIcon className="h-5 w-5" />
+          <span className={tooltipBase}>AI grader</span>
+        </button>
         <button
           type="button"
           data-tour-id="left-nav.documentation"
@@ -688,6 +697,7 @@ export function SidePanelContent() {
 
   return (
     <div className="relative h-full min-h-0 w-full">
+      {activePanel === 'grader' && <SuggestionGraderSettings />}
       <div
         className={`h-full min-h-0 w-full ${activePanel === 'explorer' ? 'flex' : 'hidden'}`}
         aria-hidden={activePanel !== 'explorer'}

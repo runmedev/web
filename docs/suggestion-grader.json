@@ -1,0 +1,23 @@
+{
+  "cells": [
+    {
+      "kind": 1,
+      "languageId": "markdown",
+      "refId": "suggestion-grader-guide",
+      "value": "# Advisory AI predictions in Compare changes\n\nOpen **AI grader** (the sparkle icon in the left navigation). Enter your fine-tuned model ID, optional organization and project, and optionally a dedicated key. Without a dedicated key, Runme uses the OpenAI key in Authentication Settings, only if it is configured for https://api.openai.com/v1.\n\nEnable automatic predictions and save to opt in. Opening **Compare changes** sends baseline notebook text and each cell's proposed content change to the OpenAI Responses API. API charges may apply. Comments, outputs, authors, review decisions and labels are excluded. Keys stay in this browser origin's unencrypted localStorage, never in notebook history or Google Drive. Only run trusted code.\n\nA green accept button means the model predicts acceptance. A red X means it predicts rejection; clicking X still **undoes** the cell change. The alternative is subdued. Neutral buttons mean no prediction, disabled settings, a pending request or an error. Hover or keyboard-focus the controls for the accessible textual explanation. Colors indicate a binary prediction, not confidence. Human decisions never happen automatically.\n\nPredictions use exactly the classifier prompt from trainingExamples.encodeSftExample, with content-only native operation payloads. Changes outside the graded cell remain at the selected baseline. Output/metadata-only changes abstain. Only completed responses containing exactly true or false are accepted.\n\nAt most two requests run concurrently. Leaving the comparison cancels pending work. Exact input/config matches are cached in memory for this mounted view; settings changes invalidate results. Errors do not trigger automatic retries. No prediction is stored as human feedback or used as a training label."
+    },
+    {
+      "kind": 2,
+      "languageId": "javascript",
+      "refId": "suggestion-grader-status",
+      "metadata": { "runme.dev/runnerName": "appkernel-js" },
+      "value": "// Read-only; does not reveal API keys or send inference requests.\nconsole.log(suggestionGrader.getSettings());\nconsole.log(suggestionGrader.help());"
+    },
+    {
+      "kind": 1,
+      "languageId": "markdown",
+      "refId": "suggestion-grader-api",
+      "value": "## Agent/API usage\n\nThe same functions are available through browser JavaScript and WebMCP. Configure non-secret fields with `suggestionGrader.setSettings({enabled, model, organization, project})`; enter secrets through Settings, not executable notebook source.\n\nTo explicitly grade a frozen cell transition, call `await suggestionGrader.grade({target: {uri: notebookUri}, comparison: {startRevisionId, endRevisionId}, cellId})`. It returns `{accepted, model, requestId}` without editing the notebook. Settings must be enabled first.\n\n[Responses API reference](https://developers.openai.com/api/reference/cli/resources/responses/methods/create)"
+    }
+  ]
+}

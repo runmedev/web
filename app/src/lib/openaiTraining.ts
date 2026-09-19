@@ -71,6 +71,7 @@ export function saveOpenAIAuth(apiKey: string, baseUrl: string): void {
       storageKey,
       JSON.stringify({ apiKey: apiKey.trim(), baseUrl: endpoint })
     )
+    window.dispatchEvent(new Event('runme-openai-auth-changed'))
   } catch {
     throw new Error('Could not save the OpenAI key in this browser')
   }
@@ -80,13 +81,14 @@ export function saveOpenAIAuth(apiKey: string, baseUrl: string): void {
 export function clearOpenAIAuth(): void {
   try {
     localStorage.removeItem(storageKey)
+    window.dispatchEvent(new Event('runme-openai-auth-changed'))
   } catch {
     throw new Error('Could not clear the OpenAI key in this browser')
   }
 }
 
 /** Fixed API paths only; no POST retries, redirects, cookies, or raw response errors. */
-async function request(
+export async function request(
   path: string,
   init: RequestInit,
   options: OpenAIAuthOptions

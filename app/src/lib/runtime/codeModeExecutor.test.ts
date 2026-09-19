@@ -27,6 +27,23 @@ const createNotebook = () => {
 }
 
 describe('codeModeExecutor', () => {
+  it('exposes grader settings through browser and sandbox runtimes without secrets', async () => {
+    const executor = createCodeModeExecutor({ mode: 'browser', resolveNotebook: () => null })
+    const result = await executor.execute({ source: 'webmcp', code: 'console.log(suggestionGrader.getSettings().enabled)' })
+    expect(result.exitCode).toBe(0)
+    const results: unknown[] = []
+    vi.spyOn(SandboxJSKernel.prototype, 'run').mockImplementation(async function (this: SandboxJSKernel) {
+      const bridge = (this as unknown as { bridge: { call: (method: string, args: unknown[]) => Promise<unknown> } }).bridge
+      results.push(await bridge.call('suggestionGrader.setSettings', [{ enabled: false, model: 'ft:test', organization: '', project: '', apiKey: 'test-only-key' }]))
+      results.push(await bridge.call('suggestionGrader.getSettings', []))
+      results.push(await bridge.call('suggestionGrader.help', []))
+      await expect(bridge.call('suggestionGrader.grade', [{}])).rejects.toThrow('target.uri')
+    })
+    await createCodeModeExecutor({ mode: 'sandbox', resolveNotebook: () => null }).execute({ source: 'webmcp', code: '// test grader host bridge' })
+    expect(JSON.stringify(results)).not.toContain('test-only-key')
+    expect(results[1]).toMatchObject({ model: 'ft:test', enabled: false, hasDedicatedKey: true })
+    window.localStorage.removeItem('runme.suggestion-grader.v1')
+  })
   it('dispatches upload, submit and status through the sandbox host without returning credentials', async () => {
     const fetchMock = vi.spyOn(globalThis, 'fetch')
       .mockResolvedValueOnce(new Response(JSON.stringify({ id: 'file-train' })))
