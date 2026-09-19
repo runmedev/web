@@ -49,9 +49,23 @@ temporary authority to access that record. We do not need an additional URL
 parameter or use a heartbeat as a distributed lock. Existing notebook-level
 ownership remains independent from session ownership.
 
-New IDs combine a readable name with a UUID. The old name space has only 720
-combinations; random reuse must not resurrect someone else's old local session.
-Existing short session names remain valid as explicit resume targets.
+New IDs use readable words only, such as `blue-brook`. Allocation starts at a
+random pair and retries other names when a durable record already exists or an
+active tab holds the ownership lock. Repeated random values cannot stall the
+search: each pair is probed once. If all 720 pairs are reserved, extend the name
+with another word. No UUID suffix is added.
+
+A storage check alone is insufficient: another tab can create a record between
+allocation and ownership. Recheck record existence under the exclusive owner
+lock and the existing claim/GC gate. Treat even malformed or expired records as
+reserved until GC removes them. Failure to check storage must not authorize
+access to potentially unrelated durable state.
+
+Explicit URL/sessionStorage identities still resume their existing records;
+only newly allocated names must be unused. Copied active URLs still fork through
+Web Locks. Existing UUID-suffixed URLs remain valid, so this change does not
+rename sessions or strand saved notebook lists. Unavailable locks retain the
+existing tab-local fallback without durable reads or writes.
 
 ```ts
 interface DurableNotebookSession {
