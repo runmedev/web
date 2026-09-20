@@ -7,7 +7,7 @@ import { planContentExample } from './trainingExamples/payloads'
  * head edits cannot leak into the proposal; inserts/moves use a surviving predecessor.
  */
 export function prepareSuggestionInput(
-  preview: ReturnType<typeof previewComparison>,
+  preview: Pick<ReturnType<typeof previewComparison>, 'before' | 'after' | 'diff'>,
   cellId: string
 ) {
   const row = preview.diff.cells.find(

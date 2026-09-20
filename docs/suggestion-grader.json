@@ -11,13 +11,26 @@
       "languageId": "javascript",
       "refId": "suggestion-grader-status",
       "metadata": { "runme.dev/runnerName": "appkernel-js" },
-      "value": "// Read-only; does not reveal API keys or send inference requests.\nconsole.log(suggestionGrader.getSettings());\nconsole.log(suggestionGrader.help());"
+      "value": "// Read-only; does not reveal API keys or send inference requests.\nconsole.log(await suggestionGrader.getSettings());\nconsole.log(await suggestionGrader.help());"
     },
     {
       "kind": 1,
       "languageId": "markdown",
       "refId": "suggestion-grader-api",
       "value": "## Agent/API usage\n\nThe same functions are available through browser JavaScript and WebMCP. Configure non-secret fields with `suggestionGrader.setSettings({enabled, model, organization, project})`; enter secrets through Settings, not executable notebook source.\n\nTo explicitly grade a frozen cell transition, call `await suggestionGrader.grade({target: {uri: notebookUri}, comparison: {startRevisionId, endRevisionId}, cellId})`. It returns `{accepted, model, requestId}` without editing the notebook. Settings must be enabled first.\n\n[Responses API reference](https://developers.openai.com/api/reference/cli/resources/responses/methods/create)"
+    },
+    {
+      "kind": 1,
+      "languageId": "markdown",
+      "refId": "suggestion-grader-update-guide",
+      "value": "## Grade as part of an update\n\nAdd `grade: true` to `notebooks.update({target, expectedRevision, operations})`. The existing default sends no requests. With grading enabled, Runme captures exact before/after content, persists the update, then returns advisory per-cell results in `updated.grading`. Settings must be enabled and configured. Each cell is graded independently against the baseline; unrelated head edits are excluded. Metadata/output-only updates send no requests. At most two requests run concurrently, without automatic retries.\n\n`grading` contains `before` and `after` content-hash handles, `status` (`completed` or `error`), `cells`, and an optional `error`. Handles are not CRDT VersionRefs. Cell results contain either `status: 'graded'`, `accepted`, `model`, `requestId`, or `status: 'error'` and `error`.\n\nA grading failure does not undo a saved edit. Never repeat an insert just because grading failed. If persistence fails, no prediction is requested; reread and reconcile before retrying. Mutation failures retain the normal partial-update error contract. If the calling execution times out after editing, reread the notebook rather than assuming rollback.\n\nThe template below requires an explicit notebook URI, cell ID and replacement source. No API key belongs in notebook source. Results are not stored as review decisions or training labels. For durable comparison/retry references, use `revisions.create` and the separate `suggestionGrader.grade` API."
+    },
+    {
+      "kind": 2,
+      "languageId": "javascript",
+      "refId": "suggestion-grader-update-example",
+      "metadata": { "runme.dev/runnerName": "appkernel-js" },
+      "value": "const uri = ''; // Fill in the resolved local:// notebook URI.\nconst cellId = ''; // Fill in the target cell refId.\nconst newText = ''; // Fill in the replacement source.\nif (!uri || !cellId) throw new Error('Set uri, cellId and newText before running.');\nif (!(await notebooks.help('update')).includes('grade?: boolean')) throw new Error('This build does not support graded updates.');\nconst target = { uri };\nconst doc = await notebooks.get(target);\nconst updated = await notebooks.update({\n  target,\n  expectedRevision: doc.handle.revision,\n  operations: [{ op: 'update', refId: cellId, patch: { value: newText } }],\n  grade: true,\n});\nconsole.log({ handle: updated.handle, grading: updated.grading });"
     }
   ]
 }
