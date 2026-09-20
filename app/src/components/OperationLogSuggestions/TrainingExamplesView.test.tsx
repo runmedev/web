@@ -117,6 +117,10 @@ describe('training examples viewer', () => {
     await waitFor(() => expect(panel).toHaveTextContent('Rejected (false)'))
     expect(panel).toHaveTextContent('Disagrees with example label')
     expect(panel).toHaveTextContent('Model: ft:example-classifier')
+    const statistics = screen.getByRole('region', { name: 'Example statistics' })
+    expect(statistics).toHaveTextContent('Showing 2 of 2 examples')
+    expect(statistics).toHaveTextContent('Accepted: 1')
+    expect(statistics).toHaveTextContent('Rejected: 1')
     expect(
       screen.getByRole('heading', { name: 'Example 1 · Accepted' })
     ).toBeInTheDocument()
@@ -351,10 +355,17 @@ describe('training examples viewer', () => {
     })
     render(<TrainingExamplesView docUri={uri} store={store} />)
     await screen.findByText('1 / 3')
+    const statistics = screen.getByRole('region', { name: 'Example statistics' })
+    expect(statistics).toHaveTextContent('Showing 3 of 3 examples')
+    expect(statistics).toHaveTextContent('Accepted: 2')
+    expect(statistics).toHaveTextContent('Rejected: 1')
     fireEvent.change(screen.getByLabelText('Filter by notebook'), {
       target: { value: JSON.stringify(another.provenance.source) },
     })
     await screen.findByText('1 / 1')
+    expect(statistics).toHaveTextContent('Showing 1 of 3 examples')
+    expect(statistics).toHaveTextContent('Accepted: 1')
+    expect(statistics).toHaveTextContent('Rejected: 0')
     expect(
       within(screen.getByLabelText('Filter by cell')).getByRole('option', {
         name: /Unavailable cell · b/,
@@ -377,6 +388,9 @@ describe('training examples viewer', () => {
       },
     })
     await screen.findByText('1 / 2')
+    expect(statistics).toHaveTextContent('Showing 2 of 3 examples')
+    expect(statistics).toHaveTextContent('Accepted: 1')
+    expect(statistics).toHaveTextContent('Rejected: 1')
     fireEvent.click(screen.getByRole('button', { name: 'Next example' }))
     await screen.findByRole('heading', { name: 'Example 2 · Rejected' })
     expect(api.preview.mock.calls.at(-1)?.[0]).toEqual(result.examples[1])
@@ -407,6 +421,10 @@ describe('training examples viewer', () => {
     api.load.mockResolvedValueOnce({ ...result, examples: [] })
     render(<TrainingExamplesView docUri="local://file/test" store={store} />)
     await screen.findByText(/No eligible examples yet/)
+    const statistics = screen.getByRole('region', { name: 'Example statistics' })
+    expect(statistics).toHaveTextContent('Showing 0 of 0 examples')
+    expect(statistics).toHaveTextContent('Accepted: 0')
+    expect(statistics).toHaveTextContent('Rejected: 0')
     expect(screen.getByRole('button', { name: 'Next example' })).toBeDisabled()
     api.load.mockRejectedValueOnce(new Error('OPFS quota exceeded'))
     fireEvent.click(screen.getByRole('button', { name: 'Refresh examples' }))

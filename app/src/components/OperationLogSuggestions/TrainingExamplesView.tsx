@@ -144,6 +144,10 @@ export function TrainingExamplesView({
       (sourceKey(e) === cellOption.source &&
         e.provenance.cellIds.includes(cellOption.cellId))
   )
+  // Summarize the same filtered set used by navigation, using dataset labels
+  // rather than advisory model predictions. Multi-cell examples count once.
+  const acceptedCount = filtered.filter((example) => example.accepted).length
+  const rejectedCount = filtered.length - acceptedCount
   const selected =
     filtered.find((example) => example.id === selectedId) ?? filtered[0]
   const activeId = selected?.id
@@ -302,6 +306,23 @@ export function TrainingExamplesView({
           </button>
           {index && (
             <>
+              <section
+                aria-label="Example statistics"
+                className="space-y-2 text-sm"
+              >
+                <p>
+                  Showing {filtered.length.toLocaleString()} of{' '}
+                  {index.examples.length.toLocaleString()} examples
+                </p>
+                <p className="flex flex-wrap gap-2">
+                  <span className="rounded bg-emerald-100 px-2 py-1 text-emerald-800">
+                    Accepted: {acceptedCount.toLocaleString()}
+                  </span>
+                  <span className="rounded bg-red-100 px-2 py-1 text-red-800">
+                    Rejected: {rejectedCount.toLocaleString()}
+                  </span>
+                </p>
+              </section>
               <label className="block text-sm">
                 Notebook
                 <select
