@@ -1,6 +1,7 @@
+import { SESSION_RECORD_PREFIX } from './sessionStorageKeys'
 import { buildSessionClaimLockName, buildSessionLockName } from './tabIdentity'
 
-export const SESSION_RECORD_PREFIX = 'runme/notebook-session/v1/'
+export { SESSION_RECORD_PREFIX } from './sessionStorageKeys'
 export const SESSION_RETENTION_MS = 7 * 24 * 60 * 60 * 1000
 export const MAX_INACTIVE_SESSIONS = 50
 export const MAX_SESSION_BYTES = 64 * 1024
