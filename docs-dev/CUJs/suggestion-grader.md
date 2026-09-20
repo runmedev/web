@@ -15,11 +15,26 @@
 3. A true prediction highlights accept green; false highlights undo red. Hover
    and accessibility descriptions explain the prediction without changing actions.
 4. Change revisions/scope or hide the tab while a request is pending. Old results
-   cannot decorate new comparisons. Hidden/training-example tabs send no requests.
+   cannot decorate new comparisons. Hidden tabs send no requests.
 5. Disable predictions or change credentials/model. Old results are invalidated.
 6. Simulate refusal, incomplete output, invalid boolean and HTTP/network errors.
    Controls remain usable and neutral with a textual diagnostic; no automatic retry.
 7. Accept/undo manually and verify the existing review semantics are unchanged.
+
+## Training example predictions
+
+1. With a configured, enabled grader, open Training examples. Only the selected
+   example is sent for inference, using its exact classifier input, including all
+   operations of a multi-cell example. Its label and provenance are not sent.
+2. Verify Model prediction shows Accepted (true) or Rejected (false), the model
+   ID, and agreement/disagreement with the original example label. The label,
+   source notebook, review decisions and exported dataset remain unchanged.
+3. Navigate quickly or hide the view while inference is pending. Cancel obsolete
+   work and never show a stale prediction alongside another example. Returning
+   to an identical input reuses the view's bounded in-memory cache.
+4. Disable/reconfigure the grader or remove its key. Invalidate old results and
+   show configuration guidance. Errors display no prediction, not rejection,
+   and do not trigger automatic retries.
 
 ## Agent update with grading
 
@@ -43,6 +58,9 @@
   settings validation, strict parsing and runtime target selection.
 - `useSuggestionPredictions.test.tsx`: cancellation, stale response suppression,
   concurrency, caching, errors and configuration invalidation.
+- `useExamplePrediction.test.tsx`, `TrainingExamplesView.test.tsx`: exact
+  multi-cell classifier input, independent labels, active-view gating, caching,
+  stale response suppression and configuration/error states.
 - `SuggestionGraderSettings.test.tsx`, `SidePanel.test.tsx`: opt-in/key handling
   and navigation; `NotebookReviewFlow.test.tsx`: rendering and human decisions.
 - `codeModeExecutor.test.ts`, `sandboxJsKernel.test.ts`: shared API exposure.
