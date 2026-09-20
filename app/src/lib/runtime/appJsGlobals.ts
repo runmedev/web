@@ -66,6 +66,7 @@ import {
 } from '../markdownImport'
 import { createNotebookDiffRuntimeApi } from '../notebookDiff/runtime'
 import { createTrainingExamplesApi } from '../trainingExamples/runtime'
+import { createSuggestionGraderApi } from '../suggestionGraderRuntime'
 import { detectNotebookFileFormat } from '../notebookFormat'
 import type { Runner } from '../runner'
 import {
@@ -1294,6 +1295,7 @@ export function createAppJsGlobals({
         ].join('\n'),
     },
     notebooks: notebooksHelpers,
+    suggestionGrader: createSuggestionGraderApi({ localStore: () => appState.localNotebooks, signal }),
     trainingExamples: createTrainingExamplesApi({
       localStore: () => appState.localNotebooks,
       driveStore: () => appState.driveNotebookStore,

@@ -48,9 +48,11 @@ import {
 } from './ReviewDiscussion'
 import { ChangedCell } from './OperationLogSuggestionView'
 import { TrainingExamplesView } from './TrainingExamplesView'
+import { predictionButtonClass, useSuggestionPredictions } from './useSuggestionPredictions'
 import { getExampleSelection, subscribeExampleSelections } from '../../lib/trainingExamples/registry'
 
 type Props = {
+  active?: boolean
   docUri: string
   store: LocalNotebooks
   readOnly: boolean
@@ -88,7 +90,7 @@ export function NotebookReviewFlow(props: Props) {
         </button>
       </nav>
       <div id="notebook-comparison-mode" className="min-h-0 flex-1" style={{ display: examples ? 'none' : undefined }}>
-        <NotebookComparisonFlow {...props} />
+        <NotebookComparisonFlow {...props} active={(props.active ?? true) && !examples} />
       </div>
       {openedExamples && (
         <div id="notebook-examples-mode" className="min-h-0 flex-1" style={{ display: examples ? undefined : 'none' }}>
@@ -101,6 +103,7 @@ export function NotebookReviewFlow(props: Props) {
 
 /** Keep comparison controls mounted when switching to dataset inspection. */
 function NotebookComparisonFlow({
+  active = true,
   docUri,
   store,
   readOnly,
@@ -116,6 +119,7 @@ function NotebookComparisonFlow({
   const [records, setRecords] = useState<NotebookComparison[]>([])
   const [comments, setComments] = useState<DriveComment[]>([])
   const [preview, setPreview] = useState<ReviewPreview>()
+  const predictions = useSuggestionPredictions(preview, active)
   const [diffTarget, setDiffTarget] = useState<DiffCommentTarget>()
   const [busy, setBusy] = useState(false)
   const [error, setError] = useState('')
@@ -643,19 +647,19 @@ function NotebookComparisonFlow({
                               <button
                                 key={action}
                                 type="button"
-                                title={
-                                  action === 'accept'
+                                title={(action === 'accept'
                                     ? 'Accept changes to this cell'
                                     : 'Undo changes to this cell'
-                                }
+                                ) + '. ' + (predictions.get(rowCellId!)?.text ?? 'AI: no prediction yet')}
                                 aria-label={`${action === 'accept' ? 'Accept' : 'Undo'} changes to cell ${i + 1}`}
+                                aria-description={predictions.get(rowCellId!)?.text ?? 'AI: no prediction yet'}
                                 disabled={
                                   busy ||
                                   readOnly ||
                                   decision?.decision === action ||
                                   decision?.decision === 'undo'
                                 }
-                                className="rounded p-1 text-nb-accent hover:bg-blue-50 disabled:opacity-40"
+                                className={`rounded p-1 disabled:opacity-40 ${decision ? 'text-nb-accent hover:bg-blue-50' : predictionButtonClass(predictions.get(rowCellId!), action)}`}
                                 onClick={() =>
                                   void run(async () => {
                                     await decideComparisonCell(

@@ -2,6 +2,7 @@ export type PanelKey =
   | 'explorer'
   | 'documentation'
   | 'authentication'
+  | 'grader'
   | 'open-documents'
   | 'outline'
   | null
@@ -33,6 +34,7 @@ const PANEL_KEYS = new Set<PanelKey>([
   'explorer',
   'documentation',
   'authentication',
+  'grader',
   'open-documents',
   'outline',
   null,
@@ -72,7 +74,7 @@ function persistPanel(panel: PanelKey): void {
 function assertPanelKey(panel: unknown): asserts panel is PanelKey {
   if (!PANEL_KEYS.has(panel as PanelKey)) {
     throw new Error(
-      'activePanel must be explorer, documentation, authentication, open-documents, outline, or null.'
+      'activePanel must be explorer, documentation, authentication, grader, open-documents, outline, or null.'
     )
   }
 }

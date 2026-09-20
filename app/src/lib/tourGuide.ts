@@ -77,6 +77,11 @@ export const TOUR_TARGETS: readonly TourTarget[] = [
       'Configure the identities and OAuth clients used by Runme and Google Drive.',
   },
   {
+    id: 'left-nav.grader-settings',
+    label: 'AI grader',
+    description: 'Configure the fine-tuned model and opt in to advisory predictions in Compare changes.',
+  },
+  {
     id: 'authentication.identity-sharing',
     label: 'Identity Relationship',
     description:

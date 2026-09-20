@@ -4209,7 +4209,7 @@ function OperationLogSuggestionTabContent({
   const { getOpenNotebooks } = useNotebookContext()
   const { store } = useNotebookStore()
   const { closeWorkspaceDocument } = useWorkspaceDocumentContext()
-  const { setCurrentDoc } = useCurrentDoc()
+  const { setCurrentDoc, getCurrentDoc } = useCurrentDoc()
   const sourceEntry = notebookUri
     ? getOpenNotebooks().find((entry) => entry.uri === notebookUri)
     : undefined
@@ -4248,6 +4248,7 @@ function OperationLogSuggestionTabContent({
   return (
     <div id="operation-log-suggestion-tab" className="h-full min-w-0">
       <NotebookReviewFlow
+        active={getCurrentDoc() === suggestionUri}
         docUri={notebookUri}
         store={store}
         readOnly={Boolean(
