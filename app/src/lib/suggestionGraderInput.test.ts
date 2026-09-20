@@ -108,4 +108,18 @@ describe('cell-scoped inference inputs', () => {
       'outside'
     )
   })
+  it('ignores index shifts caused only by other cells being inserted or deleted', () => {
+    const before: Array<[string, string]> = [['a', 'a'], ['b', 'b']]
+    for (const after of [
+      [['x', 'x'], ...before],
+      [['b', 'b']],
+    ] as Array<Array<[string, string]>>) {
+      expect(prepareSuggestionInput(preview(before, after), 'b').operations)
+        .toEqual([])
+    }
+    const input = prepareSuggestionInput(preview(before, [['b', 'updated']]), 'b')
+    expect(input.operations.map((op) => op.kind)).toEqual(['cell.update'])
+    expect(replayContent(input.initial, input.operations).map((c) => c.cell.value))
+      .toEqual(['a', 'updated'])
+  })
 })

@@ -46,7 +46,15 @@ export function prepareSuggestionInput(
       content: content(next),
     })
   if (previous && next) {
-    if (row.moved)
+    // The view marks index shifts as moves, including shifts caused only by
+    // another cell's insertion/deletion. Compare surviving neighbors so those
+    // changes do not become spurious proposals (or billable predictions).
+    const survivingIds = new Set(preview.after.cells.map((c) => c.refId))
+    const previousPredecessor = initial
+      .slice(0, initial.findIndex((c) => c.cell === cellId))
+      .reverse()
+      .find((c) => survivingIds.has(c.cell))?.cell ?? null
+    if (row.moved && previousPredecessor !== predecessor)
       operations.push({ kind: 'move', cell: cellId, after: predecessor })
     if (JSON.stringify(content(previous)) !== JSON.stringify(content(next)))
       operations.push({ kind: 'update', cell: cellId, content: content(next) })
