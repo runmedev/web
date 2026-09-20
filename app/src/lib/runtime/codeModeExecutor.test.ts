@@ -6,6 +6,7 @@ import { parser_pb } from '../../runme/client'
 import { appLogger } from '../logging/runtime'
 import { __resetTabIdForTests, getClaimedSessionId } from '../tabIdentity'
 import { getRunmeVersionInfo } from '../versionInfo'
+import { saveGraderSettings } from '../suggestionGrader'
 import { appState } from './AppState'
 import {
   createCodeModeExecutor,
@@ -27,6 +28,43 @@ const createNotebook = () => {
 }
 
 describe('codeModeExecutor', () => {
+  it.each(['browser', 'sandbox'] as const)('grades saved updates through the %s runtime', async (mode) => {
+    const model = createNotebook()
+    model.getNotebook().cells.push(create(parser_pb.CellSchema, {
+      refId: 'cell-a', kind: parser_pb.CellKind.MARKUP, languageId: 'markdown', value: 'before',
+    }))
+    const notebook = {
+      ...model,
+      updateCell: (cell: parser_pb.Cell) => { model.getNotebook().cells[0] = cell },
+      flushPendingPersist: vi.fn().mockResolvedValue(undefined),
+    }
+    saveGraderSettings({ enabled: true, model: 'ft:test', organization: '', project: '', apiKey: 'test-only' })
+    const fetchMock = vi.spyOn(globalThis, 'fetch').mockResolvedValue(new Response(JSON.stringify({
+      status: 'completed', output: [{ type: 'message', content: [{ type: 'output_text', text: 'true' }] }],
+    })))
+    const args = { target: { uri: model.getUri() }, grade: true, operations: [{ op: 'update', refId: 'cell-a', patch: { value: 'after' } }] }
+    let bridgeResult: any
+    if (mode === 'sandbox') {
+      vi.spyOn(SandboxJSKernel.prototype, 'run').mockImplementation(async function (this: SandboxJSKernel) {
+        const bridge = (this as unknown as { bridge: { call: (method: string, args: unknown[]) => Promise<unknown> } }).bridge
+        bridgeResult = await bridge.call('notebooks.update', [args])
+      })
+    }
+    try {
+      const result = await createCodeModeExecutor({ mode, resolveNotebook: () => notebook }).execute({
+        source: 'webmcp', code: `console.log(JSON.stringify(await notebooks.update(${JSON.stringify(args)})))`,
+      })
+      expect(result.exitCode).toBe(0)
+      const updated = mode === 'browser' ? JSON.parse(result.output) : bridgeResult
+      expect(updated.grading).toMatchObject({ status: 'completed', cells: [{ cellId: 'cell-a', status: 'graded', accepted: true }] })
+      expect(notebook.getNotebook().cells[0].value).toBe('after')
+      expect(notebook.flushPendingPersist).toHaveBeenCalledOnce()
+      expect(fetchMock).toHaveBeenCalledOnce()
+      expect(JSON.stringify(updated)).not.toContain('test-only')
+    } finally {
+      window.localStorage.removeItem('runme.suggestion-grader.v1')
+    }
+  })
   it('exposes grader settings through browser and sandbox runtimes without secrets', async () => {
     const executor = createCodeModeExecutor({ mode: 'browser', resolveNotebook: () => null })
     const result = await executor.execute({ source: 'webmcp', code: 'console.log(suggestionGrader.getSettings().enabled)' })

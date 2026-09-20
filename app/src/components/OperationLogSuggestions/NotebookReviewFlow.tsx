@@ -94,7 +94,7 @@ export function NotebookReviewFlow(props: Props) {
       </div>
       {openedExamples && (
         <div id="notebook-examples-mode" className="min-h-0 flex-1" style={{ display: examples ? undefined : 'none' }}>
-          <TrainingExamplesView docUri={props.docUri} store={props.store} />
+          <TrainingExamplesView docUri={props.docUri} store={props.store} active={(props.active ?? true) && examples} />
         </div>
       )}
     </div>

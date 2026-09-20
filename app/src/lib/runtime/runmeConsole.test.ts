@@ -422,6 +422,163 @@ describe('createRunmeConsoleApi', () => {
 })
 
 describe('createNotebooksApi', () => {
+  it('optionally grades captured copies after persistence, excluding concurrent edits', async () => {
+    const model = new FakeNotebookData(
+      'local://one',
+      'One',
+      create(parser_pb.NotebookSchema, {
+        cells: [codeCell('a', 'old')],
+      })
+    )
+    const flushPendingPersist = vi.fn(async () => {
+      model.updateCell(codeCell('a', 'concurrent'))
+    })
+    const gradeUpdate = vi.fn(async (before, after) => {
+      expect(before.notebook.cells[0].value).toBe('old')
+      expect(after.notebook.cells[0].value).toBe('new')
+      return [
+        {
+          cellId: 'a',
+          status: 'graded' as const,
+          accepted: true,
+          model: 'test',
+          requestId: null,
+        },
+      ]
+    })
+    const api = createNotebooksApi({
+      resolveNotebook: () => Object.assign(model, { flushPendingPersist }),
+      gradeUpdate,
+    })
+    const before = await api.get({ uri: 'local://one' })
+    const result = await api.update({
+      target: { uri: 'local://one' },
+      expectedRevision: before.handle.revision,
+      grade: true,
+      operations: [{ op: 'update', refId: 'a', patch: { value: 'new' } }],
+    })
+    expect(result.notebook.cells[0].value).toBe('new')
+    expect(model.getNotebook().cells[0].value).toBe('concurrent')
+    expect(result.grading).toMatchObject({
+      before: before.handle,
+      after: result.handle,
+      status: 'completed',
+    })
+    expect(flushPendingPersist.mock.invocationCallOrder[0]).toBeLessThan(
+      gradeUpdate.mock.invocationCallOrder[0]
+    )
+  })
+  it('preserves the update and returns a separate error if grading fails', async () => {
+    const model = new FakeNotebookData(
+      'local://one',
+      'One',
+      create(parser_pb.NotebookSchema, {
+        cells: [codeCell('a', 'old')],
+      })
+    )
+    const api = createNotebooksApi({
+      resolveNotebook: () =>
+        Object.assign(model, { flushPendingPersist: async () => {} }),
+      gradeUpdate: async () => {
+        throw new Error('private service error')
+      },
+    })
+    const result = await api.update({
+      target: { uri: 'local://one' },
+      grade: true,
+      operations: [{ op: 'update', refId: 'a', patch: { value: 'new' } }],
+    })
+    expect(model.getNotebook().cells[0].value).toBe('new')
+    expect(result.grading?.status).toBe('error')
+    expect(result.grading?.error).toContain('Do not repeat the update')
+    expect(JSON.stringify(result)).not.toContain('private service error')
+  })
+  it('does not grade uncertain persistence or repeat a partially applied update', async () => {
+    const model = new FakeNotebookData(
+      'local://one',
+      'One',
+      create(parser_pb.NotebookSchema, {
+        cells: [codeCell('a', 'old')],
+      })
+    )
+    const gradeUpdate = vi.fn(async () => [])
+    const api = createNotebooksApi({
+      resolveNotebook: () =>
+        Object.assign(model, {
+          flushPendingPersist: async () => {
+            throw new Error('disk')
+          },
+        }),
+      gradeUpdate,
+    })
+    const result = await api.update({
+      target: { uri: 'local://one' },
+      grade: true,
+      operations: [{ op: 'update', refId: 'a', patch: { value: 'new' } }],
+    })
+    expect(result.grading?.error).toContain(
+      'persistence could not be confirmed'
+    )
+    expect(model.getNotebook().cells[0].value).toBe('new')
+    await expect(
+      api.update({
+        target: { uri: 'local://one' },
+        grade: true,
+        operations: [
+          { op: 'update', refId: 'a', patch: { value: 'partial' } },
+          { op: 'update', refId: 'missing', patch: { value: 'x' } },
+        ],
+      })
+    ).rejects.toBeInstanceOf(NotebookUpdateError)
+    expect(gradeUpdate).not.toHaveBeenCalled()
+  })
+  it('keeps grading opt-in and rejects unsupported/invalid options before mutation', async () => {
+    const model = new FakeNotebookData(
+      'local://one',
+      'One',
+      create(parser_pb.NotebookSchema, {
+        cells: [codeCell('a', 'old')],
+      })
+    )
+    const gradeUpdate = vi.fn(async () => [])
+    const flushPendingPersist = vi.fn(async () => {})
+    const api = createNotebooksApi({
+      resolveNotebook: () => Object.assign(model, { flushPendingPersist }),
+      gradeUpdate,
+    })
+    const operations = [
+      { op: 'update' as const, refId: 'a', patch: { value: 'new' } },
+    ]
+    await expect(
+      api.update({
+        target: { uri: 'local://one' },
+        expectedRevision: 'stale',
+        grade: true,
+        operations,
+      })
+    ).rejects.toThrow('Revision mismatch')
+    await expect(
+      api.update({
+        target: { uri: 'local://one' },
+        grade: 'true' as any,
+        operations,
+      })
+    ).rejects.toThrow('boolean')
+    const unsupported = createNotebooksApi({ resolveNotebook: () => model })
+    await expect(
+      unsupported.update({
+        target: { uri: 'local://one' },
+        grade: true,
+        operations,
+      })
+    ).rejects.toThrow('unavailable')
+    expect(model.getNotebook().cells[0].value).toBe('old')
+    expect(
+      (await api.update({ target: { uri: 'local://one' }, operations })).grading
+    ).toBeUndefined()
+    expect(gradeUpdate).not.toHaveBeenCalled()
+    expect(flushPendingPersist).not.toHaveBeenCalled()
+  })
   it('gets current notebook and returns handle + document', async () => {
     const notebook = create(parser_pb.NotebookSchema, {
       cells: [codeCell('cell-a', 'echo a')],

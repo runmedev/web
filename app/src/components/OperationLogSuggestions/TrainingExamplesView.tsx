@@ -21,6 +21,7 @@ import type { ExampleSelection } from '../../lib/trainingExamples/registry'
 import type LocalNotebooks from '../../storage/local'
 import { parser_pb } from '../../runme/client'
 import { ChangedCell } from './OperationLogSuggestionView'
+import { useExamplePrediction } from './useExamplePrediction'
 
 const button =
   'rounded border border-nb-border px-2 py-1 text-sm disabled:opacity-40'
@@ -105,9 +106,11 @@ function contentType(cell?: parser_pb.Cell): string {
 export function TrainingExamplesView({
   docUri,
   store,
+  active = true,
 }: {
   docUri: string
   store: LocalNotebooks
+  active?: boolean
 }) {
   const selection = useSyncExternalStore(subscribeExampleSelections, () =>
     getExampleSelection(docUri)
@@ -153,6 +156,7 @@ export function TrainingExamplesView({
       ? loadedPreview.value
       : undefined
   const position = filtered.findIndex((example) => example.id === activeId)
+  const prediction = useExamplePrediction(preview?.input, active)
   const changedIds = new Set(
     preview?.input.operations.map((op) => op.payload.cell_id)
   )
@@ -401,6 +405,44 @@ export function TrainingExamplesView({
                   <p className="text-sm">
                     Label source: {selected.provenance.labelSource}
                   </p>
+                  <section
+                    id="training-example-prediction"
+                    aria-label="Model prediction"
+                    aria-live="polite"
+                    className="space-y-2 text-sm"
+                  >
+                    <h3 className="font-semibold">Model prediction</h3>
+                    {prediction.status === 'ready' ? (
+                      <>
+                        <p>
+                          <span
+                            className={`rounded px-2 py-1 font-semibold ${prediction.prediction.accepted ? 'bg-emerald-100 text-emerald-800' : 'bg-red-100 text-red-800'}`}
+                          >
+                            {prediction.prediction.accepted
+                              ? 'Accepted (true)'
+                              : 'Rejected (false)'}
+                          </span>
+                        </p>
+                        <p>
+                          {prediction.prediction.accepted === selected.accepted
+                            ? 'Agrees with example label'
+                            : 'Disagrees with example label'}
+                        </p>
+                        <p className="break-all text-xs">
+                          Model: {prediction.prediction.model}
+                        </p>
+                      </>
+                    ) : (
+                      <p>
+                        {prediction.status === 'error'
+                          ? `No prediction: ${prediction.text}`
+                          : prediction.text}
+                      </p>
+                    )}
+                    <p className="text-xs text-nb-text-muted">
+                      Advisory only. Does not change the example label.
+                    </p>
+                  </section>
                   <details className="text-xs">
                     <summary>Revision pair and evidence</summary>
                     <pre className="whitespace-pre-wrap break-all">

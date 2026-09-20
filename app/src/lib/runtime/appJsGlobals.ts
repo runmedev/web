@@ -67,6 +67,7 @@ import {
 import { createNotebookDiffRuntimeApi } from '../notebookDiff/runtime'
 import { createTrainingExamplesApi } from '../trainingExamples/runtime'
 import { createSuggestionGraderApi } from '../suggestionGraderRuntime'
+import { gradeNotebookUpdate } from '../suggestionGraderUpdate'
 import { detectNotebookFileFormat } from '../notebookFormat'
 import type { Runner } from '../runner'
 import {
@@ -464,6 +465,7 @@ export function createAppJsGlobals({
     listNotebooks,
     refreshNotebook,
     requestNotebookWriteAccess,
+    gradeUpdate: (before, after) => gradeNotebookUpdate(before, after, signal),
   })
   const notebookDiffApi = createNotebookDiffRuntimeApi({
     notebooksApi,

@@ -7,7 +7,8 @@ import {
   waitFor,
   within,
 } from '@testing-library/react'
-import { beforeEach, describe, expect, it, vi } from 'vitest'
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
+import { gradeSuggestion, saveGraderSettings } from '../../lib/suggestionGrader'
 
 import type LocalNotebooks from '../../storage/local'
 import type { NotebookSnapshot } from '../../lib/notebookData'
@@ -28,6 +29,10 @@ const api = vi.hoisted(() => ({
   preview: vi.fn(),
   flush: vi.fn(async () => {}),
   snapshot: vi.fn<() => NotebookSnapshot | undefined>(() => undefined),
+}))
+vi.mock('../../lib/suggestionGrader', async (original) => ({
+  ...(await original<typeof import('../../lib/suggestionGrader')>()),
+  gradeSuggestion: vi.fn(),
 }))
 vi.mock('../../lib/trainingExamples/client', () => ({
   loadTrainingExamples: api.load,
@@ -75,11 +80,59 @@ function fixture() {
 }
 
 beforeEach(() => {
+  localStorage.removeItem('runme.suggestion-grader.v1')
   vi.clearAllMocks()
   api.snapshot.mockReturnValue(undefined)
 })
+afterEach(() => localStorage.removeItem('runme.suggestion-grader.v1'))
 
 describe('training examples viewer', () => {
+  it('shows the model prediction separately from the label using the exact example input', async () => {
+    const { result, j } = fixture()
+    saveGraderSettings({
+      enabled: true,
+      model: 'ft:example-classifier',
+      organization: '',
+      project: '',
+      apiKey: 'test-key',
+    })
+    vi.mocked(gradeSuggestion).mockResolvedValue({
+      accepted: false,
+      model: 'ft:example-classifier',
+      requestId: null,
+    })
+    const { rerender } = render(
+      <TrainingExamplesView
+        docUri="local://file/test"
+        store={store}
+        active={false}
+      />
+    )
+    await screen.findByRole('heading', { name: 'Example 1 · Accepted' })
+    expect(gradeSuggestion).not.toHaveBeenCalled()
+    rerender(
+      <TrainingExamplesView docUri="local://file/test" store={store} active />
+    )
+    const panel = screen.getByRole('region', { name: 'Model prediction' })
+    await waitFor(() => expect(panel).toHaveTextContent('Rejected (false)'))
+    expect(panel).toHaveTextContent('Disagrees with example label')
+    expect(panel).toHaveTextContent('Model: ft:example-classifier')
+    expect(
+      screen.getByRole('heading', { name: 'Example 1 · Accepted' })
+    ).toBeInTheDocument()
+    expect(vi.mocked(gradeSuggestion).mock.calls[0][0]).toEqual(
+      previewExample(j.operations, result.examples[0]).input
+    )
+    expect(vi.mocked(gradeSuggestion).mock.calls[0][0]).not.toHaveProperty(
+      'accepted'
+    )
+    fireEvent.click(screen.getByRole('button', { name: 'Next example' }))
+    await waitFor(() =>
+      expect(panel).toHaveTextContent('Agrees with example label')
+    )
+    expect(result.examples[0].accepted).toBe(true)
+    expect(result.examples[1].accepted).toBe(false)
+  })
   it('focuses the moved operation target rather than a displaced neighbor', async () => {
     const j = exampleJournal()
     j.cell('a', 'moved target', true)

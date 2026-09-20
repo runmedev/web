@@ -89,6 +89,25 @@ export type NotebookDocument = {
   notebook: parser_pb.Notebook
 }
 
+/** Advisory results are returned to the caller, never stored as review decisions. */
+export type NotebookCellGrade =
+  | {
+      cellId: string
+      status: 'graded'
+      accepted: boolean
+      model: string
+      requestId: string | null
+    }
+  | { cellId: string; status: 'error'; error: string }
+
+export type NotebookUpdateGrading = {
+  before: NotebookHandle
+  after: NotebookHandle
+  status: 'completed' | 'error'
+  cells: NotebookCellGrade[]
+  error?: string
+}
+
 export type CellPatch = {
   value?: string
   languageId?: string
@@ -189,7 +208,8 @@ export type NotebooksApi = {
     expectedRevision?: string
     operations: NotebookMutation[]
     reason?: string
-  }) => Promise<NotebookDocument>
+    grade?: boolean
+  }) => Promise<NotebookDocument & { grading?: NotebookUpdateGrading }>
   delete: (target: NotebookTarget) => Promise<void>
   execute: (args: {
     target?: NotebookTarget
@@ -683,11 +703,16 @@ export function createNotebooksApi({
   listNotebooks,
   refreshNotebook,
   requestNotebookWriteAccess,
+  gradeUpdate,
 }: {
   resolveNotebook: (target?: unknown) => NotebookDataLike | null
   listNotebooks?: () => NotebookDataLike[]
   refreshNotebook?: (uri: string) => Promise<unknown>
   requestNotebookWriteAccess?: (uri: string) => Promise<unknown>
+  gradeUpdate?: (
+    before: NotebookDocument,
+    after: NotebookDocument
+  ) => Promise<NotebookCellGrade[]>
 }): NotebooksApi {
   const resolveNotebookByTarget = (
     target?: NotebookTarget
@@ -727,7 +752,7 @@ export function createNotebooksApi({
       return 'notebooks.get(target?: { uri } | { handle: { uri, revision } }): Promise<NotebookDocument>. When target is omitted, returns the current notebook selected in the UI.'
     }
     if (topic === 'update') {
-      return 'notebooks.update({ target, expectedRevision?, operations: NotebookMutation[] }): Promise<NotebookDocument>. target is required.'
+      return 'notebooks.update({ target, expectedRevision?, operations: NotebookMutation[], grade?: boolean }): Promise<NotebookDocument & { grading? }>. target is required. grade:true opts into content-only per-cell OpenAI predictions after persistence; grading has before/after handles and cells with status graded/error. Grading never accepts or undoes edits. An error in grading does not mean the update failed: do not repeat the mutation. Handles are content hashes, not CRDT VersionRefs.'
     }
     if (topic === 'delete') {
       return 'notebooks.delete(target): Promise<void>. target is required.'
@@ -745,7 +770,7 @@ export function createNotebooksApi({
       'Notebook SDK methods:',
       '- notebooks.list(query?)',
       '- notebooks.get(target?)              # omitted target = current UI notebook',
-      '- notebooks.update({ target, expectedRevision?, operations })',
+      '- notebooks.update({ target, expectedRevision?, operations, grade? })',
       '- notebooks.delete(target)',
       '- notebooks.execute({ target, refIds })',
       '- notebooks.refresh({ target })',
@@ -787,6 +812,10 @@ export function createNotebooksApi({
     update: async (args) => {
       const notebook = resolveNotebookByRequiredTarget('update', args.target)
       assertNotebookWritable('update', notebook)
+      if (args.grade !== undefined && typeof args.grade !== 'boolean')
+        throw new Error('notebooks.update grade must be a boolean')
+      if (args.grade && (!gradeUpdate || !notebook.flushPendingPersist))
+        throw new Error('Grading updates is unavailable in this runtime')
       const beforeHandle = makeHandle(notebook)
       if (
         args.expectedRevision &&
@@ -824,6 +853,9 @@ export function createNotebooksApi({
         }
       }
 
+      // Capture the exact pair synchronously around mutations. Later edits during
+      // persistence/inference must not leak into this update's classifier input.
+      const before = args.grade ? makeDocument(notebook) : undefined
       let appliedOperationCount = 0
       for (const [index, operation] of operations.entries()) {
         try {
@@ -854,7 +886,33 @@ export function createNotebooksApi({
         }
       }
 
-      return makeDocument(notebook)
+      const after = makeDocument(notebook)
+      if (!before) return after
+      const grading: NotebookUpdateGrading = {
+        before: before.handle,
+        after: after.handle,
+        status: 'error',
+        cells: [],
+      }
+      try {
+        await notebook.flushPendingPersist!()
+      } catch {
+        grading.error =
+          'Changes were applied but persistence could not be confirmed. Read the notebook and reconcile before retrying; no grading was requested.'
+        return { ...after, grading }
+      }
+      try {
+        grading.cells = await gradeUpdate!(before, after)
+        grading.status = grading.cells.some((cell) => cell.status === 'error')
+          ? 'error'
+          : 'completed'
+      } catch {
+        // Never throw an inference failure as if the mutation failed, since that
+        // encourages retries that can duplicate inserted cells. Do not echo data.
+        grading.error =
+          'Changes were saved, but grading failed. Do not repeat the update; grade the saved comparison separately.'
+      }
+      return { ...after, grading }
     },
     delete: async (_target: NotebookTarget) => {
       const notebook = resolveNotebookByRequiredTarget('delete', _target)
