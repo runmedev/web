@@ -96,6 +96,29 @@ describe('suggestion grader', () => {
     await expect(gradeSuggestion(input)).rejects.toThrow('different endpoint')
     expect(fetcher).not.toHaveBeenCalled()
   })
+  it('uses the shared credential after clearing a dedicated key', async () => {
+    saveOpenAIAuth('shared-key', 'https://api.openai.com/v1')
+    saveGraderSettings({ ...settings, apiKey: 'dedicated-key' })
+    saveGraderSettings({ ...settings, apiKey: '' })
+    expect(getGraderSettings()).toMatchObject({
+      hasDedicatedKey: false,
+      hasApiKey: true,
+    })
+    const fetcher = vi.spyOn(globalThis, 'fetch').mockResolvedValue(
+      new Response(JSON.stringify(response('false')))
+    )
+    expect((await gradeSuggestion(input)).accepted).toBe(false)
+    expect(new Headers(fetcher.mock.calls[0][1]?.headers).get('Authorization'))
+      .toBe('Bearer shared-key')
+  })
+  it('does not reuse a different-endpoint credential after clearing the key', async () => {
+    saveOpenAIAuth('internal-key', 'https://internal.openai.org/v1')
+    saveGraderSettings({ ...settings, apiKey: '' })
+    const fetcher = vi.spyOn(globalThis, 'fetch')
+    expect(getGraderSettings().hasApiKey).toBe(false)
+    await expect(gradeSuggestion(input)).rejects.toThrow('different endpoint')
+    expect(fetcher).not.toHaveBeenCalled()
+  })
   it('does not retry or reflect sensitive API error bodies', async () => {
     saveGraderSettings({ ...settings, apiKey: 'test-secret' })
     const fetcher = vi

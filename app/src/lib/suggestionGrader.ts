@@ -165,7 +165,8 @@ export async function gradeSuggestion(
         }),
       },
       {
-        apiKey: settings.apiKey,
+        // A cleared dedicated key must use the endpoint-bound shared credential.
+        apiKey: settings.apiKey || undefined,
         baseUrl: 'https://api.openai.com/v1',
         signal: controller.signal,
       }
