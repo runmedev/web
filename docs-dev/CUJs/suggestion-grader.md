@@ -29,6 +29,9 @@
 2. Verify Model prediction shows Accepted (true) or Rejected (false), the model
    ID, and agreement/disagreement with the original example label. The label,
    source notebook, review decisions and exported dataset remain unchanged.
+   The example statistics show the filtered count out of the loaded total and
+   accepted/rejected label counts. Notebook/cell filters update these counts;
+   navigating examples or receiving a model prediction does not change them.
 3. Navigate quickly or hide the view while inference is pending. Cancel obsolete
    work and never show a stale prediction alongside another example. Returning
    to an identical input reuses the view's bounded in-memory cache.
