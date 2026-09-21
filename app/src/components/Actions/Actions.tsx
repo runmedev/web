@@ -2079,9 +2079,8 @@ export function Action({
     )
   }
 
-  // Render code cells as a unified Marimo-style card: editor + toolbar + output
-  // are all inside one bordered container with a distinctive "paper" shadow.
-  // The outer wrapper is a flex row: left gutter (add-cell buttons) + cell card.
+  // Input and output items are full-width sibling surfaces. The transparent
+  // group owns hover/focus highlighting so they still read as one code cell.
   return (
     <div
       id={`code-action-${cell.refId}`}
@@ -2116,8 +2115,11 @@ export function Action({
         </button>
       </div>
 
-      {/* Cell card: editor + toolbar + output */}
-      <div className="min-w-0 flex-1">
+      {/* One interaction group, with no padded output tray or enclosing card. */}
+      <div
+        id={`cell-group-${cell.refId}`}
+        className="code-cell-group min-w-0 flex-1 space-y-2"
+      >
         <div id={`cell-card-${cell.refId}`} className="cell-card">
           {/* Code editor section — overflow-hidden keeps border-radius clipping on the editor */}
           <div
@@ -2300,22 +2302,16 @@ export function Action({
               </button>
             </div>
           </div>
-
-          {/* Output section: separated by a thin divider, inside the same card.
-              max-h + overflow-auto gives a vertical scrollbar when output is tall. */}
-          {(renderedOutputs || renderedOutputItems) && (
-            <div id={`cell-output-${cell.refId}`}>
-              <div className="border-t border-nb-tray-border" />
-              <div
-                className="overflow-auto p-[14.4px]"
-                style={{ maxHeight: 'var(--nb-cell-output-max-h)' }}
-              >
-                {renderedOutputs}
-                {renderedOutputItems}
-              </div>
-            </div>
-          )}
         </div>
+        {renderedOutputs && (
+          <div
+            id={`cell-output-${cell.refId}`}
+            className="min-w-0 overflow-auto rounded-nb-md border border-nb-border-strong"
+          >
+            {renderedOutputs}
+          </div>
+        )}
+        {renderedOutputItems}
       </div>
 
       {/* Context menu */}

@@ -132,7 +132,6 @@ export function OutputReferenceCell({
                   item={result.item}
                   outputIndex={0}
                   itemIndex={0}
-                  showLabel={false}
                   onDoubleClick={readOnly ? undefined : enterEditMode}
                 />
                 <details className="mt-2 text-sm">
