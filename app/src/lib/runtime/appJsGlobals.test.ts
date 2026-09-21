@@ -1012,3 +1012,64 @@ describe('createAppJsGlobals notebook reference helpers', () => {
     )
   })
 })
+
+it('exposes the shared autosaved output-link action and rejects implicit targets', async () => {
+  const notebook = new FakeNotebookData('local://file/report', 'report.runme')
+  const cell = notebook.appendCell(parser_pb.CellKind.CODE, 'javascript')
+  cell.outputs = [
+    create(parser_pb.CellOutputSchema, {
+      items: [{ mime: 'text/plain', data: new Uint8Array([52, 50]) }],
+    }),
+  ]
+  const flushPendingPersist = vi.fn().mockResolvedValue(undefined)
+  Object.assign(notebook, { flushPendingPersist })
+  const store = {
+    create: vi.fn(),
+    save: vi.fn(),
+    createOutputReference: vi.fn().mockResolvedValue('<a>pinned</a>'),
+    resolveOutputReference: vi
+      .fn()
+      .mockResolvedValue({ item: cell.outputs[0].items[0], executionId: 'E1' }),
+  }
+  const globals = createAppJsGlobals({
+    runme: createRunme(notebook),
+    resolveNotebook: () => notebook,
+    resolveNotebookStore: () => store,
+  })
+  const result = await globals.notebooks.outputLink({
+    target: { uri: notebook.getUri() },
+    cellId: cell.refId,
+    outputIndex: 0,
+    itemIndex: 0,
+  })
+  expect(result).toBe('<a>pinned</a>')
+  expect(flushPendingPersist).toHaveBeenCalledOnce()
+  expect(store.createOutputReference).toHaveBeenCalledWith(
+    notebook.getUri(),
+    cell.refId,
+    0,
+    0
+  )
+  await expect(
+    globals.notebooks.outputLink({
+      cellId: cell.refId,
+      outputIndex: 0,
+      itemIndex: 0,
+    } as any)
+  ).rejects.toThrow('requires target')
+  store.resolveOutputReference.mockResolvedValueOnce({
+    item: create(parser_pb.CellOutputItemSchema, {
+      mime: 'text/plain',
+      data: new Uint8Array([57, 57]),
+    }),
+    executionId: 'E2',
+  })
+  await expect(
+    globals.notebooks.outputLink({
+      target: { uri: notebook.getUri() },
+      cellId: cell.refId,
+      outputIndex: 0,
+      itemIndex: 0,
+    })
+  ).rejects.toThrow('output changed')
+})

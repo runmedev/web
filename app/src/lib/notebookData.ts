@@ -25,6 +25,7 @@ import {
 import { isLinkedResourceLanguageId } from './linkedResource'
 import { appLogger } from './logging/runtime'
 import { markOnboardingTaskComplete } from './onboarding'
+import { isOutputReferenceCell } from './outputReference'
 import { buildExecuteRequest } from './runme'
 import type { Runner } from './runner'
 import { createAppJsGlobals } from './runtime/appJsGlobals'
@@ -1002,6 +1003,7 @@ export class NotebookData {
 
     const normalizedLanguage = (cell.languageId ?? '').trim().toLowerCase()
     if (
+      isOutputReferenceCell(cell) ||
       isHtmlLanguageId(normalizedLanguage) ||
       isLinkedResourceLanguageId(normalizedLanguage)
     ) {

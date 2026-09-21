@@ -8,6 +8,10 @@ import {
   uniqueCanonicalCellId,
 } from './cellIdentity'
 import { DERIVED_NOTEBOOK_KEY, parseDerivedSource } from './derivedNotebook'
+import {
+  OUTPUT_REFERENCE_EXPORT_MESSAGE,
+  isOutputReferenceCell,
+} from './outputReference'
 import { withoutRecoveredOutputs } from './recoveredOutputs'
 
 export const IPYNB_MIME_TYPE = 'application/x-ipynb+json'
@@ -581,6 +585,14 @@ export function encodeIpynb(
 
   const cells = notebook.cells.map((cell): IpynbCell => {
     const id = cell.refId
+    if (isOutputReferenceCell(cell)) {
+      return {
+        cell_type: 'markdown',
+        id,
+        metadata: {},
+        source: OUTPUT_REFERENCE_EXPORT_MESSAGE,
+      }
+    }
     const matched = sourceById.get(id)
     const previousRefId = previousRefIdByJupyterId.get(id)
     const baselineRefId =

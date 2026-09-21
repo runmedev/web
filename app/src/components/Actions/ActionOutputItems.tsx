@@ -1,3 +1,4 @@
+import { HtmlOutput } from './HtmlOutput'
 import React from 'react'
 
 import { MimeType, parser_pb } from '../../runme/client'
@@ -62,14 +63,18 @@ function uint8ArrayToBase64(
   return ''
 }
 
-function ActionOutputItemView({
+export function ActionOutputItemView({
   item,
   outputIndex,
   itemIndex,
+  onCopyReference,
+  showLabel = true,
 }: {
   item: parser_pb.CellOutputItem
   outputIndex: number
   itemIndex: number
+  onCopyReference?: () => void
+  showLabel?: boolean
 }) {
   const mime = item.mime || ''
   const text = formatOutputTextForDisplay(
@@ -85,11 +90,9 @@ function ActionOutputItemView({
 
   if (mime === 'text/html') {
     content = (
-      <iframe
+      <HtmlOutput
+        html={text}
         title={`cell-output-${outputIndex}-${itemIndex}`}
-        sandbox="allow-scripts"
-        srcDoc={text}
-        className="h-[420px] w-full rounded-md border border-nb-cell-border bg-white"
       />
     )
   } else if (
@@ -103,7 +106,7 @@ function ActionOutputItemView({
       <img
         alt={`Cell output ${outputIndex}-${itemIndex}`}
         src={src}
-        className="max-h-[480px] w-full rounded-md border border-nb-cell-border bg-white object-contain"
+        className="h-auto max-w-full rounded-md border border-nb-cell-border bg-white object-contain"
       />
     )
   } else {
@@ -119,10 +122,26 @@ function ActionOutputItemView({
       className="rounded-nb-sm border border-nb-border bg-nb-surface-2 p-3"
       data-testid="cell-output-item"
     >
-      <div className="text-[10px] font-medium uppercase tracking-wide text-nb-text-faint">
-        Output {outputIndex} / Item {itemIndex} - mime={mime}
-        {hasIopubMetadata ? (isStreaming ? ' (streaming)' : ' (complete)') : ''}
-      </div>
+      {showLabel && (
+        <div className="text-[10px] font-medium uppercase tracking-wide text-nb-text-faint">
+          Output {outputIndex} / Item {itemIndex} - mime={mime}
+          {hasIopubMetadata
+            ? isStreaming
+              ? ' (streaming)'
+              : ' (complete)'
+            : ''}
+        </div>
+      )}
+      {onCopyReference && (
+        <button
+          type="button"
+          className="nb-btn text-xs"
+          onClick={onCopyReference}
+          aria-label={`Copy output link ${outputIndex}.${itemIndex}`}
+        >
+          Copy output link
+        </button>
+      )}
       <div className="mt-2">{content}</div>
     </div>
   )
@@ -131,9 +150,11 @@ function ActionOutputItemView({
 export function ActionOutputItems({
   outputs,
   suppressStdText = false,
+  onCopyReference,
 }: {
   outputs: parser_pb.CellOutput[]
   suppressStdText?: boolean
+  onCopyReference?: (outputIndex: number, itemIndex: number) => void
 }) {
   const hasTerminalOutput = outputs.some((output) =>
     (output.items ?? []).some(
@@ -167,6 +188,11 @@ export function ActionOutputItems({
             item={item}
             outputIndex={outputIndex}
             itemIndex={itemIndex}
+            onCopyReference={
+              onCopyReference
+                ? () => onCopyReference(outputIndex, itemIndex)
+                : undefined
+            }
           />
         )
       })

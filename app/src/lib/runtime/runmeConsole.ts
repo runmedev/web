@@ -5,6 +5,7 @@ import { RunmeMetadataKey, parser_pb } from '../../runme/client'
 import { isHtmlLanguageId } from '../cellContent'
 import { isLinkedResourceLanguageId } from '../linkedResource'
 import type { NotebookData } from '../notebookData'
+import { isOutputReferenceCell } from '../outputReference'
 
 type CellRunnerLike = {
   run: () => void | Promise<void>
@@ -18,6 +19,7 @@ function isRunnableNotebookCodeCell(
     return false
   }
   return (
+    !isOutputReferenceCell(cell) &&
     !isHtmlLanguageId(cell.languageId) &&
     !isLinkedResourceLanguageId(cell.languageId)
   )

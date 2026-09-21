@@ -65,10 +65,11 @@ import {
   toImportedNotebookName,
 } from '../markdownImport'
 import { createNotebookDiffRuntimeApi } from '../notebookDiff/runtime'
-import { createTrainingExamplesApi } from '../trainingExamples/runtime'
-import { createSuggestionGraderApi } from '../suggestionGraderRuntime'
-import { gradeNotebookUpdate } from '../suggestionGraderUpdate'
 import { detectNotebookFileFormat } from '../notebookFormat'
+import {
+  type OutputReferenceStore,
+  outputReferenceSource,
+} from '../outputReferenceRuntime'
 import type { Runner } from '../runner'
 import {
   buildNotebookMarkdownLink,
@@ -76,6 +77,8 @@ import {
   getNotebookShareTarget,
   normalizeNotebookReferenceUri,
 } from '../shareLinks'
+import { createSuggestionGraderApi } from '../suggestionGraderRuntime'
+import { gradeNotebookUpdate } from '../suggestionGraderUpdate'
 import { getClaimedSessionId } from '../tabIdentity'
 import {
   type TourStepRequest,
@@ -84,6 +87,7 @@ import {
   showTourStep,
 } from '../tourGuide'
 import { type PanelKey, tourUiController } from '../tourUiController'
+import { createTrainingExamplesApi } from '../trainingExamples/runtime'
 import { getRunmeVersionInfo } from '../versionInfo'
 import { appState } from './AppState'
 import type {
@@ -104,7 +108,7 @@ import { getRunnersManager } from './runnersManager'
 
 type SendOutput = (data: string) => void
 
-type RuntimeNotebookStore = {
+type RuntimeNotebookStore = Partial<OutputReferenceStore> & {
   create: (parentUri: string, name: string) => Promise<{ uri: string }>
   rename?: (uri: string, name: string) => Promise<unknown>
   save: (uri: string, notebook: parser_pb.Notebook) => Promise<unknown>
@@ -1041,9 +1045,39 @@ export function createAppJsGlobals({
     return result
   }
 
+  /** Output references require an explicit target and share the UI persistence path. */
+  const outputLinkForRuntime = async (args: {
+    target: { uri: string }
+    cellId: string
+    outputIndex: number
+    itemIndex: number
+  }) => {
+    const uri = resolveNotebookTargetUri(args?.target)
+    if (!uri) throw new Error('notebooks.outputLink requires target: { uri }')
+    const notebook = resolveNotebook?.(uri)
+    const store = resolveStore()
+    if (
+      !notebook ||
+      !store?.createOutputReference ||
+      !store.resolveOutputReference
+    )
+      throw new Error(
+        'Output references require an open .runme notebook and local storage.'
+      )
+    return outputReferenceSource(
+      store as OutputReferenceStore,
+      notebook,
+      args.cellId,
+      args.outputIndex,
+      args.itemIndex
+    )
+  }
+
   const notebooksHelpers = {
     ...notebooksApi,
     help: async (topic?: string) => {
+      if (topic === 'outputLink')
+        return 'notebooks.outputLink({ target: { uri }, cellId, outputIndex, itemIndex }): Promise<string>. Returns an HTML anchor to the autosaved output version; no named revision required. Insert it with notebooks.appendCell({target, kind: "markup", languageId: "runme-reference", value: link}).'
       if (topic === 'createLocal') {
         return 'notebooks.createLocal(name, options?: { folderUri?: string }): Promise<NotebookDocument>. Creates a new local notebook, adds it to the open notebook list without changing focus, and returns the notebook document.'
       }
@@ -1088,6 +1122,7 @@ export function createAppJsGlobals({
         '- notebooks.open(reference?)',
         '- notebooks.focus(reference?)',
         '- notebooks.show(reference?)',
+        '- notebooks.outputLink({ target: { uri }, cellId, outputIndex, itemIndex })',
         '- notebooks.shareUrl(reference?)',
         '- notebooks.markdownLink(reference?)',
       ].join('\n')
@@ -1131,6 +1166,7 @@ export function createAppJsGlobals({
         },
       })
     },
+    outputLink: outputLinkForRuntime,
     embed: embedImageForRuntime,
     attach: attachResourceForRuntime,
     resolve: resolveNotebookReference,
@@ -1297,7 +1333,10 @@ export function createAppJsGlobals({
         ].join('\n'),
     },
     notebooks: notebooksHelpers,
-    suggestionGrader: createSuggestionGraderApi({ localStore: () => appState.localNotebooks, signal }),
+    suggestionGrader: createSuggestionGraderApi({
+      localStore: () => appState.localNotebooks,
+      signal,
+    }),
     trainingExamples: createTrainingExamplesApi({
       localStore: () => appState.localNotebooks,
       driveStore: () => appState.driveNotebookStore,

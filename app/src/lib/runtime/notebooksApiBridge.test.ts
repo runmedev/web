@@ -340,3 +340,20 @@ describe('createNotebooksApiBridgeServer', () => {
     expect((updated as any).notebook.cells).toHaveLength(2)
   })
 })
+
+it('dispatches outputLink through the sandbox bridge with its explicit target', async () => {
+  const outputLink = vi.fn().mockResolvedValue('<a>saved output</a>')
+  const bridge = createNotebooksApiBridgeServer({
+    notebooksApi: { outputLink } as unknown as NotebooksApi,
+  })
+  const args = {
+    target: { uri: 'local://file/report' },
+    cellId: 'methods',
+    outputIndex: 0,
+    itemIndex: 1,
+  }
+  await expect(
+    bridge.handleMessage({ method: 'notebooks.outputLink', args: [args] })
+  ).resolves.toBe('<a>saved output</a>')
+  expect(outputLink).toHaveBeenCalledWith(args)
+})
