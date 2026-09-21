@@ -123,7 +123,7 @@ export function ActionOutputItemView({
       role="group"
       aria-label={`Output ${outputIndex}, item ${itemIndex}${isStreaming ? ', streaming' : ''}`}
     >
-      {content}
+      {mime === 'text/html' ? <div className="p-2">{content}</div> : content}
       {onCopyReference && (
         <button
           type="button"

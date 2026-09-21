@@ -1655,38 +1655,39 @@ export function Action({
               updated.value = value
               updateCellLocal(updated)
             }}
-          />
-          <div className="flex gap-2 py-1">
-            <select
-              aria-label="Reference cell type"
-              value={selectedLanguage}
-              disabled={readOnly}
-              onChange={handleLanguageChange}
-              className="toolbar-select"
-            >
-              {LANGUAGE_OPTIONS.map((option) => (
-                <option
-                  key={option.value}
-                  value={option.value}
-                  disabled={
-                    option.value === OUTPUT_REFERENCE_LANGUAGE &&
-                    !docTitle.endsWith('.runme')
-                  }
-                >
-                  {option.label}
-                </option>
-              ))}
-            </select>
-            <button
-              type="button"
-              className="icon-btn"
-              aria-label="Delete reference cell"
-              disabled={readOnly}
-              onClick={handleRemoveCell}
-            >
-              <TrashIcon />
-            </button>
-          </div>
+          >
+            <div className="flex gap-2 py-1">
+              <select
+                aria-label="Reference cell type"
+                value={selectedLanguage}
+                disabled={readOnly}
+                onChange={handleLanguageChange}
+                className="toolbar-select"
+              >
+                {LANGUAGE_OPTIONS.map((option) => (
+                  <option
+                    key={option.value}
+                    value={option.value}
+                    disabled={
+                      option.value === OUTPUT_REFERENCE_LANGUAGE &&
+                      !docTitle.endsWith('.runme')
+                    }
+                  >
+                    {option.label}
+                  </option>
+                ))}
+              </select>
+              <button
+                type="button"
+                className="icon-btn"
+                aria-label="Delete reference cell"
+                disabled={readOnly}
+                onClick={handleRemoveCell}
+              >
+                <TrashIcon />
+              </button>
+            </div>
+          </OutputReferenceCell>
         </div>
       </div>
     )

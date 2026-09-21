@@ -40,6 +40,14 @@ describe('OutputReferenceCell', () => {
       />
     )
     await screen.findByText('old')
+    expect(screen.queryByLabelText('Executed code')).toBeNull()
+    fireEvent.click(screen.getByRole('button', { name: 'View executed code' }))
+    expect(
+      screen
+        .getByLabelText('Executed code')
+        .compareDocumentPosition(screen.getByTestId('cell-output-item')) &
+        Node.DOCUMENT_POSITION_FOLLOWING
+    ).toBeTruthy()
     expect(screen.getByLabelText('Executed code').textContent).toBe(
       'print("old")'
     )
@@ -71,7 +79,7 @@ describe('OutputReferenceCell', () => {
       />
     )
     await screen.findByRole('alert')
-    fireEvent.click(screen.getByRole('button', { name: 'Edit reference' }))
+    fireEvent.doubleClick(screen.getByTestId('output-reference-cell'))
     fireEvent.change(screen.getByLabelText('Output reference source'), {
       target: { value: 'corrected link' },
     })
