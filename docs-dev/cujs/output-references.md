@@ -13,7 +13,7 @@
 4. Expand View executed code. Assert it contains the original program, not the new one. Reload the page and assert the reference still resolves.
 5. For the HTML case, import `app/test/fixtures/notebooks/output-references.runme` using documents.update on a newly created local .runme notebook, then reopen it. This is a synthetic saved-output fixture, not a live Python execution.
 6. Assert the reference embeds only the table item, not the sibling text MIME item. Both HTML iframes should measure less than 150px high for this small table; they retain sandbox `allow-scripts` without `allow-same-origin`.
-7. Modify the reference version to an absent operation. Assert a local unavailable-reference message; Edit reference and ordinary notebook editing remain available. Restore the original link.
+7. Double-click the rendered reference, including inside its HTML table. Assert the source editor is focused. Press Escape and assert render view returns. Read-only references must not enter edit mode. Modify the reference version to an absent operation. Assert a local unavailable-reference message; Edit reference and ordinary notebook editing remain available. Restore the original link.
 8. Export to .ipynb. Assert the reference becomes explanatory Markdown with no executable code/output or Runme cell envelope pretending to preserve history.
 
 ## Evidence

@@ -1,7 +1,15 @@
 import { useEffect, useMemo, useRef, useState } from 'react'
 
 /** Measure isolated HTML without granting same-origin or notebook API access. */
-export function HtmlOutput({ html, title }: { html: string; title: string }) {
+export function HtmlOutput({
+  html,
+  title,
+  onDoubleClick,
+}: {
+  html: string
+  title: string
+  onDoubleClick?: () => void
+}) {
   const frame = useRef<HTMLIFrameElement>(null)
   const nonce = useMemo(() => crypto.randomUUID(), [html])
   const [height, setHeight] = useState(120)
@@ -11,7 +19,10 @@ export function HtmlOutput({ html, title }: { html: string; title: string }) {
     const bridge = `<script>(()=>{const send=()=>parent.postMessage({type:'runme-output-height',nonce:${JSON.stringify(nonce)},height:Math.ceil(Math.max(document.body?.scrollHeight||0,document.body?.getBoundingClientRect().height||0))},'*');addEventListener('load',()=>{send();new ResizeObserver(send).observe(document.body);document.fonts?.ready.then(send)});})();</script>`
     // Insert at the beginning so the bridge is installed even for full HTML
     // documents. The iframe stays opaque-origin with only allow-scripts.
-    return bridge + html
+    // Iframe mouse events do not bubble to the reference cell. Forward this
+    // presentation gesture through the same frame/nonce-checked channel.
+    const gestures = `<script>addEventListener('dblclick',event=>{if(event.target instanceof Element && event.target.closest('a,button,input,textarea,select,summary,[contenteditable]'))return;parent.postMessage({type:'runme-output-dblclick',nonce:${JSON.stringify(nonce)}},'*')});</script>`
+    return bridge + gestures + html
   }, [html, nonce])
   useEffect(() => {
     setHeight(120)
@@ -20,8 +31,15 @@ export function HtmlOutput({ html, title }: { html: string; title: string }) {
       const data = event.data
       if (
         event.source !== frame.current?.contentWindow ||
-        data?.type !== 'runme-output-height' ||
-        data?.nonce !== nonce ||
+        data?.nonce !== nonce
+      )
+        return
+      if (data.type === 'runme-output-dblclick') {
+        onDoubleClick?.()
+        return
+      }
+      if (
+        data.type !== 'runme-output-height' ||
         typeof data.height !== 'number' ||
         !Number.isFinite(data.height) ||
         data.height < 0
@@ -31,7 +49,7 @@ export function HtmlOutput({ html, title }: { html: string; title: string }) {
     }
     window.addEventListener('message', receive)
     return () => window.removeEventListener('message', receive)
-  }, [nonce])
+  }, [nonce, onDoubleClick])
   return (
     <div className="min-w-0" data-testid="html-output">
       <iframe

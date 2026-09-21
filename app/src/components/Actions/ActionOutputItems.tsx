@@ -68,12 +68,14 @@ export function ActionOutputItemView({
   outputIndex,
   itemIndex,
   onCopyReference,
+  onDoubleClick,
   showLabel = true,
 }: {
   item: parser_pb.CellOutputItem
   outputIndex: number
   itemIndex: number
   onCopyReference?: () => void
+  onDoubleClick?: () => void
   showLabel?: boolean
 }) {
   const mime = item.mime || ''
@@ -93,6 +95,7 @@ export function ActionOutputItemView({
       <HtmlOutput
         html={text}
         title={`cell-output-${outputIndex}-${itemIndex}`}
+        onDoubleClick={onDoubleClick}
       />
     )
   } else if (

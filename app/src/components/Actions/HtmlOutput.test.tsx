@@ -1,9 +1,32 @@
 import { act, render, screen } from '@testing-library/react'
-import { describe, expect, it } from 'vitest'
+import { describe, expect, it, vi } from 'vitest'
 
 import { HtmlOutput } from './HtmlOutput'
 
 describe('isolated HTML sizing', () => {
+  it('forwards double-click gestures only from its own frame and nonce', () => {
+    const edit = vi.fn()
+    render(
+      <HtmlOutput html="<p>Report</p>" title="reference" onDoubleClick={edit} />
+    )
+    const frame = screen.getByTitle('reference') as HTMLIFrameElement
+    const nonce = frame.srcdoc.match(/nonce:"([^"]+)"/)![1]
+    const send = (source: Window | null, token: string) =>
+      act(() => {
+        window.dispatchEvent(
+          new MessageEvent('message', {
+            source,
+            data: { type: 'runme-output-dblclick', nonce: token },
+          })
+        )
+      })
+    send(window, nonce)
+    send(frame.contentWindow, 'wrong')
+    expect(edit).not.toHaveBeenCalled()
+    send(frame.contentWindow, nonce)
+    expect(edit).toHaveBeenCalledOnce()
+    expect(frame.getAttribute('sandbox')).toBe('allow-scripts')
+  })
   it('accepts only matching frame messages, bounds height and preserves isolation', () => {
     render(
       <HtmlOutput

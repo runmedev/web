@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react'
+import { useCallback, useEffect, useState } from 'react'
 
 import type LocalNotebooks from '../../storage/local'
 import { parser_pb } from '../../runme/client'
@@ -24,6 +24,10 @@ export function OutputReferenceCell({
   const [result, setResult] = useState<ResolvedOutputReference>()
   const [error, setError] = useState('')
   const [loading, setLoading] = useState(true)
+  /** Editing changes presentation only; source keeps using the normal autosave path. */
+  const enterEditMode = useCallback(() => {
+    if (!readOnly) setEditing(true)
+  }, [readOnly])
   useEffect(() => {
     setDraft(cell.value)
   }, [cell.value])
@@ -63,6 +67,23 @@ export function OutputReferenceCell({
       id={`output-reference-${cell.refId}`}
       className="min-w-0 rounded-nb-md border border-nb-border p-3"
       data-testid="output-reference-cell"
+      onDoubleClick={(event) => {
+        // Preserve the behavior of links, buttons, and provenance controls.
+        if (
+          (event.target as HTMLElement).closest(
+            'button, a, input, textarea, select, summary'
+          )
+        )
+          return
+        enterEditMode()
+      }}
+      onKeyDown={(event) => {
+        if (editing && !readOnly && event.key === 'Escape') {
+          event.preventDefault()
+          event.stopPropagation()
+          setEditing(false)
+        }
+      }}
     >
       <div className="mb-2 flex items-center justify-between gap-2">
         <span className="text-xs text-nb-text-muted">Output reference</span>
@@ -81,6 +102,7 @@ export function OutputReferenceCell({
       </div>
       {editing && !readOnly ? (
         <textarea
+          autoFocus
           aria-label="Output reference source"
           className="min-h-24 w-full resize-y rounded border border-nb-border bg-nb-surface p-2 font-mono text-sm"
           value={draft}
@@ -111,6 +133,7 @@ export function OutputReferenceCell({
                   outputIndex={0}
                   itemIndex={0}
                   showLabel={false}
+                  onDoubleClick={readOnly ? undefined : enterEditMode}
                 />
                 <details className="mt-2 text-sm">
                   <summary className="cursor-pointer">
