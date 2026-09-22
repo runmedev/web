@@ -630,6 +630,7 @@ describe("DriveNotebookStore", () => {
         }
         if (url.pathname === "/upload/drive/v3/files/reserved-file123") {
           expect(init?.method).toBe("PATCH");
+          expect(url.searchParams.get("fields")).toContain("md5Checksum");
           expect(init?.headers).toMatchObject({
             "Content-Type": "application/vnd.excalidraw+json",
           });
@@ -951,6 +952,7 @@ describe("DriveNotebookStore", () => {
         });
         if (init?.method === "GET") {
           expect(url.pathname).toBe("/drive/v3/files/file123");
+          expect(url.searchParams.get("fileId")).toBe("file123");
           return new Response(
             JSON.stringify({
               md5Checksum: "empty-checksum",
@@ -967,6 +969,7 @@ describe("DriveNotebookStore", () => {
         }
         expect(url.pathname).toBe("/upload/drive/v3/files/file123");
         expect(init?.method).toBe("PATCH");
+        expect(url.searchParams.get("fields")).toContain("md5Checksum");
         expect(init?.headers).toMatchObject({
           "Content-Type": "application/json",
         });
