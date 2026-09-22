@@ -1,4 +1,6 @@
+import { HtmlOutput } from './HtmlOutput'
 import React from 'react'
+import { LinkIcon } from '@heroicons/react/20/solid'
 
 import { MimeType, parser_pb } from '../../runme/client'
 import { IOPUB_INCOMPLETE_METADATA_KEY } from '../../lib/ipykernel'
@@ -62,14 +64,18 @@ function uint8ArrayToBase64(
   return ''
 }
 
-function ActionOutputItemView({
+export function ActionOutputItemView({
   item,
   outputIndex,
   itemIndex,
+  onCopyReference,
+  onDoubleClick,
 }: {
   item: parser_pb.CellOutputItem
   outputIndex: number
   itemIndex: number
+  onCopyReference?: () => void
+  onDoubleClick?: () => void
 }) {
   const mime = item.mime || ''
   const text = formatOutputTextForDisplay(
@@ -77,19 +83,15 @@ function ActionOutputItemView({
     mime
   )
   const isStreaming = item.metadata?.[IOPUB_INCOMPLETE_METADATA_KEY] === 'true'
-  const hasIopubMetadata =
-    item.metadata?.[IOPUB_INCOMPLETE_METADATA_KEY] === 'true' ||
-    item.metadata?.[IOPUB_INCOMPLETE_METADATA_KEY] === 'false'
 
   let content: React.ReactNode = null
 
   if (mime === 'text/html') {
     content = (
-      <iframe
+      <HtmlOutput
+        html={text}
         title={`cell-output-${outputIndex}-${itemIndex}`}
-        sandbox="allow-scripts"
-        srcDoc={text}
-        className="h-[420px] w-full rounded-md border border-nb-cell-border bg-white"
+        onDoubleClick={onDoubleClick}
       />
     )
   } else if (
@@ -103,12 +105,12 @@ function ActionOutputItemView({
       <img
         alt={`Cell output ${outputIndex}-${itemIndex}`}
         src={src}
-        className="max-h-[480px] w-full rounded-md border border-nb-cell-border bg-white object-contain"
+        className="block h-auto max-w-full object-contain"
       />
     )
   } else {
     content = (
-      <pre className="whitespace-pre-wrap [overflow-wrap:anywhere] text-xs leading-relaxed text-nb-text">
+      <pre className="m-0 whitespace-pre-wrap p-3 [overflow-wrap:anywhere] text-xs leading-relaxed text-nb-text">
         {text}
       </pre>
     )
@@ -116,14 +118,23 @@ function ActionOutputItemView({
 
   return (
     <div
-      className="rounded-nb-sm border border-nb-border bg-nb-surface-2 p-3"
+      className="relative min-w-0 overflow-hidden rounded-nb-md border border-nb-border-strong bg-white"
       data-testid="cell-output-item"
+      role="group"
+      aria-label={`Output ${outputIndex}, item ${itemIndex}${isStreaming ? ', streaming' : ''}`}
     >
-      <div className="text-[10px] font-medium uppercase tracking-wide text-nb-text-faint">
-        Output {outputIndex} / Item {itemIndex} - mime={mime}
-        {hasIopubMetadata ? (isStreaming ? ' (streaming)' : ' (complete)') : ''}
-      </div>
-      <div className="mt-2">{content}</div>
+      {mime === 'text/html' ? <div className="p-2">{content}</div> : content}
+      {onCopyReference && (
+        <button
+          type="button"
+          className="icon-btn absolute right-1 top-1 z-10 h-7 w-7 rounded bg-white/90 opacity-70 hover:opacity-100 focus-visible:opacity-100"
+          onClick={onCopyReference}
+          aria-label={`Copy output link ${outputIndex}.${itemIndex}`}
+          title="Copy output link"
+        >
+          <LinkIcon className="h-4 w-4" aria-hidden="true" />
+        </button>
+      )}
     </div>
   )
 }
@@ -131,9 +142,11 @@ function ActionOutputItemView({
 export function ActionOutputItems({
   outputs,
   suppressStdText = false,
+  onCopyReference,
 }: {
   outputs: parser_pb.CellOutput[]
   suppressStdText?: boolean
+  onCopyReference?: (outputIndex: number, itemIndex: number) => void
 }) {
   const hasTerminalOutput = outputs.some((output) =>
     (output.items ?? []).some(
@@ -167,6 +180,11 @@ export function ActionOutputItems({
             item={item}
             outputIndex={outputIndex}
             itemIndex={itemIndex}
+            onCopyReference={
+              onCopyReference
+                ? () => onCopyReference(outputIndex, itemIndex)
+                : undefined
+            }
           />
         )
       })
@@ -177,5 +195,5 @@ export function ActionOutputItems({
     return null
   }
 
-  return <div className="mt-2 space-y-2">{displayableItems}</div>
+  return <>{displayableItems}</>
 }

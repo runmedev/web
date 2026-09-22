@@ -194,13 +194,15 @@
    only need a single class instead of 5-10 utility classes.
    ═══════════════════════════════════════════════════════════════════ */
 @layer components {
-  /* Marimo-style cell card: bordered, rounded, paper shadow.
-     Overflow is NOT set here — the editor wrapper clips top corners locally,
-     while the output section manages its own overflow to keep scrollbars visible. */
-  .cell-card {
-    @apply rounded-nb-md border border-nb-border-strong bg-white shadow-paper;
-    @apply transition-shadow duration-200;
+  /* Input and output surfaces align without a surrounding output tray.
+     One transparent group highlights the complete code cell on hover/focus. */
+  .code-cell-group {
+    @apply rounded-nb-md transition-shadow duration-200;
+    @apply hover:ring-1 hover:ring-nb-accent hover:ring-offset-1;
     @apply focus-within:ring-1 focus-within:ring-nb-accent focus-within:ring-offset-1;
+  }
+  .cell-card {
+    @apply rounded-nb-md border border-nb-border-strong bg-white;
   }
 
   /* Thin toolbar row inside a cell card (between editor and output) */

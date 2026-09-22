@@ -1,3 +1,9 @@
+import { outputReferenceSource } from '../../lib/outputReferenceRuntime'
+import { OutputReferenceCell } from './OutputReferenceCell'
+import {
+  isOutputReferenceCell,
+  OUTPUT_REFERENCE_LANGUAGE,
+} from '../../lib/outputReference'
 import { hasStartupDocumentRequest } from '../../lib/startupNavigation'
 import {
   type ChangeEvent,
@@ -607,6 +613,7 @@ function CellLinkButton({
 const LANGUAGE_OPTIONS = [
   { label: 'Markdown', value: 'markdown' },
   { label: 'HTML', value: 'html' },
+  { label: 'Output reference', value: 'runme-reference' },
   { label: 'Bash', value: 'bash' },
   { label: 'Jupyter', value: 'jupyter' },
   { label: 'Python', value: 'python' },
@@ -625,6 +632,7 @@ type SupportedLanguage =
   | 'javascript'
   | 'markdown'
   | 'python'
+  | 'runme-reference'
 
 function isGoogleDriveFileUri(uri: string | null | undefined): uri is string {
   if (!uri) {
@@ -650,6 +658,8 @@ function normalizeLanguageId(
   kind: parser_pb.CellKind,
   languageId?: string | null
 ): SupportedLanguage {
+  if (isOutputReferenceCell({ languageId: languageId ?? '' }))
+    return 'runme-reference'
   switch (kind) {
     case parser_pb.CellKind.CODE:
       const normalized = (languageId ?? '').toLowerCase()
@@ -721,7 +731,7 @@ export function Action({
   isDeepLinkTarget?: boolean
 }) {
   const { store } = useNotebookStore()
-  const { openNotebook } = useNotebookContext()
+  const { openNotebook, getNotebookData } = useNotebookContext()
   const { showDocument } = useWorkspaceDocumentContext()
   const { setCurrentDoc } = useCurrentDoc()
   const { listRunners, defaultRunnerName } = useRunners()
@@ -1442,6 +1452,35 @@ export function Action({
     )
   }, [cell, cellData, handleExitCode, runID])
 
+  const handleCopyOutputReference = useCallback(
+    async (outputIndex: number, itemIndex: number) => {
+      try {
+        if (!store || !cell) throw new Error('Notebook storage is unavailable.')
+        const model = getNotebookData(docUri)
+        if (!model) throw new Error('Notebook is not loaded.')
+        const source = await outputReferenceSource(
+          store,
+          model,
+          cell.refId,
+          outputIndex,
+          itemIndex
+        )
+        await navigator.clipboard.writeText(source)
+        showToast({
+          message:
+            'Output link copied. Paste it into an Output reference cell.',
+          tone: 'success',
+        })
+      } catch (error) {
+        showToast({
+          message: `Could not copy output link: ${String(error)}`,
+          tone: 'error',
+        })
+      }
+    },
+    [cell, cellData, docUri, getNotebookData, store]
+  )
+
   const renderedOutputItems = useMemo(() => {
     if (!cell?.outputs || cell.outputs.length === 0) {
       return null
@@ -1450,9 +1489,15 @@ export function Action({
       <ActionOutputItems
         outputs={cell.outputs}
         suppressStdText={Boolean(cellData.getStreams())}
+        onCopyReference={
+          docTitle.endsWith('.runme')
+            ? (outputIndex, itemIndex) =>
+                void handleCopyOutputReference(outputIndex, itemIndex)
+            : undefined
+        }
       />
     )
-  }, [cell?.outputs, cellData])
+  }, [cell?.outputs, cellData, docTitle, handleCopyOutputReference])
 
   const handleLanguageChange = useCallback(
     (event: ChangeEvent<HTMLSelectElement>) => {
@@ -1476,7 +1521,12 @@ export function Action({
         delete updatedCell.metadata[RunmeMetadataKey.JupyterKernelID]
         delete updatedCell.metadata[RunmeMetadataKey.JupyterKernelName]
       }
-      if (nextValue === 'markdown') {
+      if (nextValue === OUTPUT_REFERENCE_LANGUAGE) {
+        updatedCell.kind = parser_pb.CellKind.MARKUP
+        updatedCell.languageId = OUTPUT_REFERENCE_LANGUAGE
+        updatedCell.outputs = []
+        clearRuntimeMetadata()
+      } else if (nextValue === 'markdown') {
         setMarkdownEditRequest((request) => request + 1)
         updatedCell.kind = parser_pb.CellKind.MARKUP
         updatedCell.languageId = 'markdown'
@@ -1565,6 +1615,83 @@ export function Action({
     ? 'Copy link to cell'
     : 'Copy local link to cell'
   const canCopyCellLink = Boolean(shareTargetUri && cell.refId.trim())
+
+  if (isOutputReferenceCell(cell)) {
+    return (
+      <div
+        id={`reference-action-${cell.refId}`}
+        className={`group/cell relative flex min-w-0 ${deepLinkTargetClass}`}
+        onFocusCapture={handleFocusCapture}
+        data-cell-ref-id={cell.refId}
+      >
+        <div className="flex w-7 shrink-0 flex-col items-center justify-between py-1">
+          <button
+            type="button"
+            aria-label="Add cell above"
+            className="cell-add-btn h-5 w-5"
+            disabled={readOnly}
+            onClick={handleAddCellBefore}
+          >
+            <PlusIcon width={10} height={10} />
+          </button>
+          <button
+            type="button"
+            aria-label="Add cell below"
+            className="cell-add-btn h-5 w-5"
+            disabled={readOnly}
+            onClick={handleAddCellAfter}
+          >
+            <PlusIcon width={10} height={10} />
+          </button>
+        </div>
+        <div id={`reference-body-${cell.refId}`} className="min-w-0 flex-1">
+          <OutputReferenceCell
+            cell={cell}
+            store={store}
+            uri={docUri}
+            readOnly={readOnly}
+            onChange={(value) => {
+              const updated = create(parser_pb.CellSchema, cell)
+              updated.value = value
+              updateCellLocal(updated)
+            }}
+          >
+            <div className="flex gap-2 py-1">
+              <select
+                aria-label="Reference cell type"
+                value={selectedLanguage}
+                disabled={readOnly}
+                onChange={handleLanguageChange}
+                className="toolbar-select"
+              >
+                {LANGUAGE_OPTIONS.map((option) => (
+                  <option
+                    key={option.value}
+                    value={option.value}
+                    disabled={
+                      option.value === OUTPUT_REFERENCE_LANGUAGE &&
+                      !docTitle.endsWith('.runme')
+                    }
+                  >
+                    {option.label}
+                  </option>
+                ))}
+              </select>
+              <button
+                type="button"
+                className="icon-btn"
+                aria-label="Delete reference cell"
+                disabled={readOnly}
+                onClick={handleRemoveCell}
+              >
+                <TrashIcon />
+              </button>
+            </div>
+          </OutputReferenceCell>
+        </div>
+      </div>
+    )
+  }
 
   if (isResourceCell) {
     return (
@@ -1953,9 +2080,8 @@ export function Action({
     )
   }
 
-  // Render code cells as a unified Marimo-style card: editor + toolbar + output
-  // are all inside one bordered container with a distinctive "paper" shadow.
-  // The outer wrapper is a flex row: left gutter (add-cell buttons) + cell card.
+  // Input and output items are full-width sibling surfaces. The transparent
+  // group owns hover/focus highlighting so they still read as one code cell.
   return (
     <div
       id={`code-action-${cell.refId}`}
@@ -1990,8 +2116,11 @@ export function Action({
         </button>
       </div>
 
-      {/* Cell card: editor + toolbar + output */}
-      <div className="min-w-0 flex-1">
+      {/* One interaction group, with no padded output tray or enclosing card. */}
+      <div
+        id={`cell-group-${cell.refId}`}
+        className="code-cell-group min-w-0 flex-1 space-y-2"
+      >
         <div id={`cell-card-${cell.refId}`} className="cell-card">
           {/* Code editor section — overflow-hidden keeps border-radius clipping on the editor */}
           <div
@@ -2032,7 +2161,14 @@ export function Action({
                 className="toolbar-select"
               >
                 {LANGUAGE_OPTIONS.map((option) => (
-                  <option key={option.value} value={option.value}>
+                  <option
+                    key={option.value}
+                    value={option.value}
+                    disabled={
+                      option.value === OUTPUT_REFERENCE_LANGUAGE &&
+                      !docTitle.endsWith('.runme')
+                    }
+                  >
                     {option.label}
                   </option>
                 ))}
@@ -2167,22 +2303,16 @@ export function Action({
               </button>
             </div>
           </div>
-
-          {/* Output section: separated by a thin divider, inside the same card.
-              max-h + overflow-auto gives a vertical scrollbar when output is tall. */}
-          {(renderedOutputs || renderedOutputItems) && (
-            <div id={`cell-output-${cell.refId}`}>
-              <div className="border-t border-nb-tray-border" />
-              <div
-                className="overflow-auto p-[14.4px]"
-                style={{ maxHeight: 'var(--nb-cell-output-max-h)' }}
-              >
-                {renderedOutputs}
-                {renderedOutputItems}
-              </div>
-            </div>
-          )}
         </div>
+        {renderedOutputs && (
+          <div
+            id={`cell-output-${cell.refId}`}
+            className="min-w-0 overflow-auto rounded-nb-md border border-nb-border-strong"
+          >
+            {renderedOutputs}
+          </div>
+        )}
+        {renderedOutputItems}
       </div>
 
       {/* Context menu */}

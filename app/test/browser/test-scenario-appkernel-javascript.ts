@@ -203,7 +203,7 @@ function clickRun(cellRefId: string): boolean {
 function scrollCellIntoView(cellRefId: string): void {
   run(
     `agent-browser eval "(async () => {
-      const el = document.getElementById('cell-output-${cellRefId}') ?? document.getElementById('code-action-${cellRefId}');
+      const el = document.getElementById('cell-group-${cellRefId}');
       if (!el) return 'missing';
       el.scrollIntoView({ block: 'center' });
       return 'ok';
@@ -211,31 +211,16 @@ function scrollCellIntoView(cellRefId: string): void {
   );
 }
 
+// Read only rendered output items, excluding the source editor so echoed source
+// cannot satisfy an output assertion. Items are siblings of the input card.
 function getRenderedCellOutputText(cellRefId: string): string {
   const raw = run(
     `agent-browser eval "(async () => {
-      const el = document.getElementById('cell-output-${cellRefId}');
-      if (!el) return '';
-      const domText = el.innerText || el.textContent || '';
-      if (domText && domText.trim().length > 0) {
-        return domText;
-      }
-      const consoleEl = el.querySelector('console-view');
-      const terminal = consoleEl && 'terminal' in consoleEl ? consoleEl.terminal : null;
-      const active = terminal?.buffer?.active;
-      if (!active) {
-        return '';
-      }
-      const lines = [];
-      for (let i = 0; i < active.length; i += 1) {
-        const line = active.getLine(i);
-        if (!line) continue;
-        const text = line.translateToString(true);
-        if (text && text.trim().length > 0) {
-          lines.push(text);
-        }
-      }
-      return lines.join('\\n');
+      const group = document.getElementById('cell-group-${cellRefId}');
+      if (!group) return '';
+      return Array.from(group.querySelectorAll('[data-testid=cell-output-item]'))
+        .map((item) => item.innerText || item.textContent || '')
+        .join('\\n');
     })()"`,
   ).stdout;
   return parseAgentEvalString(raw);

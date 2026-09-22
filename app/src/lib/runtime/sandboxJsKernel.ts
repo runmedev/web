@@ -415,6 +415,7 @@ export function buildSandboxSrcDoc(options: {
           open: (reference) => callHost("notebooks.open", [reference]),
           focus: (reference) => callHost("notebooks.focus", [reference]),
           show: (reference) => callHost("notebooks.show", [reference]),
+          outputLink: (args) => callHost("notebooks.outputLink", [args]),
           shareUrl: (reference) => callHost("notebooks.shareUrl", [reference]),
           markdownLink: (reference) => callHost("notebooks.markdownLink", [reference]),
           link: (reference) => callHost("notebooks.link", [reference]),
@@ -591,6 +592,7 @@ export function buildSandboxSrcDoc(options: {
           consoleProxy.log("- notebooks.show([reference])");
           consoleProxy.log("- notebooks.open([reference])");
           consoleProxy.log("- notebooks.focus([reference])");
+          consoleProxy.log("- notebooks.outputLink({ target: { uri }, cellId, outputIndex, itemIndex })");
           consoleProxy.log("- notebooks.shareUrl([reference])");
           consoleProxy.log("- notebooks.markdownLink([reference])");
           consoleProxy.log("- documents.list()");

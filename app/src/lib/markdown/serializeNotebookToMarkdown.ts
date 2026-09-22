@@ -5,6 +5,7 @@ import {
   linkedResourceMarkdown,
   parseLinkedResource,
 } from '../linkedResource'
+import { isOutputReferenceCell } from '../outputReference'
 import { isRecoveredOutput } from '../recoveredOutputs'
 
 const IOPUB_MIME_TYPE = 'application/vnd.jupyter.iopub+json'
@@ -40,6 +41,8 @@ export function serializeNotebookToMarkdown(
 }
 
 function serializeCell(cell: parser_pb.Cell): string {
+  if (isOutputReferenceCell(cell))
+    return 'Versioned output references require the original .runme notebook.'
   if (isLinkedResourceCell(cell)) {
     try {
       return linkedResourceMarkdown(parseLinkedResource(cell.value))

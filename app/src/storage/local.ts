@@ -80,6 +80,12 @@ import {
   snapshotHeads,
 } from '../lib/operationLog/versions'
 import { captureCommittedRevision as captureReviewRevision } from '../lib/operationLog/versions'
+import {
+  formatOutputReference,
+  parseOutputReference,
+  referenceForOutput,
+  resolveOutputReference,
+} from '../lib/outputReference'
 import { appState } from '../lib/runtime/AppState'
 import type { ExampleJob } from '../lib/trainingExamples/protocol'
 import { RunmeMetadataKey, parser_pb } from '../runme/client'
@@ -2368,6 +2374,32 @@ export class LocalNotebooks extends Dexie {
         )
       throw error
     }
+  }
+
+  /** Read immutable output history without changing the active notebook version. */
+  async resolveOutputReference(uri: string, source: string) {
+    if (!(await this.isOperationLogNotebook(uri)))
+      throw new Error('Output references require a .runme notebook.')
+    const parsed = parseOperationLog(await this.loadContent(uri))
+    return resolveOutputReference(
+      parsed.operations,
+      parseOutputReference(source)
+    )
+  }
+
+  /** Pin the existing autosaved finish, with no named revision or manual save. */
+  async createOutputReference(
+    uri: string,
+    cellId: string,
+    outputIndex: number,
+    itemIndex: number
+  ) {
+    if (!(await this.isOperationLogNotebook(uri)))
+      throw new Error('Output references require a .runme notebook.')
+    const parsed = parseOperationLog(await this.loadContent(uri))
+    return formatOutputReference(
+      referenceForOutput(parsed.operations, cellId, outputIndex, itemIndex)
+    )
   }
 
   private async readMaterializedOperationLog(uri: string) {

@@ -302,3 +302,26 @@ describe('ipynb codec', () => {
     )
   })
 })
+
+it('exports reference cells as a plain Markdown explanation, not executable links', () => {
+  const notebook = create(parser_pb.NotebookSchema, {
+    cells: [
+      {
+        refId: 'reference',
+        kind: parser_pb.CellKind.MARKUP,
+        languageId: 'runme-reference',
+        value:
+          '<a href="#cell=methods&version=operation:v1&output_item=0.0">Table</a>',
+      },
+    ],
+  })
+  const encoded = encodeIpynb(notebook)
+  const result = JSON.parse(encoded.text).cells[0]
+  expect(result.cell_type).toBe('markdown')
+  expect(result.source).toContain('not supported in .ipynb')
+  expect(result.outputs).toBeUndefined()
+  expect(result.metadata.runme).toBeUndefined()
+  const reopened = decodeIpynb(encoded.text).notebook.cells[0]
+  expect(reopened.languageId).toBe('markdown')
+  expect(reopened.value).toContain('not supported in .ipynb')
+})
