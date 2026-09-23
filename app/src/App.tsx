@@ -27,6 +27,7 @@ import { FilesystemNotebookStore } from './storage/fs'
 import { isFileSystemAccessSupported } from './storage/fs'
 import LocalNotebooks from './storage/local'
 import LocalComments from './storage/localComments'
+import { startDriveResyncReconciler } from './storage/driveResyncReconciler'
 import { CurrentDocProvider } from './contexts/CurrentDocContext'
 import { WorkspaceDocumentProvider } from './contexts/WorkspaceDocumentContext'
 import {
@@ -195,8 +196,8 @@ function NotebookStoreInitializer() {
   const { store, setStore } = useNotebookStore()
   const { fsStore, setFsStore } = useFilesystemStore()
   const instanceRef = useRef<LocalNotebooks | null>(null)
+  const previousDriveAvailable = useRef(isDriveSyncing)
   const fsInstanceRef = useRef<FilesystemNotebookStore | null>(null)
-  const wasDriveSyncingRef = useRef(false)
 
   useEffect(() => {
     if (instanceRef.current || store) {
@@ -218,50 +219,16 @@ function NotebookStoreInitializer() {
     setStore(localStore)
   }, [ensureAccessToken, setStore, store])
 
-  // When Drive auth/connectivity recovers, enqueue all drive-backed files with
-  // unapplied local edits so sync resumes without requiring a fresh manual edit.
+  // Rebuild work from durable metadata on startup/auth recovery, online, and
+  // periodic wake-ups. Cleanup stops new work when auth is lost or App unmounts.
   useEffect(() => {
+    const recoveredAuth = isDriveSyncing && !previousDriveAvailable.current
+    previousDriveAvailable.current = isDriveSyncing
     const localStore = instanceRef.current
-    if (!localStore) {
-      return
-    }
-
-    const becameSyncable = isDriveSyncing && !wasDriveSyncingRef.current
-    wasDriveSyncingRef.current = isDriveSyncing
-    if (!becameSyncable) {
-      return
-    }
-
-    void (async () => {
-      try {
-        appLogger.info(
-          'Drive sync became available; reconciling pending notebooks',
-          {
-            attrs: {
-              scope: 'storage.drive.sync',
-              code: 'DRIVE_RESYNC_AUTH_RECOVERED',
-            },
-          }
-        )
-        const enqueued = await localStore.enqueueDriveBackedFilesNeedingSync()
-        appLogger.info('Drive resync reconciliation completed', {
-          attrs: {
-            scope: 'storage.drive.sync',
-            code: 'DRIVE_RESYNC_RECONCILE_COMPLETE',
-            enqueuedCount: enqueued.length,
-            localUris: enqueued,
-          },
-        })
-      } catch (error) {
-        appLogger.error('Failed to enqueue drive-backed notebooks for resync', {
-          attrs: {
-            scope: 'storage.drive.sync',
-            code: 'DRIVE_RESYNC_RECONCILE_FAILED',
-            error: String(error),
-          },
-        })
-      }
-    })()
+    if (!localStore || !isDriveSyncing) return
+    return startDriveResyncReconciler(localStore, {
+      retryErrors: recoveredAuth,
+    })
   }, [isDriveSyncing, store])
 
   useEffect(() => {

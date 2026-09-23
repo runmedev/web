@@ -152,6 +152,26 @@ describe('DriveSyncStatusTab', () => {
     clearLinkedResourceCacheMock.mockClear()
   })
 
+  it('distinguishes a failed attempt and retry eligibility from the last successful sync', async () => {
+    listFileSyncStatusesMock.mockResolvedValue([
+      {
+        ...rows[1],
+        syncStatus: 'error',
+        lastError: 'Drive authorization is required.',
+        lastSyncAttemptedAt: '2026-09-23T12:00:00Z',
+        nextSyncAttemptAt: '2026-09-23T12:02:00Z',
+      },
+    ])
+    render(<DriveSyncStatusTab />)
+    await waitForStatusLoad()
+    expect(screen.getByText('Drive authorization is required.')).toBeTruthy()
+    expect(screen.getByText(/^Last attempt:/)).toBeTruthy()
+    expect(screen.getByText(/^Retry eligible:.*when connected/)).toBeTruthy()
+    expect(
+      screen.getByText(new Date(rows[1].lastSynced!).toLocaleString())
+    ).toBeTruthy()
+  })
+
   it('filters string columns by prefix', async () => {
     render(<DriveSyncStatusTab />)
 

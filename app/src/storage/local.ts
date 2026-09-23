@@ -200,6 +200,10 @@ export interface LocalFileRecord {
   lastSynced: string
   /** Last successfully observed upstream revision/checksum metadata. */
   lastUpstreamVersion?: UpstreamVersion
+  /** Persisted attempt/backoff metadata; checksums remain the source of dirtiness. */
+  lastSyncAttemptedAt?: string
+  nextSyncAttemptAt?: string
+  syncFailureCount?: number
   /** Last sync failure, if any. Cleared after successful sync. */
   lastSyncError?: string
   /** Durable local-vs-upstream conflict snapshot, if upstream sync is blocked. */
@@ -210,8 +214,8 @@ export interface LocalFileRecord {
    */
   doc: string
   /**
-   * MD5 checksum of `doc`. Persisted so reconciler scans can detect local
-   * changes without re-hashing every file on each pass.
+   * Local content checksum: serialized model for snapshots; OPFS bytes for
+   * .runme logs. Persisted so reconciliation does not re-hash healthy files.
    */
   md5Checksum: string
   /** Lossless .ipynb merge metadata. The complete shadow lives in OPFS. */
@@ -263,6 +267,8 @@ export interface NotebookSyncState {
   remoteId: string
   parentRemoteIdWhenCreated?: string
   lastSynced?: string
+  lastSyncAttemptedAt?: string
+  nextSyncAttemptAt?: string
   lastUpstreamVersion?: UpstreamVersion
   conflict?: NotebookConflictSummary
   lastError?: string
@@ -275,6 +281,8 @@ export interface NotebookSyncStatusRow {
   revision: string
   upstreamRevision: string
   lastSynced?: string
+  lastSyncAttemptedAt?: string
+  nextSyncAttemptAt?: string
   syncStatus: NotebookSyncStatus
   lastError?: string
 }
@@ -1303,11 +1311,15 @@ export class LocalNotebooks extends Dexie {
     const rows: NotebookSyncStatusRow[] = []
 
     for (const record of records) {
-      const state = await this.getSyncState(record.id)
-      const localRevision = await this.getOrBackfillLocalChecksum(
-        record.id,
-        record
-      )
+      // A missing/corrupt OPFS log must not hide the status of every other file.
+      let state: NotebookSyncState
+      let localRevision = record.md5Checksum ?? ''
+      try {
+        state = await this.getSyncState(record.id)
+        localRevision = await this.getOrBackfillLocalChecksum(record.id, record)
+      } catch (error) {
+        state = syncStateForRecord(record, 'error', String(error))
+      }
       const upstreamVersion = state.lastUpstreamVersion
       rows.push({
         localUri: record.id,
@@ -1320,6 +1332,8 @@ export class LocalNotebooks extends Dexie {
           record.lastRemoteChecksum ??
           '',
         lastSynced: state.lastSynced,
+        lastSyncAttemptedAt: state.lastSyncAttemptedAt,
+        nextSyncAttemptAt: state.nextSyncAttemptAt,
         syncStatus: state.status,
         lastError: state.lastError,
       })
@@ -4136,8 +4150,8 @@ export class LocalNotebooks extends Dexie {
    * IPYNB fingerprints and decoded notebook checksums use different domains,
    * so IPYNB records compare against their decoded preservation baseline.
    *
-   * For migrated records where `md5Checksum` is missing/empty but `doc` exists,
-   * this method computes and persists the checksum lazily.
+   * Failed reads remain pending even without local edits. Missing cached hashes
+   * are repaired from the format's authoritative storage, including OPFS logs.
    */
   async listDriveBackedFilesNeedingSync(): Promise<string[]> {
     const driveBackedFiles = await this.files
@@ -4157,10 +4171,21 @@ export class LocalNotebooks extends Dexie {
         pending.push(record.id)
         continue
       }
-      const localChecksum = await this.getOrBackfillLocalChecksum(
-        record.id,
-        record
-      )
+      // A failed read is also unfinished work, even when both cached hashes
+      // are empty or unchanged. Do not erase its diagnostic to call it clean.
+      if (record.lastSyncError) {
+        pending.push(record.id)
+        continue
+      }
+      let localChecksum: string
+      try {
+        localChecksum = await this.getOrBackfillLocalChecksum(record.id, record)
+      } catch {
+        // Let normal sync report/recover this file; one corrupt OPFS entry must
+        // not abort reconciliation of every other notebook.
+        pending.push(record.id)
+        continue
+      }
       const upstreamNotebookChecksum =
         detectNotebookFileFormat(record.name) === 'ipynb'
           ? (record.ipynbPreservation?.baselineNotebookChecksum ?? '')
@@ -4200,6 +4225,14 @@ export class LocalNotebooks extends Dexie {
       this.enqueueSync(uri)
       this.enqueueMarkdownSync(uri)
     }
+    const exports = await this.enqueueFailedDriveExports(pending)
+    return [...new Set([...pending, ...exports])]
+  }
+
+  /** Retry derived exports independently of source dirtiness. */
+  private async enqueueFailedDriveExports(
+    pending: string[] = []
+  ): Promise<string[]> {
     const failedExports = await this.files
       .filter(
         (record) =>
@@ -4210,13 +4243,52 @@ export class LocalNotebooks extends Dexie {
       )
       .toArray()
     for (const record of failedExports) {
-      // Unconfirmed creates retain their separate, explicit recovery flow.
-      // syncIpynbFile rechecks the saved option before touching Drive.
       if (!pending.includes(record.id)) this.enqueueIpynbSync(record.id)
     }
-    return [
-      ...new Set([...pending, ...failedExports.map((record) => record.id)]),
-    ]
+    return failedExports.map((record) => record.id)
+  }
+
+  /**
+   * Reconcile durable source work with two workers. The timer is only a wake-up:
+   * all pending work and retry deadlines are recovered from IndexedDB each pass.
+   * Manual sync and auth recovery may bypass the deadline; periodic/online work
+   * respects it. Existing syncFile locks and format-specific conflict rules own
+   * the actual upload/download decision.
+   */
+  async reconcileDriveBackedFiles(
+    options: {
+      retryErrors?: boolean
+      shouldContinue?: () => boolean
+    } = {}
+  ): Promise<string[]> {
+    const pending = await this.listDriveBackedFilesNeedingSync()
+    const attempted: string[] = []
+    let index = 0
+    const worker = async () => {
+      while (index < pending.length && (options.shouldContinue?.() ?? true)) {
+        const uri = pending[index++]
+        const record = await this.files.get(uri)
+        if (!record || record.conflict) continue
+        if (
+          !options.retryErrors &&
+          Date.parse(record.nextSyncAttemptAt ?? '') > Date.now()
+        )
+          continue
+        attempted.push(uri)
+        try {
+          await this.syncFile(uri, !options.retryErrors)
+          this.enqueueMarkdownSync(uri)
+        } catch {
+          // syncFile persisted and logged the failure. Other files still run.
+        }
+      }
+    }
+    await Promise.all([worker(), worker()])
+    // Derived copies have independent recovery state; clean sources can still
+    // need an export retry. Do not reset source debounce timers from each tick.
+    if (options.shouldContinue?.() ?? true)
+      await this.enqueueFailedDriveExports()
+    return attempted
   }
 
   private enqueueSync(uri: string): void {
@@ -4227,8 +4299,8 @@ export class LocalNotebooks extends Dexie {
       subject.pipe(debounceTime(DEBOUNCE_TIME_MS)).subscribe(async () => {
         try {
           await this.syncFile(uri)
-        } catch (error) {
-          console.error('Failed to synchronise notebook', uri, error)
+        } catch {
+          // syncFile retains and logs the error; the level reconciler retries it.
         }
       })
       this.syncSubjects.set(uri, subject)
@@ -4509,6 +4581,25 @@ export class LocalNotebooks extends Dexie {
     localUri: string,
     record: LocalFileRecord
   ): Promise<string> {
+    // .runme deliberately keeps doc empty; an absent cached hash must come
+    // from the authoritative OPFS log, never the empty snapshot placeholder.
+    if (!record.md5Checksum && record.operationLogRef) {
+      const snapshot = await this.operationLogStorage.read(
+        record.operationLogRef
+      )
+      // Do not overwrite metadata published by a concurrent append.
+      await this.transaction('rw', this.files, async () => {
+        const current = await this.files.get(localUri)
+        if (
+          current &&
+          !current.md5Checksum &&
+          current.operationLogRef?.path === snapshot.ref.path
+        ) {
+          await this.files.update(localUri, { md5Checksum: snapshot.checksum })
+        }
+      })
+      return (await this.files.get(localUri))?.md5Checksum || snapshot.checksum
+    }
     const doc = record.doc ?? ''
     if (typeof record.md5Checksum === 'string') {
       // Empty docs intentionally hash to "" and do not need backfill writes.
@@ -4674,7 +4765,10 @@ export class LocalNotebooks extends Dexie {
     return null
   }
 
-  private async syncFile(localUri: string): Promise<void> {
+  private async syncFile(
+    localUri: string,
+    respectRetryAfter = false
+  ): Promise<void> {
     const existingSync = this.inFlightSyncs.get(localUri)
     if (existingSync) {
       return existingSync
@@ -4682,14 +4776,46 @@ export class LocalNotebooks extends Dexie {
 
     const operation = Promise.resolve().then(() =>
       this.driveSyncCoordinator.runExclusive(localUri, async () => {
+        // Another tab can fail while this caller waits for its lock. Recheck
+        // the durable backoff before retrying from a periodic scan.
+        const record = await this.files.get(localUri)
+        if (
+          respectRetryAfter &&
+          Date.parse(record?.nextSyncAttemptAt ?? '') > Date.now()
+        )
+          return
+        await this.files.update(localUri, {
+          lastSyncAttemptedAt: nowIsoString(),
+        })
         try {
           // Re-read and reconcile only after acquiring the cross-context lock.
           // Another tab may have completed the pending create while we waited.
           await this.syncFileInner(localUri)
-          await this.files.update(localUri, { lastSyncError: undefined })
+          await this.files.update(localUri, {
+            lastSyncError: undefined,
+            nextSyncAttemptAt: undefined,
+            syncFailureCount: 0,
+          })
           this.enqueueIpynbSync(localUri)
         } catch (error) {
-          await this.files.update(localUri, { lastSyncError: String(error) })
+          const failures = Math.min(16, (record?.syncFailureCount ?? 0) + 1)
+          const delay = Math.min(30 * 60_000, 2 * 60_000 * 2 ** (failures - 1))
+          const nextSyncAttemptAt = new Date(Date.now() + delay).toISOString()
+          await this.files.update(localUri, {
+            lastSyncError: String(error),
+            syncFailureCount: failures,
+            nextSyncAttemptAt,
+          })
+          appLogger.warn('Notebook sync failed; retained for reconciliation', {
+            attrs: {
+              scope: 'storage.drive.sync',
+              code: 'NOTEBOOK_SYNC_FAILED',
+              localUri,
+              error: String(error),
+              nextSyncAttemptAt,
+              failures,
+            },
+          })
           throw error
         }
       })
@@ -6065,6 +6191,8 @@ function syncStateForRecord(
     remoteId: record.remoteId,
     parentRemoteIdWhenCreated: record.parentRemoteIdWhenCreated,
     lastSynced: record.lastSynced || undefined,
+    lastSyncAttemptedAt: record.lastSyncAttemptedAt,
+    nextSyncAttemptAt: record.nextSyncAttemptAt,
     lastUpstreamVersion: record.lastUpstreamVersion,
     conflict: summarizeConflictForSync(record.conflict),
     lastError: record.lastSyncError || fallbackError,

@@ -977,6 +977,22 @@ export function DriveSyncStatusTab() {
                         >
                           {row.syncStatus}
                         </span>
+                        {row.lastError && (
+                          <p className="mt-2 max-w-sm break-words text-xs text-nb-text-muted">
+                            {row.lastError}
+                          </p>
+                        )}
+                        {row.lastSyncAttemptedAt && (
+                          <p className="mt-1 text-xs text-nb-text-muted">
+                            Last attempt: {formatDate(row.lastSyncAttemptedAt)}
+                          </p>
+                        )}
+                        {row.nextSyncAttemptAt && (
+                          <p className="mt-1 text-xs text-nb-text-muted">
+                            Retry eligible: {formatDate(row.nextSyncAttemptAt)}{' '}
+                            (when connected)
+                          </p>
+                        )}
                       </td>
                     </tr>
                   ))
