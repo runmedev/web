@@ -37,56 +37,72 @@ excluded. Pending creation qualifies before checksum comparison. A retained
 hashes do not prove the latest download succeeded. A failed first download must
 retry reading, never upload its empty placeholder.
 
-Healthy records need no content read. Repair a missing `.runme` checksum from
-OPFS, then reread metadata transactionally before publishing it; preserve a newer
-checksum or changed log reference. An unreadable log is a per-file error and
-cannot break the whole scan or status table.
+## Lazy checksum computation during reconciliation
 
-### Review requirement: invalidate before changing OPFS
+Local `.runme` saves invalidate `md5Checksum`; Drive reconciliation computes and
+publishes it. An unset checksum is normal pending-sync state, not corruption or
+an empty notebook. Scans and status views only inspect metadata and enqueue the
+URI; they do not hash OPFS or publish a checksum. Preserve `lastRemoteChecksum`
+as the acknowledged local baseline.
 
-An interrupted save can leave newer OPFS bytes with an old cached checksum. If
-that hash equals the acknowledged baseline, a scan can incorrectly call the file
-clean. Clear `md5Checksum` **before** the OPFS write, not afterward. Empty means
-unknown and requiring recomputation; it does not mean an empty notebook or prove
-that content differs. Keep `lastRemoteChecksum` as the acknowledged baseline.
+### Local commit
 
-Use one per-notebook, same-origin consistency lock for writers and checksum repair:
+All tabs submit mutations to one SharedWorker. Its per-notebook commit queue:
 
-1. Acquire the lock; commit and await IndexedDB `md5Checksum = ""`.
-2. If invalidation fails, abort before writing OPFS.
-3. Write/append OPFS and await durable close.
-4. Publish the resulting snapshot's checksum and log-reference metadata while
-   still holding the lock, then release it. If publication fails, leave the hash
-   unknown. Never restore the old cached value on failure.
-5. Checksum repair acquires the same lock, rereads the record, reads/hashes OPFS
-   only if still unknown, and publishes before releasing it.
+1. Commits an IndexedDB transaction incrementing `localGeneration` and clearing
+   `md5Checksum`. Await the commit; abort before OPFS if it fails.
+2. Writes/appends OPFS and awaits durable close, then records necessary log identity.
+3. Leaves the checksum unset, acknowledges the local save and enqueues reconciliation.
 
-Without that shared lock, repair could hash the old OPFS bytes after invalidation
-but before the writer commits. A crash after the OPFS write would then leave the
-old hash again. A physical OPFS-only lock is insufficient. Older asynchronous
-save/sync callbacks must also not publish captured hashes outside this protocol.
-All mutation paths must participate: edits, executions, annotations/revisions,
-imports/replacements, upgrades and sync merges. First initialization must retain
-a discoverable creation/download record and intended log identity before creating
-bytes; missing references must not make that operation look clean.
+Every mutation path participates, including edits, execution records, annotations,
+revisions, imports/replacements, upgrades and sync merges. Storage helpers need a
+non-hashing save path; discarding an eagerly computed hash would not save CPU.
+The generation is durable content-change metadata, not retry scheduling state.
+Incrementing before a failed write can cause an extra reconciliation, which is safe.
 
-A crash before invalidation leaves untouched bytes; after invalidation it leaves
-an unknown checksum. On restart, recompute from whichever bytes actually committed.
-This may do an extra check when the OPFS write never happened, which is safe.
-Unreadable/corrupt bytes remain preserved with a per-file error. Never hash the
-empty IndexedDB `doc` placeholder. This protocol prevents future stale caches;
-a one-time integrity sweep is still needed to find nonempty stale hashes left by
-older code. It does not make the two stores atomic.
+### Snapshot and acknowledgement
 
-**Implementation status:** code at `1f855a6` implements missing-hash repair and its
-fresh-metadata guard, not this complete writer/repair protocol. This review
-requirement must be implemented across every mutation path before claiming the
-crash window is closed.
+Capture an immutable OPFS snapshot with its generation and log identity inside
+the commit queue. Leave that short critical section, compute the snapshot's hash
+and reconcile with Drive using existing conflict/version rules. Local commits
+continue while network I/O is pending.
 
-Required tests interrupt before/after invalidation and after OPFS close, recreate
-the controller, race two writers with a repairing reader, and delay an older
-metadata callback. Cover initialization, replacement, merge, edits and annotations;
-retain corruption isolation and verify acknowledgement only covers uploaded bytes.
+After verified success, reenter the commit queue. In one IndexedDB transaction,
+record the acknowledged snapshot baseline and observed upstream version. Publish
+`md5Checksum` only if the current generation and identity still match the captured
+snapshot. Otherwise preserve the newer pending state and requeue. An old completion
+must not clear newer errors, conflicts or edits. A no-upload reconciliation uses
+the same guard. A merge that changes OPFS invalidates/increments and captures its
+resulting generation before acknowledging that snapshot.
+
+Example: upload A at generation 7; a local write increments to 8, clears the hash
+and writes B; A finishes. A's hash becomes the acknowledged baseline, but the
+current checksum stays unset and B remains pending. A lock around completion
+alone does not detect this stale snapshot: the generation comparison does.
+Holding a lock throughout network I/O could prevent the race but would block local
+saves; use short serialized sections and conditional completion instead.
+
+### Crash recovery and regression tests
+
+After invalidation, any crash leaves an unset hash. Reconciliation hashes whichever
+bytes committed. A crash after remote acceptance but before acknowledgement uses
+normal remote-version reconciliation. Pending creation/first-download state must
+be discoverable before a complete mirror exists. Missing/corrupt OPFS remains a
+per-file error; never substitute the empty IndexedDB `doc` placeholder. Nonempty
+stale hashes left by older code still need a separate integrity check.
+
+Tests must prove: repeated local saves do not hash the full log; scans/status never
+mark unknown content clean; failures before/after invalidation and OPFS close remain
+recoverable; restart rediscovers work; edits during blocked uploads stay pending;
+old completions cannot overwrite newer metadata; all mutation paths use the owner;
+and original bytes survive corruption. Immutable creation-request fingerprints are
+separate idempotency metadata and are not eliminated by lazy notebook hashing.
+
+**Implementation status:** current PR code still computes hashes on saves and
+backfills missing hashes. SharedWorker ownership, a durable generation,
+non-hashing local saves and conditional sync-only checksum publication are design
+requirements not yet implemented. The existing tests do not establish this new
+protocol.
 
 ## Keyed delaying queue
 
@@ -97,7 +113,7 @@ It is a TypeScript implementation, not a dependency on the Go package.
 - Persist an edit/request, then add `source:<uri>`, `markdown:<uri>`,
   `ipynb:<uri>` or `create:<operationId>`, even without Drive auth.
 - Local saves, periodic scans, manual sync, creation recovery and exports share
-  one queue per controller. One item runs at a time; delayed keys do not block
+  one reconciliation queue in the SharedWorker. One item runs at a time; delayed keys do not block
   unrelated ready keys. Repeated adds coalesce without extending the deadline.
   An add during processing requests another pass.
 - Attempts reread stored state. Source scans skip records already made clean.
@@ -110,15 +126,15 @@ It is a TypeScript implementation, not a dependency on the Go package.
   two-minute scans reconstruct work; auth gates I/O, not local writes/enqueueing.
 - Automatic local saves initially wait 20 seconds. Further automatic attempts
   have a two-minute minimum per key. Source/IPYNB jobs also check persisted
-  success times under the origin lock, preventing another tab immediately
-  repeating a successful background save. Markdown's interval is queue-local.
+  success times inside the owner, preventing repeated tab requests from
+  immediately repeating a successful background save.
 - Manual sync bypasses delay through the same queue and waits for one attempt.
   It joins an active attempt for the same key. Errors reach the explicit caller
   while the item remains queued for recovery.
 
 This is a per-key save interval, not a global requests-per-second quota. Each
 attempt may make several Drive calls. Backoff can reset on reload or another
-tab; durable failure timing is intentionally not part of correctness.
+controller restart; durable failure timing is intentionally not part of correctness.
 
 IPYNB exports retain separate error/recovery state. A Drive-backed operation-log
 notebook with an export error, no conflict and no unconfirmed export claim is
@@ -140,32 +156,38 @@ work queue and add unfinished keys to it. This is the rescan operation; a
 synthetic rescan queue item is not required. Edit events and scans safely add
 the same key.
 
-## Cross-tab coordination and worker decision
+## SharedWorker ownership
 
-Queued source sync, export and direct-create attempts acquire the same
-origin-scoped Web Lock, then retain existing per-file locks. Multiple tab queues
-can exist, but only one such attempt runs at a time within the origin/profile.
-The in-process fallback coordinates only one JavaScript context. Different
-origins, profiles and devices do not share the lock. Timers are disposable;
-context exit releases locks and a successor reconstructs work from storage.
+The final design uses one SharedWorker as storage and reconciliation owner for
+connected tabs on the same origin. All OPFS mutations and sync-metadata updates
+pass through it. Tabs do not also write directly. Use a stable worker script
+URL/name and versioned message protocol; incompatible clients reconnect/reload
+instead of silently creating another writer. Validate browser support and the
+credential/message boundary before enabling this migration.
 
-A DedicatedWorker belongs to one tab. A SharedWorker could centralize scheduling
-for multiple same-origin tabs and move checksum/serialization work off the UI
-thread, **if all entry points use its message protocol**. Async network waiting
-already yields; CPU work around it can still block the current main thread.
+The worker has a delaying queue for network reconciliation and a per-notebook
+commit queue for local writes, snapshot capture and conditional completion.
+A singleton is not an async mutex: an `await` allows another message handler to
+run. The commit queue explicitly serializes those short critical sections. Never
+hold it through Drive I/O.
 
-The [multi-tab design](20260520_multi_tab_support.md) chose Web Locks as ownership
-authority and considered SharedWorker unnecessary for that ownership contract;
-a service worker is not an always-running owner. The
-[Codex adapter design](20260310_codexapp.md) kept its first implementation on the
-main thread because async I/O did not justify auth/messaging/lifecycle complexity.
-That rationale concerns the adapter, not a Drive-specific worker decision.
+Cross-tab Web Locks are unnecessary once the exclusive-owner contract holds.
+During migration, any remaining direct tab/worker writers must share a Web Lock
+covering the same short sections and use generation checks across network I/O.
+Do not remove locks while old writer paths remain. Different origins, browser
+profiles or devices are outside the ownership boundary. Durable pending state
+reconstructs work after worker shutdown.
 
-This PR retains the current execution context. A SharedWorker migration needs a
-storage/auth message boundary, reconnect/teardown behavior and browser support
-validation. It would not remove durable recovery after all tabs close, remote
-conflicts, or OPFS/IndexedDB consistency requirements. This PR does not claim to
-move expensive save processing off the UI thread.
+The [multi-tab design](20260520_multi_tab_support.md) chose Web Locks for its earlier
+tab-owned model; the [Codex adapter design](20260310_codexapp.md) deferred worker
+messaging/auth complexity for that adapter. These explain history, not a requirement
+for redundant locking inside the new exclusive-owner architecture.
+
+References: [SharedWorker](https://developer.mozilla.org/en-US/docs/Web/API/SharedWorker)
+and [JavaScript execution model](https://developer.mozilla.org/en-US/docs/Web/JavaScript/Reference/Execution_model).
+
+**Implementation status:** PR #391 still uses tab-local queues and cross-tab Web
+Locks. The SharedWorker migration remains to be implemented.
 
 ## Creation and Save As
 
@@ -182,7 +204,7 @@ corrupt content remains stored with an error and is never replaced by an empty
 upload. The request pins a folder and operation identity, not a Google account;
 current credentials must have access to the destination.
 
-The common queue invokes the existing idempotent creation engine, retaining its
+The owner's reconciliation queue invokes the existing idempotent creation engine, retaining its
 reserved/known remote ID and operation-marker journal. Interrupted create,
 verification or mirror initialization resumes the same remote operation.
 Ambiguous create outcomes follow that engine's lookup rules rather than blindly
@@ -213,5 +235,6 @@ and remote-adoption coverage. See the [CUJ](../CUJs/drive-sync-recovery.md) for 
 acceptance steps; automated transport mocks are not live Drive failure injection.
 
 Retries cannot fix permissions/quota or auto-resolve conflicts. Clean remote-file
-polling, nonempty stale checksum repair, SharedWorker migration and the separate
-Logs-view memory investigation are outside this PR.
+polling, pre-existing stale-cache recovery and the separate Logs-view memory
+investigation remain distinct concerns. SharedWorker/lazy-checksum requirements
+above are not covered by the current implementation validation.
