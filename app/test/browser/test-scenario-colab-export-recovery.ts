@@ -44,6 +44,9 @@ function clickButton(label: string): void {
 
 let recording = false
 try {
+  // The SharedWorker endpoint is fixed at startup, shared by all app tabs.
+  browser('open', `${frontend}/test/fixtures/storage-owner.html`)
+  evaluate(`localStorage.setItem('runme/google-drive/runtime', JSON.stringify({ baseUrl: ${JSON.stringify(fakeDrive)} })); return true;`)
   browser('open', frontend)
   browser(
     'record',
@@ -76,9 +79,10 @@ try {
     const content = serializeOperationLog(log.header, log.operations);
     await db.saveContent(file.uri, content, 'application/vnd.runme.notebook+jsonl');
     const source = await drive.createContent('https://drive.google.com/drive/folders/shared-folder-123', file.name, content, 'application/vnd.runme.notebook+jsonl');
-    const record = await db.files.get(file.uri);
+    const { default: md5 } = await import('/.vite/deps/md5.js');
+    const checksum = md5(content);
     await db.files.update(file.uri, {
-      remoteId: source.uri, lastRemoteChecksum: record.md5Checksum,
+      remoteId: source.uri, md5Checksum: checksum, lastRemoteChecksum: checksum,
       ipynbExportError: 'Error: Unsupported notebook log format_version 2',
     });
     if ((await db.listDriveBackedFilesNeedingSync()).includes(file.uri)) throw new Error('Fixture source must already be saved');
@@ -113,11 +117,19 @@ try {
   // Fail through the real network path, then restore connectivity without a
   // reload so the properties button is solely responsible for the next retry.
   evaluate(`
-    const { setGoogleDriveBaseUrl } = await import('/src/lib/googleDriveRuntime.ts');
     const db = window.app.localNotebooks;
-    setGoogleDriveBaseUrl(${JSON.stringify(fakeDrive + '/unavailable')});
+    const { parseDriveItem } = await import('/src/storage/drive.ts');
+    const fileId = parseDriveItem(${JSON.stringify(firstExport.uri)}).id;
+    const fault = async unavailable => {
+      const response = await fetch(${JSON.stringify(fakeDrive + '/__test/file-availability')}, {
+        method: 'POST', headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ fileId, unavailable }),
+      });
+      if (!response.ok) throw new Error('Failed to configure Drive fault');
+    };
+    await fault(true);
     try { await db.syncIpynbFile(${uri}); } catch {}
-    finally { setGoogleDriveBaseUrl(${JSON.stringify(fakeDrive)}); }
+    finally { await fault(false); }
     if (!(await db.getIpynbExportState(${uri})).error) throw new Error('Expected a real export failure');
     const tab = [...document.querySelectorAll('[role=tab]')].find(node => node.textContent.includes(${JSON.stringify(name)}));
     if (!tab) throw new Error('Notebook tab missing');

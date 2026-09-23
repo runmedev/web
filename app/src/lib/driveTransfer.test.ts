@@ -1,6 +1,6 @@
 import { create } from '@bufbuild/protobuf'
 import md5 from 'md5'
-import { afterEach, describe, expect, it, vi } from 'vitest'
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 
 import { parser_pb } from '../runme/client'
 import {
@@ -12,15 +12,40 @@ import {
   copyDriveNotebookFile,
   createDriveFile,
   createDriveNotebook,
+  saveNotebookAsDriveCopy as durableSaveAs,
   listDriveFolderItems,
   mountDriveFolder,
-  saveNotebookAsDriveCopy,
+  completeDriveNotebookCreation as saveNotebookAsDriveCopy,
   searchDriveFiles,
   updateDriveFileBytes,
 } from './driveTransfer'
 import { encodeRunmeNotebook } from './notebookFormat'
 import { parseOperationLog, serializeOperationLog } from './operationLog'
 import { appState } from './runtime/AppState'
+
+beforeEach(() => {
+  const setStore = appState.setLocalNotebooks.bind(appState)
+  vi.spyOn(appState, 'setLocalNotebooks').mockImplementation((store) => {
+    if (store)
+      Object.assign(store, {
+        createDriveNotebookRequest: vi.fn(async (notebook, folder, name, id) =>
+          saveNotebookAsDriveCopy(notebook, folder, name, {
+            createOperationId: id,
+            background: true,
+          })
+        ),
+        enqueueDriveBackedFilesNeedingSync: vi.fn(async () => []),
+      })
+    setStore(store)
+  })
+  appState.setLocalNotebooks({} as any)
+  const setDrive = appState.setDriveNotebookStore.bind(appState)
+  vi.spyOn(appState, 'setDriveNotebookStore').mockImplementation((store) => {
+    if (store && !store.findByCreateOperation)
+      store.findByCreateOperation = vi.fn().mockResolvedValue(null)
+    setDrive(store)
+  })
+})
 
 afterEach(() => {
   vi.useRealTimers()
@@ -585,6 +610,8 @@ describe('driveTransfer', () => {
       })
     appState.setDriveNotebookStore({
       createContent,
+      loadContent: vi.fn(async () => uploadedContent),
+      markCreateOperationComplete: vi.fn().mockResolvedValue(undefined),
       getVersionMetadata: vi.fn().mockImplementation(async () => ({
         md5Checksum: md5(uploadedContent),
         headRevisionId: 'runme-revision-1',
@@ -610,7 +637,7 @@ describe('driveTransfer', () => {
       'shared.runme',
       uploadedContent,
       'application/vnd.runme.notebook+jsonl',
-      {}
+      expect.objectContaining({ createOperationId: expect.any(String) })
     )
     expect(initializeUploadedDriveNotebook).toHaveBeenCalledWith(
       result.localUri,
@@ -761,9 +788,9 @@ describe('driveTransfer', () => {
       }
     )
     expect(loadContent).toHaveBeenCalledWith(remoteFile.uri)
-    expect(reconcileDriveNotebook).toHaveBeenCalledWith(
-      'local://file/drive-mirror'
-    )
+    expect(
+      appState.localNotebooks?.enqueueDriveBackedFilesNeedingSync
+    ).toHaveBeenCalledTimes(1)
   })
 
   it('does not overwrite a Drive edit made before completion was marked', async () => {
@@ -1047,6 +1074,84 @@ describe('driveTransfer', () => {
     })
   })
 
+  it('replays worker creation from its injected durable journal without localStorage', async () => {
+    const stored = new Map<string, string>()
+    vi.stubGlobal('localStorage', undefined)
+    const journal = {
+      read: async (key: string) => ({
+        available: true,
+        attempt: stored.has(key) ? JSON.parse(stored.get(key)!) : undefined,
+      }),
+      write: async (key: string, attempt: unknown) => {
+        stored.set(key, JSON.stringify(attempt))
+        return true
+      },
+      remove: async (key: string) => {
+        stored.delete(key)
+      },
+    }
+    let uploadedContent = ''
+    const createContent = vi
+      .fn()
+      .mockRejectedValueOnce(new Error('tab closed after request started'))
+      .mockImplementationOnce(async (_folder, _name, content) => {
+        uploadedContent = content
+        return {
+          uri: 'https://drive.google.com/file/d/reserved123/view',
+          name: 'reserved.json',
+        }
+      })
+    const generateFileId = vi.fn().mockResolvedValue('reserved123')
+    const getMetadataIfExists = vi.fn().mockResolvedValue(null)
+    appState.setDriveNotebookStore({
+      generateFileId,
+      getMetadataIfExists,
+      findByCreateOperation: vi.fn().mockResolvedValue(null),
+      createContent,
+      getVersionMetadata: vi.fn().mockImplementation(async () => ({
+        md5Checksum: md5(uploadedContent),
+        headRevisionId: 'reserved-revision',
+        appProperties: {
+          runmeCreateCompletedChecksum: md5(uploadedContent),
+        },
+      })),
+      loadContent: vi.fn().mockImplementation(async () => uploadedContent),
+    } as any)
+    appState.setLocalNotebooks({
+      addFile: vi.fn().mockResolvedValue('local://file/reserved'),
+      initializeUploadedDriveNotebook: vi.fn().mockResolvedValue(true),
+    } as any)
+    appState.setOpenNotebookHandler(vi.fn().mockResolvedValue(undefined))
+    const createOnce = () =>
+      saveNotebookAsDriveCopy(
+        create(parser_pb.NotebookSchema, { cells: [] }),
+        'folder123',
+        'reserved.json',
+        {
+          createOperationId: 'worker-reserved-operation',
+          journal,
+          background: true,
+        }
+      )
+
+    await expect(createOnce()).rejects.toThrow('tab closed')
+    await expect(createOnce()).resolves.toMatchObject({
+      fileId: 'reserved123',
+    })
+
+    expect(generateFileId).toHaveBeenCalledTimes(1)
+    expect(getMetadataIfExists).toHaveBeenCalledWith(
+      'https://drive.google.com/file/d/reserved123/view'
+    )
+    expect(createContent).toHaveBeenCalledTimes(2)
+    expect(createContent.mock.calls[0]?.[4]).toMatchObject({
+      fileId: 'reserved123',
+    })
+    expect(createContent.mock.calls[1]?.[4]).toMatchObject({
+      fileId: 'reserved123',
+    })
+  })
+
   it('attaches an adopted notebook to its current Drive parent after a move', async () => {
     const stored = new Map<string, string>()
     vi.stubGlobal('localStorage', {
@@ -1219,6 +1324,34 @@ describe('driveTransfer', () => {
     expect(createContent).not.toHaveBeenCalled()
   })
 
+  it('does not create when the worker journal commit fails', async () => {
+    vi.stubGlobal('localStorage', undefined)
+    const createContent = vi.fn()
+    appState.setDriveNotebookStore({
+      findByCreateOperation: vi.fn().mockResolvedValue(null),
+      createContent,
+    } as any)
+    await expect(
+      saveNotebookAsDriveCopy(
+        create(parser_pb.NotebookSchema, { cells: [] }),
+        'folder123',
+        'safe.json',
+        {
+          createOperationId: 'failed-worker-journal',
+          background: true,
+          journal: {
+            read: async () => ({ available: true }),
+            write: async () => {
+              throw new Error('IndexedDB quota')
+            },
+            remove: async () => {},
+          },
+        }
+      )
+    ).rejects.toThrow('IndexedDB quota')
+    expect(createContent).not.toHaveBeenCalled()
+  })
+
   it('waits for an ambiguously created Drive file to become searchable', async () => {
     const stored = new Map<string, string>()
     vi.stubGlobal('localStorage', {
@@ -1323,7 +1456,7 @@ describe('driveTransfer', () => {
     expect(secondResult).toEqual(firstResult)
     expect(findByCreateOperation).toHaveBeenCalledTimes(1)
     expect(createContent).toHaveBeenCalledTimes(1)
-    expect(openNotebook).toHaveBeenCalledTimes(1)
+    expect(openNotebook).toHaveBeenCalledTimes(2)
   })
 
   it('guards idempotent creation with a cross-context Web Lock', async () => {
@@ -1469,5 +1602,28 @@ describe('driveTransfer', () => {
       nbformat: 4,
       nbformat_minor: 5,
     })
+  })
+})
+
+describe('durable Save As entrypoint', () => {
+  it('assigns a distinct operation ID per intentional copy and opens only after completion', async () => {
+    const result = {
+      fileId: 'id',
+      fileName: 'copy.json',
+      remoteUri: 'drive',
+      localUri: 'local://file/copy',
+    }
+    const request = vi.fn().mockResolvedValue(result)
+    Object.assign(appState.localNotebooks!, {
+      createDriveNotebookRequest: request,
+    })
+    const open = vi.fn().mockResolvedValue(undefined)
+    appState.setOpenNotebookHandler(open)
+    const notebook = create(parser_pb.NotebookSchema, { cells: [] })
+    await durableSaveAs(notebook, 'folder', 'copy.json')
+    await durableSaveAs(notebook, 'folder', 'copy.json')
+    expect(request).toHaveBeenCalledTimes(2)
+    expect(request.mock.calls[0][3]).not.toBe(request.mock.calls[1][3])
+    expect(open).toHaveBeenCalledWith(result.localUri)
   })
 })

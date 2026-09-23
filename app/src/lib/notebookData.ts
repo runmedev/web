@@ -64,6 +64,7 @@ import { showToast } from './toast'
  * in the IndexedDB mirror before any upstream sync runs.
  */
 export interface NotebookSaveStore {
+  dispose?(): void
   getObservedOperationHeads?(): string[]
   save(uri: string, notebook: parser_pb.Notebook): Promise<unknown>
 }
@@ -822,6 +823,7 @@ export class NotebookData {
   }
 
   setNotebookStore(notebookStore: NotebookSaveStore | null): void {
+    if (this.notebookStore !== notebookStore) this.notebookStore?.dispose?.()
     this.notebookStore = notebookStore
   }
 

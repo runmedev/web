@@ -3,7 +3,7 @@ import { mkdirSync, rmSync, writeFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 
-const FRONTEND_URL = "http://localhost:5173";
+const FRONTEND_URL = process.env.CUJ_FRONTEND_URL ?? "http://localhost:5173";
 const FAKE_DRIVE_URL = process.env.CUJ_FAKE_DRIVE_URL?.trim() ?? "http://127.0.0.1:9090";
 const SHARED_FILE_URL = "https://drive.google.com/file/d/shared-file-123/view";
 const SHARED_FOLDER_URL = "https://drive.google.com/drive/folders/shared-folder-123";
@@ -376,13 +376,18 @@ if (run(`curl -sf ${FRONTEND_URL}`).status !== 0) {
   process.exit(1);
 }
 
-runWithRetry(`agent-browser open ${FRONTEND_URL}`);
+// Record and seed a same-origin blank page. Recording may recreate the browser
+// context; opening the app before seeding can leave its SharedWorker configured
+// with the default endpoint while the test later changes only tab-local state.
+runWithRetry(`agent-browser open ${FRONTEND_URL}/test/fixtures/storage-owner.html`);
 run("agent-browser record stop");
 runWithRetry(`agent-browser record start ${MOVIE_PATH}`);
 run("agent-browser wait 2500");
 
 const seedRuntime = run(
   `agent-browser eval "(async () => {
+    const { ensureSessionQueryParam } = await import('/src/lib/tabIdentity.ts');
+    ensureSessionQueryParam();
     localStorage.setItem('${GOOGLE_DRIVE_RUNTIME_STORAGE_KEY}', JSON.stringify({ baseUrl: '${FAKE_DRIVE_URL}' }));
     localStorage.setItem('${GOOGLE_CLIENT_STORAGE_KEY}', JSON.stringify({}));
     localStorage.removeItem('${GOOGLE_AUTH_STORAGE_KEY}');
@@ -450,7 +455,15 @@ if (seedAuth.includes("ok")) {
 }
 
 run("agent-browser reload");
-run("agent-browser wait 4500");
+// Auth restoration, worker startup and Drive import are asynchronous. Wait for
+// the persisted result rather than racing a fixed sleep on a cold CI browser.
+const importDeadline = Date.now() + 30_000;
+while (Date.now() < importDeadline) {
+  const state = run(`agent-browser eval "Boolean(sessionStorage.getItem('${CURRENT_DOC_STORAGE_KEY}')?.startsWith('local://file/') && document.querySelector('#workspace-explorer-box')?.textContent.includes('Shared Drive Folder'))"`);
+  if (state.status === 0 && state.stdout.trim() === "true") break;
+  run("agent-browser wait 500");
+}
+writeArtifact("scenario-open-shared-drive-link-import-status.txt", run("agent-browser get text '#documents'").stdout);
 
 snapshot = run("agent-browser snapshot -i").stdout;
 writeArtifact("scenario-open-shared-drive-link-03-after-reload.txt", snapshot);

@@ -70,6 +70,7 @@ type driveRevision struct {
 type driveStore struct {
 	revisions   map[string][]*driveRevision
 	intervening map[string]string
+	unavailable map[string]bool
 	mu          sync.Mutex
 	files       map[string]*driveFile
 	counter     int
@@ -80,6 +81,7 @@ func newDriveStore() *driveStore {
 		files:       map[string]*driveFile{},
 		revisions:   map[string][]*driveRevision{},
 		intervening: map[string]string{},
+		unavailable: map[string]bool{},
 		counter:     1,
 	}
 
@@ -462,6 +464,36 @@ func newDriveHandler(store *driveStore) http.Handler {
 			"expires_in":   3600,
 		})
 	})
+	// Scope network failures to one file, including requests made by a worker.
+	mux.HandleFunc("/__test/file-availability", func(w http.ResponseWriter, r *http.Request) {
+		if allowCORS(w, r) {
+			return
+		}
+		if r.Method != http.MethodPost {
+			http.Error(w, "method not allowed", 405)
+			return
+		}
+		var request struct {
+			FileID      string `json:"fileId"`
+			Unavailable bool   `json:"unavailable"`
+		}
+		if json.NewDecoder(r.Body).Decode(&request) != nil {
+			http.Error(w, "invalid request", 400)
+			return
+		}
+		store.mu.Lock()
+		defer store.mu.Unlock()
+		if store.files[request.FileID] == nil {
+			http.NotFound(w, r)
+			return
+		}
+		if request.Unavailable {
+			store.unavailable[request.FileID] = true
+		} else {
+			delete(store.unavailable, request.FileID)
+		}
+		writeJSON(w, map[string]bool{"unavailable": request.Unavailable})
+	})
 	// A one-shot test fault creates B's revision immediately before A's upload.
 	mux.HandleFunc("/__test/intervening-write", func(w http.ResponseWriter, r *http.Request) {
 		if allowCORS(w, r) {
@@ -629,7 +661,22 @@ func newDriveHandler(store *driveStore) http.Handler {
 		writeJSON(w, file)
 	})
 
-	return mux
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		for _, prefix := range []string{"/drive/v3/files/", "/upload/drive/v3/files/"} {
+			if strings.HasPrefix(r.URL.Path, prefix) && r.Method != http.MethodOptions {
+				fileID := strings.Split(strings.TrimPrefix(r.URL.Path, prefix), "/")[0]
+				store.mu.Lock()
+				unavailable := store.unavailable[fileID]
+				store.mu.Unlock()
+				if unavailable {
+					allowCORS(w, r)
+					http.Error(w, "Drive file temporarily unavailable", 503)
+					return
+				}
+			}
+		}
+		mux.ServeHTTP(w, r)
+	})
 }
 
 func main() {

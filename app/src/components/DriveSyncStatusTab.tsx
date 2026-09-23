@@ -564,10 +564,11 @@ export function DriveSyncStatusTab() {
     setError(null)
     try {
       const rowsNotRequiringDriveAuth = rowsRequiringSync.filter(
-        (row) => !row.googleDriveUrl
+        (row) =>
+          !row.googleDriveUrl && !row.localUri.startsWith('drive-create:')
       )
       const rowsRequiringDriveAuth = rowsRequiringSync.filter(
-        (row) => row.googleDriveUrl
+        (row) => row.googleDriveUrl || row.localUri.startsWith('drive-create:')
       )
       await Promise.all(
         rowsNotRequiringDriveAuth.map((row) => store.sync(row.localUri))
@@ -933,16 +934,20 @@ export function DriveSyncStatusTab() {
                       className="border-b border-nb-border last:border-0"
                     >
                       <td className="max-w-[280px] break-all px-3 py-3 font-mono text-xs text-nb-text-muted">
-                        <a
-                          className="text-nb-accent hover:underline"
-                          href={row.localUri}
-                          onClick={(event) => {
-                            event.preventDefault()
-                            void handleOpenLocalUri(row.localUri)
-                          }}
-                        >
-                          {row.localUri}
-                        </a>
+                        {row.localUri.startsWith('drive-create:') ? (
+                          <span>{row.localUri}</span>
+                        ) : (
+                          <a
+                            className="text-nb-accent hover:underline"
+                            href={row.localUri}
+                            onClick={(event) => {
+                              event.preventDefault()
+                              void handleOpenLocalUri(row.localUri)
+                            }}
+                          >
+                            {row.localUri}
+                          </a>
+                        )}
                       </td>
                       <td className="max-w-[240px] px-3 py-3 font-medium text-nb-text">
                         {row.title}
@@ -977,6 +982,22 @@ export function DriveSyncStatusTab() {
                         >
                           {row.syncStatus}
                         </span>
+                        {row.lastError && (
+                          <p className="mt-2 max-w-sm break-words text-xs text-nb-text-muted">
+                            {row.lastError}
+                          </p>
+                        )}
+                        {row.lastSyncAttemptedAt && (
+                          <p className="mt-1 text-xs text-nb-text-muted">
+                            Last attempt: {formatDate(row.lastSyncAttemptedAt)}
+                          </p>
+                        )}
+                        {row.nextSyncAttemptAt && (
+                          <p className="mt-1 text-xs text-nb-text-muted">
+                            Retry eligible: {formatDate(row.nextSyncAttemptAt)}{' '}
+                            (when connected)
+                          </p>
+                        )}
                       </td>
                     </tr>
                   ))

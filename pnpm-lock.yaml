@@ -252,6 +252,9 @@ importers:
       d3:
         specifier: ^7.9.0
         version: 7.9.0
+      decode-named-character-reference:
+        specifier: 1.2.0
+        version: 1.2.0
       dexie:
         specifier: 3.2.4
         version: 3.2.4
@@ -3616,6 +3619,7 @@ packages:
   eslint@9.37.0:
     resolution: {integrity: sha512-XyLmROnACWqSxiGYArdef1fItQd47weqB7iwtfr9JHwRrqIXZdcFMvvEcL9xHCmL0SNsOvF0c42lWyM1U5dgig==}
     engines: {node: ^18.18.0 || ^20.9.0 || >=21.1.0}
+    deprecated: This version is no longer supported. Please see https://eslint.org/version-support for other options.
     hasBin: true
     peerDependencies:
       jiti: '*'
@@ -4654,6 +4658,11 @@ packages:
     resolution: {integrity: sha512-ZBmhE1C9LcPoH9XZSdwiPtbPHZROwAnMy+kIFQVrnMCxY4Cudlz3gBOpzilgc0jOgRaiT3sIWfpMomW2ar2orQ==}
     engines: {node: '>=16.20.0'}
 
+  playwright-core@1.57.0:
+    resolution: {integrity: sha512-agTcKlMw/mjBWOnD6kFZttAAGHgi/Nw0CZ2o6JqWSbMlI219lAFLZZCyqByTsvVAJq5XA5H8cA6PrvBRpBWEuQ==}
+    engines: {node: '>=18'}
+    hasBin: true
+
   png-chunk-text@1.0.0:
     resolution: {integrity: sha512-DEROKU3SkkLGWNMzru3xPVgxyd48UGuMSZvioErCure6yhOc/pRH2ZV+SEn7nmaf7WNf3NdIpH+UTrRdKyq9Lw==}
 
@@ -4691,11 +4700,6 @@ packages:
   prettier@3.6.2:
     resolution: {integrity: sha512-I7AIg5boAr5R0FFtJ6rCfD+LFsWHp81dolrFD8S79U9tb8Az2nGrJncnMSnys+bpQJfRUzqs9hnA81OAA3hCuQ==}
     engines: {node: '>=14'}
-    hasBin: true
-
-  playwright-core@1.57.0:
-    resolution: {integrity: sha512-agTcKlMw/mjBWOnD6kFZttAAGHgi/Nw0CZ2o6JqWSbMlI219lAFLZZCyqByTsvVAJq5XA5H8cA6PrvBRpBWEuQ==}
-    engines: {node: ">=18"}
     hasBin: true
 
   pretty-format@27.5.1:
@@ -10087,6 +10091,8 @@ snapshots:
 
   pkce-challenge@4.1.0: {}
 
+  playwright-core@1.57.0: {}
+
   png-chunk-text@1.0.0: {}
 
   png-chunks-encode@1.0.0:
@@ -10120,8 +10126,6 @@ snapshots:
   prettier@2.8.8: {}
 
   prettier@3.6.2: {}
-
-  playwright-core@1.57.0: {}
 
   pretty-format@27.5.1:
     dependencies:
