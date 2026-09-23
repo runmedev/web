@@ -231,3 +231,32 @@ func TestMetadataDoesNotCreateContentRevisionAndRetentionLimit(t *testing.T) {
 		t.Fatal("retention limit was not enforced")
 	}
 }
+
+// Network fault injection must affect worker HTTP requests and recover in place.
+func TestFileAvailabilityFault(t *testing.T) {
+	handler := newDriveHandler(newDriveStore())
+	for _, unavailable := range []bool{true, false} {
+		body, _ := json.Marshal(map[string]any{"fileId": seedFileID, "unavailable": unavailable})
+		control := httptest.NewRecorder()
+		handler.ServeHTTP(control, httptest.NewRequest(http.MethodPost, "/__test/file-availability", bytes.NewReader(body)))
+		if control.Code != 200 {
+			t.Fatalf("control: %d", control.Code)
+		}
+		for _, path := range []string{"/drive/v3/files/" + seedFileID, "/drive/v3/files/" + seedFileID + "?alt=media"} {
+			response := httptest.NewRecorder()
+			handler.ServeHTTP(response, httptest.NewRequest(http.MethodGet, path, nil))
+			want := 200
+			if unavailable {
+				want = 503
+			}
+			if response.Code != want {
+				t.Fatalf("%s: got %d want %d", path, response.Code, want)
+			}
+		}
+		unaffected := httptest.NewRecorder()
+		handler.ServeHTTP(unaffected, httptest.NewRequest(http.MethodGet, "/drive/v3/files/"+seedFolderID, nil))
+		if unaffected.Code != 200 {
+			t.Fatalf("unrelated file: %d", unaffected.Code)
+		}
+	}
+}

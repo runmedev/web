@@ -1,6 +1,7 @@
 import { getGoogleDriveBaseUrl } from '../lib/googleDriveRuntime'
 import { appLogger } from '../lib/logging/runtime'
-import type { DriveNotebookStore } from './drive'
+import { DriveCreateNotCommittedError, type DriveNotebookStore } from './drive'
+import { FilesystemEntryAlreadyExistsError } from './fs'
 import { readLegacyCreationJournal } from './legacyCreationJournal'
 import LocalNotebooks, {
   NotebookConflictChangedError,
@@ -116,7 +117,7 @@ export class StorageOwnerClient {
         new Error(String(message.error.message)),
         message.error
       )
-      // These two errors carry recovery semantics used by mounted editors.
+      // Preserve error types that drive editor recovery and creation UI choices.
       if (error.name === 'OperationLogMutationCommitUncertainError')
         Object.setPrototypeOf(
           error,
@@ -124,6 +125,10 @@ export class StorageOwnerClient {
         )
       if (error.name === 'NotebookConflictChangedError')
         Object.setPrototypeOf(error, NotebookConflictChangedError.prototype)
+      if (error.name === 'DriveCreateNotCommittedError')
+        Object.setPrototypeOf(error, DriveCreateNotCommittedError.prototype)
+      if (error.name === 'FilesystemEntryAlreadyExistsError')
+        Object.setPrototypeOf(error, FilesystemEntryAlreadyExistsError.prototype)
       pending.reject(error)
     } else pending.resolve(message.value)
   }

@@ -292,5 +292,16 @@ acceptance steps; automated transport mocks are not live Drive failure injection
 
 Retries cannot fix permissions/quota or auto-resolve conflicts. Clean remote-file
 polling, pre-existing stale-cache recovery and the separate Logs-view memory
-investigation remain distinct concerns. SharedWorker/lazy-checksum requirements
-above are not covered by the current implementation validation.
+investigation remain distinct concerns.
+
+The SharedWorker boundary is covered by MessagePort tests and isolated Chromium
+checks for two-tab causal edits, lazy checksums, browser restart and the emitted
+production worker. Browser CUJs also cover shared Drive links/direct creation and
+Colab export recovery against the Go fake Drive service, including a real HTTP
+503 followed by a properties-dialog retry. The source bytes and derived-copy
+identity must remain unchanged. Test endpoints are configured before worker
+startup; faults are injected at the HTTP service, not into tab-local state.
+
+Review found that structured-cloned errors lost the custom types used by the
+creation UI. The transport now restores filesystem name-collision and rejected
+Drive-creation errors, with MessagePort regression coverage.

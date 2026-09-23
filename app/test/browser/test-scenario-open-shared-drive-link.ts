@@ -3,7 +3,7 @@ import { mkdirSync, rmSync, writeFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 
-const FRONTEND_URL = "http://localhost:5173";
+const FRONTEND_URL = process.env.CUJ_FRONTEND_URL ?? "http://localhost:5173";
 const FAKE_DRIVE_URL = process.env.CUJ_FAKE_DRIVE_URL?.trim() ?? "http://127.0.0.1:9090";
 const SHARED_FILE_URL = "https://drive.google.com/file/d/shared-file-123/view";
 const SHARED_FOLDER_URL = "https://drive.google.com/drive/folders/shared-folder-123";
@@ -376,6 +376,9 @@ if (run(`curl -sf ${FRONTEND_URL}`).status !== 0) {
   process.exit(1);
 }
 
+// Configure the endpoint before the first app opens its shared storage owner.
+runWithRetry(`agent-browser open ${FRONTEND_URL}/test/fixtures/storage-owner.html`);
+runOrThrow(`agent-browser eval "localStorage.setItem('${GOOGLE_DRIVE_RUNTIME_STORAGE_KEY}', JSON.stringify({ baseUrl: '${FAKE_DRIVE_URL}' }))"`);
 runWithRetry(`agent-browser open ${FRONTEND_URL}`);
 run("agent-browser record stop");
 runWithRetry(`agent-browser record start ${MOVIE_PATH}`);

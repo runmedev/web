@@ -2,6 +2,8 @@
 import { MessageChannel } from 'node:worker_threads'
 import { afterEach, describe, expect, it, vi } from 'vitest'
 
+import { DriveCreateNotCommittedError } from './drive'
+import { FilesystemEntryAlreadyExistsError } from './fs'
 import type LocalNotebooks from './local'
 import { StorageOwnerClient } from './storageOwnerClient'
 import { StorageOwnerHost } from './storageOwnerHost'
@@ -105,6 +107,19 @@ describe('SharedWorker message boundary', () => {
       'OPFS quota exceeded'
     )
     expect(store.save).toHaveBeenCalledTimes(1)
+  })
+  it.each([
+    new FilesystemEntryAlreadyExistsError('report.runme'),
+    new DriveCreateNotCommittedError('Drive creation was rejected'),
+  ])('preserves creation recovery error $name across RPC', async (original) => {
+    const { host, store } = setup()
+    const client = connect(host)
+    store.save.mockRejectedValueOnce(original)
+    const error = await client.request('save', ['a', {}]).catch(error => error)
+    expect(error).toBeInstanceOf(original.constructor)
+    expect(error.message).toBe(original.message)
+    if (original instanceof FilesystemEntryAlreadyExistsError)
+      expect(error.fileName).toBe('report.runme')
   })
   it('credentials are requested from authenticated tabs without interactive login', async () => {
     const { host } = setup()

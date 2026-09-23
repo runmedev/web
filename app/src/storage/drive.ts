@@ -520,6 +520,7 @@ export class DriveCreateNotCommittedError extends Error {
 
   constructor(message: string, cause?: unknown) {
     super(message)
+    this.name = 'DriveCreateNotCommittedError'
     this.cause = cause
   }
 }

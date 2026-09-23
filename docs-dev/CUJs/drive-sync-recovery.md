@@ -23,13 +23,21 @@ Preserve content and existing conflict handling. See the
 - `ownedOperationLogs.test.ts`: lazy hashing, invalidation failure, interrupted
   initialization, original-byte preservation, write serialization and stale acknowledgements.
 - `storageOwner.test.ts`: two MessagePorts, local saves during blocked sync,
-  causal-view isolation, protocol mismatch, credential deferral and backoff wake-up.
+  causal-view isolation, protocol mismatch, creation-error identity, credential
+  deferral and backoff wake-up.
 - `legacyCreationJournal.test.ts` and `driveTransfer.test.ts`: legacy identity import,
   injected worker journal replay and no remote creation after journal commit failure.
 - `storage-owner-smoke.ts`: real Chromium SharedWorker, two tabs, concurrent causal
   edits, unset checksums and exact OPFS restoration after a browser restart.
 - `storage-owner-production.ts`: emitted worker entry, handshake, durable creation
   and notebook decoding; catches DOM-only dependencies in the production bundle.
+
+- `test-scenario-open-shared-drive-link.ts`: shared file/folder links, copy links
+  and direct notebook creation through the worker-backed app (26 assertions).
+- `test-scenario-colab-export-recovery.ts`: reconnect recovery of a saved V2 source,
+  per-file HTTP 503 from the Go fake Drive service, properties-dialog retry,
+  preserved source history and reuse of the same derived copy. Configure the
+  endpoint on the blank fixture page before the app starts its worker.
 
 ### Run the browser checks on a devbox
 
