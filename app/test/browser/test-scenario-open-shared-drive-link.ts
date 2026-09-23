@@ -453,7 +453,15 @@ if (seedAuth.includes("ok")) {
 }
 
 run("agent-browser reload");
-run("agent-browser wait 4500");
+// Auth restoration, worker startup and Drive import are asynchronous. Wait for
+// the persisted result rather than racing a fixed sleep on a cold CI browser.
+const importDeadline = Date.now() + 30_000;
+while (Date.now() < importDeadline) {
+  const state = run(`agent-browser eval "Boolean(sessionStorage.getItem('${CURRENT_DOC_STORAGE_KEY}')?.startsWith('local://file/') && document.querySelector('#workspace-explorer-box')?.textContent.includes('Shared Drive Folder'))"`);
+  if (state.status === 0 && state.stdout.trim() === "true") break;
+  run("agent-browser wait 500");
+}
+writeArtifact("scenario-open-shared-drive-link-import-status.txt", run("agent-browser get text '#documents'").stdout);
 
 snapshot = run("agent-browser snapshot -i").stdout;
 writeArtifact("scenario-open-shared-drive-link-03-after-reload.txt", snapshot);
