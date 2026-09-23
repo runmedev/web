@@ -125,6 +125,21 @@ notebook with an export error, no conflict and no unconfirmed export claim is
 queued even if its source is clean. A successful source save is not proof of a
 successful export.
 
+### Declarative reconciliation and rescan
+
+Persisting an edit before enqueueing is a durable-write/notification order, not
+an ordering requirement between source and export jobs. If enqueueing is lost,
+a rescan discovers the stored change. Each key asks a handler to reread current
+state and reconcile; it must not blindly execute a captured upload command.
+Concern+URI keys let source and exports keep independent backoff. Missing remote
+creation is a prerequisite to recheck, not a reason to depend on FIFO ordering.
+Creation uses an operation ID because a local URI may not exist yet.
+
+Startup/auth/online/timer triggers run a coalesced discovery pass outside the
+work queue and add unfinished keys to it. This is the rescan operation; a
+synthetic rescan queue item is not required. Edit events and scans safely add
+the same key.
+
 ## Cross-tab coordination and worker decision
 
 Queued source sync, export and direct-create attempts acquire the same
