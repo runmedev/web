@@ -220,11 +220,12 @@ function NotebookStoreInitializer() {
   }, [ensureAccessToken, setStore, store])
 
   // Rebuild work from durable metadata on startup/auth recovery, online, and
-  // periodic wake-ups. Cleanup stops new work when auth is lost or App unmounts.
+  // periodic wake-ups. Cleanup stops scans; auth availability gates queued I/O.
   useEffect(() => {
     const recoveredAuth = isDriveSyncing && !previousDriveAvailable.current
     previousDriveAvailable.current = isDriveSyncing
     const localStore = instanceRef.current
+    localStore?.setDriveSyncAvailable(isDriveSyncing)
     if (!localStore || !isDriveSyncing) return
     return startDriveResyncReconciler(localStore, {
       retryErrors: recoveredAuth,

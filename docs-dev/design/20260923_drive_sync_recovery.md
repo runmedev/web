@@ -1,94 +1,154 @@
 # Recover unfinished Drive sync from durable state
 
-## Problem
+## Problem and objective
 
-A failed sync can remain visible for days after credentials or connectivity recover.
-The auth-availability transition was the only automatic reconciliation trigger.
-The pending-work scan compared content hashes but excluded failed downloads when
-both hashes were empty or the local content still matched its previous baseline.
-A separate `.runme` migration gap backfilled a missing hash from the empty `doc`
-placeholder instead of its authoritative OPFS operation log.
+A failed save must recover when credentials or connectivity return, without
+requiring another edit. The old scan excluded failed downloads when hashes
+matched or were empty, and ran only on an auth transition. Missing `.runme`
+checksums were repaired from the empty IndexedDB `doc` placeholder instead of
+OPFS. Direct creation needed a replayable request before any Drive mutation.
 
-The intended contract remains the [level-based resync design](20260312_resyncdrive.md)
-and [Drive version tracking](20260409_track_drive_versions.md): IndexedDB owns
-content/baseline metadata; an in-memory queue only schedules work. Closing a tab
-must not erase the evidence needed to retry.
+The contract follows [level-based resync](20260312_resyncdrive.md) and
+[Drive version tracking](20260409_track_drive_versions.md): durable content and
+recovery state determine unfinished work. The queue only schedules it.
 
-## Decisions
+## Content and checksum domains
 
-### Compare hashes in the same domain
-
-| Format | Local content/hash | Acknowledged baseline |
+| Format | Local content/hash | Comparable acknowledged baseline |
 | --- | --- | --- |
-| `.json` | Serialized IndexedDB model / `md5Checksum` | `lastRemoteChecksum` |
+| `.json` | IndexedDB serialized model / `md5Checksum` | `lastRemoteChecksum` |
 | `.ipynb` | Decoded model / `md5Checksum` | `ipynbPreservation.baselineNotebookChecksum` |
-| `.runme` | OPFS log bytes / cached `md5Checksum` | Acknowledged local log snapshot / `lastRemoteChecksum` |
+| `.runme` | OPFS operation log / cached `md5Checksum` | Acknowledged local log snapshot / `lastRemoteChecksum` |
 
-Raw IPYNB fingerprints differ from decoded-model hashes. Canonical operation
-ordering can make raw Drive `.runme` bytes differ from the acknowledged local
-snapshot; raw upstream identity remains in `lastUpstreamVersion.checksum`. Do not
-collapse these domains or weaken existing conflict/version checks.
+Raw IPYNB fingerprints differ from decoded hashes. Canonical operation ordering
+can make raw Drive `.runme` bytes differ from the acknowledged local snapshot;
+raw upstream identity remains in `lastUpstreamVersion.checksum`. Do not collapse
+these domains or weaken conflict/version checks.
 
-The scan selects Drive-backed and pending-create records from IndexedDB, then
-compares their fields in application code. It does not rehash healthy content.
-For a missing `.runme` hash, read OPFS and publish the hash only if a transaction's
-fresh metadata still lacks it and points at the same log. Preserve a newer hash
-published by a concurrent append. An unreadable log is isolated to its own sync
-and status error; it cannot stop all other notebooks from being inspected.
+The IndexedDB-backed scan compares fields in application code. Conflicts are
+excluded. Pending creation qualifies before checksum comparison. A retained
+`lastSyncError` qualifies regardless of checksum equality: matching or empty
+hashes do not prove the latest download succeeded. A failed first download must
+retry reading, never upload its empty placeholder.
 
-### Failed reads are unfinished work
+Healthy records need no content read. Repair a missing `.runme` checksum from
+OPFS, then reread metadata transactionally before publishing it; preserve a newer
+checksum or changed log reference. An unreadable log is a per-file error and
+cannot break the whole scan or status table.
 
-A retained `lastSyncError` is sufficient to retry a Drive-backed file, including
-an empty first-download placeholder. Pending creation and checksum differences
-continue to qualify. Conflicts remain excluded. The existing locked,
-format-specific sync implementation decides whether to download, upload, merge,
-or record a conflict; the reconciler never replaces content or blesses a baseline.
+OPFS and IndexedDB are not one atomic transaction. This repairs missing hashes;
+it does not detect every nonempty stale hash after an interrupted pair of writes.
+A content-generation/commit protocol or integrity sweep is a separate follow-up.
 
-### Reconcile while connected
+## Keyed delaying queue
 
-Start a pass when the store has Drive auth, on browser-online events, and every
-two minutes. Coalesce wake-ups while a pass is active. Two workers limit each
-pass's source-sync concurrency. Cleanup and loss of auth stop new scheduling;
-already-running operations retain their existing completion/locking behavior.
+`SyncWorkQueue` follows the dirty/processing and delayed-retry pattern of
+[Kubernetes client-go workqueue](https://github.com/kubernetes/client-go/tree/master/util/workqueue).
+It is a TypeScript implementation, not a dependency on the Go package.
 
-Persist optional `lastSyncAttemptedAt`, `syncFailureCount`, and `nextSyncAttemptAt`
-fields on each file. No IndexedDB schema/index migration is needed. A failed
-attempt waits 2, 4, 8, 16, then 30 minutes; subsequent delays stay at 30 minutes.
-This caps spacing, not the number of retries. Background startup, online and timer
-passes respect the deadline. Manual sync and an observed auth recovery may bypass
-it. Check the deadline again under the cross-tab lock, since another tab may have
-failed while this caller waited. Success clears the failure and deadline.
+- Persist an edit/request, then add `source:<uri>`, `markdown:<uri>`,
+  `ipynb:<uri>` or `create:<operationId>`, even without Drive auth.
+- Local saves, periodic scans, manual sync, creation recovery and exports share
+  one queue per controller. One item runs at a time; delayed keys do not block
+  unrelated ready keys. Repeated adds coalesce without extending the deadline.
+  An add during processing requests another pass.
+- Attempts reread stored state. Source scans skip records already made clean.
+  Creation retains an immutable snapshot because Save As captures an intent.
+- Failures retain an error and requeue after 2, 4, 8, 16, then at most 30 minutes.
+  Success forgets the failure count. **Retry counts and deadlines are in memory.**
+  A new controller scans durable state and starts backoff afresh.
+- Missing auth/offline defers two minutes without a Drive request or increased
+  failure count. Auth recovery wakes delayed keys. Startup/auth/online and
+  two-minute scans reconstruct work; auth gates I/O, not local writes/enqueueing.
+- Automatic local saves initially wait 20 seconds. Further automatic attempts
+  have a two-minute minimum per key. Source/IPYNB jobs also check persisted
+  success times under the origin lock, preventing another tab immediately
+  repeating a successful background save. Markdown's interval is queue-local.
+- Manual sync bypasses delay through the same queue and waits for one attempt.
+  It joins an active attempt for the same key. Errors reach the explicit caller
+  while the item remains queued for recovery.
 
-New local edits keep their existing debounce scheduling. Failed derived IPYNB
-exports retain their separate error/recovery path: a clean source is not proof
-that its derived copy was exported. Reconciliation does not reset source debounce
-timers on every tick.
+This is a per-key save interval, not a global requests-per-second quota. Each
+attempt may make several Drive calls. Backoff can reset on reload or another
+tab; durable failure timing is intentionally not part of correctness.
 
-### Explain attempts separately from successful sync
+IPYNB exports retain separate error/recovery state. A Drive-backed operation-log
+notebook with an export error, no conflict and no unconfirmed export claim is
+queued even if its source is clean. A successful source save is not proof of a
+successful export.
 
-Drive Status displays the stored error, last attempt, and retry eligibility.
-`lastSynced` still means success. Eligibility depends on an open app, credentials,
-connectivity and scheduling; it is not a promise of execution at that exact time.
-Old records have no attempt history, so their last successful sync date cannot
-establish when they were last tried.
+## Cross-tab coordination and worker decision
 
-## Limits
+Queued source sync, export and direct-create attempts acquire the same
+origin-scoped Web Lock, then retain existing per-file locks. Multiple tab queues
+can exist, but only one such attempt runs at a time within the origin/profile.
+The in-process fallback coordinates only one JavaScript context. Different
+origins, profiles and devices do not share the lock. Timers are disposable;
+context exit releases locks and a successor reconstructs work from storage.
 
-Retries cannot fix missing permissions or service-account storage quota. Conflicts
-still require explicit resolution. This change does not poll clean files for
-remote edits, make OPFS/IndexedDB atomic, or detect every nonempty stale cached
-hash after a crash between their writes. Existing manual/debounced/export work
-can coexist with the two-worker reconciliation pass. Derived exports retain their
-existing retry scheduling rather than using the new source retry deadline.
+A DedicatedWorker belongs to one tab. A SharedWorker could centralize scheduling
+for multiple same-origin tabs and move checksum/serialization work off the UI
+thread, **if all entry points use its message protocol**. Async network waiting
+already yields; CPU work around it can still block the current main thread.
 
-## Verification
+The [multi-tab design](20260520_multi_tab_support.md) chose Web Locks as ownership
+authority and considered SharedWorker unnecessary for that ownership contract;
+a service worker is not an always-running owner. The
+[Codex adapter design](20260310_codexapp.md) kept its first implementation on the
+main thread because async I/O did not justify auth/messaging/lifecycle complexity.
+That rationale concerns the adapter, not a Drive-specific worker decision.
 
-`local.test.ts` covers all three checksum domains, empty failed downloads,
-OPFS backfill, concurrent checksum publication, corrupt-log isolation, recovery
-through the actual sync path, retry deadlines after store recreation, cross-tab
-failure timing, and continuing other files after one fails.
-`driveResyncReconciler.test.ts` covers startup, timer/online wake-ups, offline
-suspension, auth-recovery bypass, cleanup, scan errors and coalescing.
-`DriveSyncStatusTab.test.tsx` distinguishes attempts from successful sync.
+This PR retains the current execution context. A SharedWorker migration needs a
+storage/auth message boundary, reconnect/teardown behavior and browser support
+validation. It would not remove durable recovery after all tabs close, remote
+conflicts, or OPFS/IndexedDB consistency requirements. This PR does not claim to
+move expensive save processing off the UI thread.
 
-See the [recovery CUJ](../CUJs/drive-sync-recovery.md) for manual acceptance steps.
+## Creation and Save As
+
+Mounted-folder creation retains its local record, parent marker and operation ID;
+`.runme` content comes from OPFS. Direct creation and Save As persist the complete
+serialized notebook, fingerprint, destination folder, name and operation ID in
+IndexedDB `driveCreates` (schema version 7) **before Drive I/O**. Payload and
+request commit together without a visible staging notebook or an additional
+OPFS/IndexedDB two-write gap. Existing `.runme` notebooks still use OPFS.
+
+Each intentional Save As gets a new operation ID. Retries reuse it. Same-key
+input changes fail. Recovery verifies the payload fingerprint and parses it;
+corrupt content remains stored with an error and is never replaced by an empty
+upload. The request pins a folder and operation identity, not a Google account;
+current credentials must have access to the destination.
+
+The common queue invokes the existing idempotent creation engine, retaining its
+reserved/known remote ID and operation-marker journal. Interrupted create,
+verification or mirror initialization resumes the same remote operation.
+Ambiguous create outcomes follow that engine's lookup rules rather than blindly
+creating again. Adoption must preserve newer remote edits.
+
+Mark complete only after remote verification/local initialization. Release the
+payload, retain a compact result/fingerprint receipt, and expire completed
+receipts after seven days. Unfinished requests never expire with session cleanup.
+Legacy localStorage-only attempts lacking payload still need their original
+caller to retry. Local receipt retention is not permanent cross-profile
+idempotency. Background recovery never opens/focuses a tab; an explicit caller
+can open the completed notebook.
+
+Drive Status includes pending creation before a mirror exists: last error and
+live retry eligibility, with retry through **Sync Required** but no broken
+notebook-open link. Existing source rows display saved errors and last attempt
+separately from last successful sync. Eligibility depends on auth, connectivity,
+other work and locks; it is not an exact execution promise.
+
+## Validation and limits
+
+Tests cover unchanged/empty failed downloads, format-specific hashes, OPFS repair
+and corruption isolation, coalescing/delays/backoff, edits during processing,
+manual joins, controller restart, direct-create payload retention/key conflicts,
+receipt cleanup, creation/export/source serialization across controllers, status
+and AppKernel callers. Existing creation-engine tests retain interrupted-create
+and remote-adoption coverage. See the [CUJ](../CUJs/drive-sync-recovery.md) for live
+acceptance steps; automated transport mocks are not live Drive failure injection.
+
+Retries cannot fix permissions/quota or auto-resolve conflicts. Clean remote-file
+polling, nonempty stale checksum repair, SharedWorker migration and the separate
+Logs-view memory investigation are outside this PR.

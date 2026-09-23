@@ -1,5 +1,4 @@
 import { create } from "@bufbuild/protobuf";
-import md5 from "md5";
 import { Code } from "@buf/googleapis_googleapis.bufbuild_es/google/rpc/code_pb";
 import { RunIntent, type StreamsLike } from "@runmedev/renderers";
 import { Subject } from "rxjs";
@@ -1646,30 +1645,12 @@ describe("NotebookData.runCodeCell", () => {
   });
 
   it("supports drive.saveAsCurrentNotebook in appkernel cells", async () => {
-    let uploadedContent = "";
-    const createContent = vi.fn().mockImplementation(
-      async (_folder, _name, content) => {
-        uploadedContent = content;
-        return {
-          uri: "https://drive.google.com/file/d/saveas123/view",
-          name: "copy.json",
-        };
-      },
-    );
-    const getVersionMetadata = vi.fn().mockImplementation(async () => ({
-      md5Checksum: md5(uploadedContent),
-      headRevisionId: "drive-revision-1",
-    }));
-    appState.setDriveNotebookStore({
-      createContent,
-      getVersionMetadata,
-    } as any);
-    const addFile = vi.fn().mockResolvedValue("local://file/saveas-copy");
-    const initializeUploadedDriveNotebook = vi.fn().mockResolvedValue(true);
-    appState.setLocalNotebooks({
-      addFile,
-      initializeUploadedDriveNotebook,
-    } as any);
+    const createDriveNotebookRequest = vi.fn().mockResolvedValue({
+      fileId: "saveas123", fileName: "copy.json",
+      remoteUri: "https://drive.google.com/file/d/saveas123/view",
+      localUri: "local://file/saveas-copy",
+    });
+    appState.setLocalNotebooks({createDriveNotebookRequest} as any);
     const openNotebook = vi.fn().mockResolvedValue(undefined);
     appState.setOpenNotebookHandler(openNotebook);
 
@@ -1702,21 +1683,11 @@ describe("NotebookData.runCodeCell", () => {
       return snap?.metadata?.[RunmeMetadataKey.ExitCode] === "0";
     });
 
-    expect(addFile).toHaveBeenCalledWith(
-      "https://drive.google.com/file/d/saveas123/view",
+    expect(createDriveNotebookRequest).toHaveBeenCalledWith(
+      expect.objectContaining({cells: [expect.objectContaining({refId: "cell-appkernel-saveas"})]}),
+      "https://drive.google.com/drive/folders/folder123",
       "copy.json",
-      { mimeType: "application/json" },
-    );
-    expect(initializeUploadedDriveNotebook).toHaveBeenCalledWith(
-      "local://file/saveas-copy",
-      expect.objectContaining({
-        cells: [expect.objectContaining({ refId: "cell-appkernel-saveas" })],
-      }),
       expect.any(String),
-      {
-        checksum: md5(uploadedContent),
-        revisionId: "drive-revision-1",
-      },
     );
     expect(openNotebook).toHaveBeenCalledWith("local://file/saveas-copy");
 

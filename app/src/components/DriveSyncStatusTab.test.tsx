@@ -172,6 +172,28 @@ describe('DriveSyncStatusTab', () => {
     ).toBeTruthy()
   })
 
+  it('retries pending creation with Drive auth without offering a broken notebook link', async () => {
+    listFileSyncStatusesMock.mockResolvedValue([
+      {
+        ...rows[1],
+        localUri: 'drive-create:pending',
+        googleDriveUrl: '',
+        syncStatus: 'pending-upstream-create',
+      },
+    ])
+    render(<DriveSyncStatusTab />)
+    await waitForStatusLoad()
+    expect(
+      screen.queryByRole('link', { name: 'drive-create:pending' })
+    ).toBeNull()
+    fireEvent.click(screen.getByRole('button', { name: 'Sync Required (1)' }))
+    await waitFor(() =>
+      expect(syncMock).toHaveBeenCalledWith('drive-create:pending')
+    )
+    expect(ensureAccessTokenMock).toHaveBeenCalledWith({ interactive: true })
+    expect(openNotebookMock).not.toHaveBeenCalled()
+  })
+
   it('filters string columns by prefix', async () => {
     render(<DriveSyncStatusTab />)
 

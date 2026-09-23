@@ -1,11 +1,10 @@
 // @vitest-environment jsdom
 import { create } from '@bufbuild/protobuf'
-import md5 from 'md5'
 import { afterEach, describe, expect, it, vi } from 'vitest'
 
 import { parser_pb } from '../../runme/client'
-import { GoogleClientManager } from '../googleClientManager'
 import { driveLinkCoordinator } from '../driveLinkCoordinator'
+import { GoogleClientManager } from '../googleClientManager'
 import { dismissTour, tourGuideStore } from '../tourGuide'
 import { tourUiController } from '../tourUiController'
 import { appState } from './AppState'
@@ -216,13 +215,10 @@ describe('createAppJsGlobals notebook reference helpers', () => {
   })
 
   it('returns the imported local URI after opening a Drive reference', async () => {
-    const first = vi
-      .fn()
-      .mockResolvedValueOnce(null)
-      .mockResolvedValue({
-        id: 'local://file/imported',
-        name: 'Eval Write.json',
-      })
+    const first = vi.fn().mockResolvedValueOnce(null).mockResolvedValue({
+      id: 'local://file/imported',
+      name: 'Eval Write.json',
+    })
     appState.setLocalNotebooks({
       files: {
         where: vi.fn(() => ({
@@ -253,13 +249,10 @@ describe('createAppJsGlobals notebook reference helpers', () => {
   })
 
   it('focuses an imported Drive reference when showing it', async () => {
-    const first = vi
-      .fn()
-      .mockResolvedValueOnce(null)
-      .mockResolvedValue({
-        id: 'local://file/imported',
-        name: 'Eval Write.json',
-      })
+    const first = vi.fn().mockResolvedValueOnce(null).mockResolvedValue({
+      id: 'local://file/imported',
+      name: 'Eval Write.json',
+    })
     appState.setLocalNotebooks({
       files: {
         where: vi.fn(() => ({
@@ -773,30 +766,15 @@ describe('createAppJsGlobals notebook reference helpers', () => {
   })
 
   it('creates and opens one Drive-backed notebook without a local-only source', async () => {
-    let uploadedContent = ''
-    const createContent = vi.fn(async (_folder, _name, content) => {
-      uploadedContent = content
-      return {
-        uri: 'https://drive.google.com/file/d/file123/view',
-        name: 'new.ipynb',
-      }
-    })
-    const getVersionMetadata = vi.fn(async () => ({
-      md5Checksum: md5(uploadedContent),
-      headRevisionId: 'drive-revision-1',
+    const createDriveNotebookRequest = vi.fn(async () => ({
+      fileId: 'file123',
+      fileName: 'new.ipynb',
+      remoteUri: 'https://drive.google.com/file/d/file123/view',
+      localUri: 'local://file/drive-mirror',
     }))
-    const addFile = vi.fn(async () => 'local://file/drive-mirror')
-    const initializeUploadedDriveNotebook = vi.fn(async () => true)
     const openNotebook = vi.fn(async () => undefined)
     const output: string[] = []
-    appState.setDriveNotebookStore({
-      createContent,
-      getVersionMetadata,
-    } as any)
-    appState.setLocalNotebooks({
-      addFile,
-      initializeUploadedDriveNotebook,
-    } as any)
+    appState.setLocalNotebooks({ createDriveNotebookRequest } as any)
     appState.setOpenNotebookHandler(openNotebook)
     const globals = createAppJsGlobals({
       runme: createRunme(),
@@ -816,17 +794,14 @@ describe('createAppJsGlobals notebook reference helpers', () => {
       remoteUri: 'https://drive.google.com/file/d/file123/view',
       localUri: 'local://file/drive-mirror',
     })
-    expect(addFile).toHaveBeenCalledTimes(1)
-    expect(initializeUploadedDriveNotebook).toHaveBeenCalledWith(
-      result.localUri,
+    expect(createDriveNotebookRequest).toHaveBeenCalledOnce()
+    expect(createDriveNotebookRequest).toHaveBeenCalledWith(
       expect.objectContaining({
         cells: [expect.objectContaining({ value: '# New notebook' })],
       }),
-      expect.any(String),
-      {
-        checksum: md5(uploadedContent),
-        revisionId: 'drive-revision-1',
-      }
+      'https://drive.google.com/drive/folders/folder123',
+      'new.ipynb',
+      expect.any(String)
     )
     expect(openNotebook).toHaveBeenCalledWith(result.localUri)
     expect(output.join('')).toContain('Created Drive-backed notebook')

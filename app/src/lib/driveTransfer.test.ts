@@ -1,6 +1,6 @@
 import { create } from '@bufbuild/protobuf'
 import md5 from 'md5'
-import { afterEach, describe, expect, it, vi } from 'vitest'
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 
 import { parser_pb } from '../runme/client'
 import {
@@ -12,15 +12,40 @@ import {
   copyDriveNotebookFile,
   createDriveFile,
   createDriveNotebook,
+  saveNotebookAsDriveCopy as durableSaveAs,
   listDriveFolderItems,
   mountDriveFolder,
-  saveNotebookAsDriveCopy,
+  completeDriveNotebookCreation as saveNotebookAsDriveCopy,
   searchDriveFiles,
   updateDriveFileBytes,
 } from './driveTransfer'
 import { encodeRunmeNotebook } from './notebookFormat'
 import { parseOperationLog, serializeOperationLog } from './operationLog'
 import { appState } from './runtime/AppState'
+
+beforeEach(() => {
+  const setStore = appState.setLocalNotebooks.bind(appState)
+  vi.spyOn(appState, 'setLocalNotebooks').mockImplementation((store) => {
+    if (store)
+      Object.assign(store, {
+        createDriveNotebookRequest: vi.fn(async (notebook, folder, name, id) =>
+          saveNotebookAsDriveCopy(notebook, folder, name, {
+            createOperationId: id,
+            background: true,
+          })
+        ),
+        enqueueDriveBackedFilesNeedingSync: vi.fn(async () => []),
+      })
+    setStore(store)
+  })
+  appState.setLocalNotebooks({} as any)
+  const setDrive = appState.setDriveNotebookStore.bind(appState)
+  vi.spyOn(appState, 'setDriveNotebookStore').mockImplementation((store) => {
+    if (store && !store.findByCreateOperation)
+      store.findByCreateOperation = vi.fn().mockResolvedValue(null)
+    setDrive(store)
+  })
+})
 
 afterEach(() => {
   vi.useRealTimers()
@@ -585,6 +610,8 @@ describe('driveTransfer', () => {
       })
     appState.setDriveNotebookStore({
       createContent,
+      loadContent: vi.fn(async () => uploadedContent),
+      markCreateOperationComplete: vi.fn().mockResolvedValue(undefined),
       getVersionMetadata: vi.fn().mockImplementation(async () => ({
         md5Checksum: md5(uploadedContent),
         headRevisionId: 'runme-revision-1',
@@ -610,7 +637,7 @@ describe('driveTransfer', () => {
       'shared.runme',
       uploadedContent,
       'application/vnd.runme.notebook+jsonl',
-      {}
+      expect.objectContaining({ createOperationId: expect.any(String) })
     )
     expect(initializeUploadedDriveNotebook).toHaveBeenCalledWith(
       result.localUri,
@@ -761,9 +788,9 @@ describe('driveTransfer', () => {
       }
     )
     expect(loadContent).toHaveBeenCalledWith(remoteFile.uri)
-    expect(reconcileDriveNotebook).toHaveBeenCalledWith(
-      'local://file/drive-mirror'
-    )
+    expect(
+      appState.localNotebooks?.enqueueDriveBackedFilesNeedingSync
+    ).toHaveBeenCalledTimes(1)
   })
 
   it('does not overwrite a Drive edit made before completion was marked', async () => {
@@ -1323,7 +1350,7 @@ describe('driveTransfer', () => {
     expect(secondResult).toEqual(firstResult)
     expect(findByCreateOperation).toHaveBeenCalledTimes(1)
     expect(createContent).toHaveBeenCalledTimes(1)
-    expect(openNotebook).toHaveBeenCalledTimes(1)
+    expect(openNotebook).toHaveBeenCalledTimes(2)
   })
 
   it('guards idempotent creation with a cross-context Web Lock', async () => {
@@ -1469,5 +1496,28 @@ describe('driveTransfer', () => {
       nbformat: 4,
       nbformat_minor: 5,
     })
+  })
+})
+
+describe('durable Save As entrypoint', () => {
+  it('assigns a distinct operation ID per intentional copy and opens only after completion', async () => {
+    const result = {
+      fileId: 'id',
+      fileName: 'copy.json',
+      remoteUri: 'drive',
+      localUri: 'local://file/copy',
+    }
+    const request = vi.fn().mockResolvedValue(result)
+    Object.assign(appState.localNotebooks!, {
+      createDriveNotebookRequest: request,
+    })
+    const open = vi.fn().mockResolvedValue(undefined)
+    appState.setOpenNotebookHandler(open)
+    const notebook = create(parser_pb.NotebookSchema, { cells: [] })
+    await durableSaveAs(notebook, 'folder', 'copy.json')
+    await durableSaveAs(notebook, 'folder', 'copy.json')
+    expect(request).toHaveBeenCalledTimes(2)
+    expect(request.mock.calls[0][3]).not.toBe(request.mock.calls[1][3])
+    expect(open).toHaveBeenCalledWith(result.localUri)
   })
 })

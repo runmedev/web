@@ -5,6 +5,7 @@ import md5 from 'md5'
 import { describe, expect, it, vi } from 'vitest'
 
 import { AUTO_IPYNB_KEY } from '../lib/derivedNotebook'
+import * as driveTransfer from '../lib/driveTransfer'
 import {
   clearGoogleDriveRuntime,
   setGoogleDriveBaseUrl,
@@ -141,6 +142,7 @@ function createTestStore(
 ) {
   const localStore = Object.create(LocalNotebooks.prototype) as any
   localStore.files = options.files ?? createMockTable<LocalFileRecord>()
+  localStore.driveCreates = createMockTable<any>()
   localStore.folders = options.folders ?? createMockTable<LocalFolderRecord>()
   if (
     driveStore &&
@@ -272,7 +274,9 @@ describe('LocalNotebooks operation-log storage', () => {
     vi.useFakeTimers()
     try {
       const store = createTestStore({})
-      const exportCopy = vi.spyOn(store, 'syncIpynbFile').mockResolvedValue()
+      const exportCopy = vi
+        .spyOn(store as any, 'performIpynbSync')
+        .mockResolvedValue(undefined)
       const syncSource = vi.fn(async () => {})
       Object.assign(store, { syncFile: syncSource })
       const record = {
@@ -325,7 +329,9 @@ describe('LocalNotebooks operation-log storage', () => {
     const source = 'https://drive.google.com/file/d/source/view'
     const updateDerivedCopyClaimAfterCheck = vi.fn(async () => false)
     const store = createTestStore({ updateDerivedCopyClaimAfterCheck })
-    const sync = vi.spyOn(store, 'syncIpynbFile').mockResolvedValue()
+    const sync = vi
+      .spyOn(store as any, 'performIpynbSync')
+      .mockResolvedValue(undefined)
     await store.files.put({
       id: 'local://file/recover',
       name: 'source.runme',
@@ -354,7 +360,7 @@ describe('LocalNotebooks operation-log storage', () => {
     vi.useFakeTimers()
     try {
       const store = createTestStore({})
-      store.syncIpynbFile = vi.fn(async () => {})
+      ;(store as any).performIpynbSync = vi.fn(async () => {})
       store.syncMarkdownFile = vi.fn(async () => {})
       Object.assign(store, { syncFile: vi.fn(async () => {}) })
       await store.folders.put({
@@ -371,12 +377,12 @@ describe('LocalNotebooks operation-log storage', () => {
       const notebook = await store.load(created.uri)
       notebook.metadata[AUTO_IPYNB_KEY] = 'true'
       await journal.save(created.uri, notebook)
-      expect(store.syncIpynbFile).not.toHaveBeenCalled()
+      expect((store as any).performIpynbSync).not.toHaveBeenCalled()
       await vi.advanceTimersByTimeAsync(19_999)
-      expect(store.syncIpynbFile).not.toHaveBeenCalled()
+      expect((store as any).performIpynbSync).not.toHaveBeenCalled()
       await vi.advanceTimersByTimeAsync(1)
-      expect(store.syncIpynbFile).toHaveBeenCalledTimes(1)
-      expect(store.syncIpynbFile).toHaveBeenCalledWith(created.uri)
+      expect((store as any).performIpynbSync).toHaveBeenCalledTimes(1)
+      expect((store as any).performIpynbSync).toHaveBeenCalledWith(created.uri)
     } finally {
       vi.useRealTimers()
     }
@@ -8446,72 +8452,62 @@ describe('LocalNotebooks level-based Drive recovery', () => {
     expect(statuses).toHaveLength(2)
   })
 
-  it('persists retry backoff across store recreation and clears it after recovery', async () => {
-    vi.useFakeTimers()
-    try {
-      const files = createMockTable<LocalFileRecord>()
-      const first = createTestStore({}, { files })
-      const base = { ...record('retry'), md5Checksum: 'new' }
-      await files.put(base)
-      Object.assign(first, {
-        syncFileInner: vi.fn().mockRejectedValue(new Error('offline')),
-      })
-      await expect(first.sync(base.id)).rejects.toThrow('offline')
-      expect(await files.get(base.id)).toMatchObject({
-        lastSynced: base.lastSynced,
-        lastSyncAttemptedAt: new Date().toISOString(),
-        syncFailureCount: 1,
-        nextSyncAttemptAt: new Date(Date.now() + 120_000).toISOString(),
-      })
-      const reloaded = createTestStore({}, { files })
-      const sync = vi.fn(async () => {
-        await files.update(base.id, { lastRemoteChecksum: 'new' })
-      })
-      Object.assign(reloaded, {
-        syncFileInner: sync,
-        enqueueMarkdownSync: vi.fn(),
-        enqueueIpynbSync: vi.fn(),
-      })
-      expect(await reloaded.reconcileDriveBackedFiles()).toEqual([])
-      expect(sync).not.toHaveBeenCalled()
-      await vi.advanceTimersByTimeAsync(120_000)
-      expect(await reloaded.reconcileDriveBackedFiles()).toEqual([base.id])
-      expect(sync).toHaveBeenCalledTimes(1)
-      expect(await files.get(base.id)).toMatchObject({
-        lastSyncError: undefined,
-        nextSyncAttemptAt: undefined,
-        syncFailureCount: 0,
-      })
-      expect(await reloaded.listDriveBackedFilesNeedingSync()).toEqual([])
-    } finally {
-      vi.useRealTimers()
-    }
+  it('rebuilds pending work after restart without persisting retry deadlines', async () => {
+    const files = createMockTable<LocalFileRecord>()
+    const first = createTestStore({}, { files })
+    const base = { ...record('retry'), md5Checksum: 'new' }
+    await files.put(base)
+    Object.assign(first, {
+      syncFileInner: vi.fn().mockRejectedValue(new Error('offline')),
+    })
+    await expect(first.sync(base.id)).rejects.toThrow('offline')
+    expect(await files.get(base.id)).toMatchObject({
+      lastSyncError: 'Error: offline',
+      lastSynced: base.lastSynced,
+    })
+    expect(await files.get(base.id)).not.toHaveProperty('nextSyncAttemptAt')
+    expect(await files.get(base.id)).not.toHaveProperty('syncFailureCount')
+    first.stopSyncQueue()
+    const reloaded = createTestStore({}, { files })
+    const sync = vi.fn(async () => {
+      await files.update(base.id, { lastRemoteChecksum: 'new' })
+    })
+    Object.assign(reloaded, {
+      syncFileInner: sync,
+      enqueueMarkdownSync: vi.fn(),
+      enqueueIpynbSync: vi.fn(),
+    })
+    expect(await reloaded.reconcileDriveBackedFiles()).toEqual([base.id])
+    await vi.waitFor(() => expect(sync).toHaveBeenCalledTimes(1))
+    expect((await files.get(base.id))?.lastSyncError).toBeUndefined()
+    expect(await reloaded.listDriveBackedFilesNeedingSync()).toEqual([])
+    reloaded.stopSyncQueue()
   })
 
-  it('retries immediately after auth recovery and bounds repeated failures to a 30 minute delay', async () => {
+  it('enqueues while signed out and wakes the same work after auth recovery', async () => {
     const store = createTestStore({})
-    const base = {
-      ...record('auth'),
-      lastSyncError: 'unauthorized',
-      syncFailureCount: 16,
-      nextSyncAttemptAt: new Date(Date.now() + 1_800_000).toISOString(),
-    }
+    const base = { ...record('auth'), lastSyncError: 'unauthorized' }
     await store.files.put(base)
-    const fail = vi.fn().mockRejectedValue(new Error('still unavailable'))
-    Object.assign(store, { syncFileInner: fail })
-    await store.reconcileDriveBackedFiles({ retryErrors: true })
-    expect(fail).toHaveBeenCalledTimes(1)
-    const updated = await store.files.get(base.id)
-    expect(
-      Date.parse(updated!.nextSyncAttemptAt!) -
-        Date.parse(updated!.lastSyncAttemptedAt!)
-    ).toBeGreaterThanOrEqual(1_800_000)
-    expect(
-      Date.parse(updated!.nextSyncAttemptAt!) - Date.now()
-    ).toBeLessThanOrEqual(1_800_000)
+    const sync = vi.fn(async () => {
+      await store.files.update(base.id, {
+        lastRemoteChecksum: base.md5Checksum,
+      })
+    })
+    Object.assign(store, {
+      syncFileInner: sync,
+      enqueueMarkdownSync: vi.fn(),
+      enqueueIpynbSync: vi.fn(),
+    })
+    store.setDriveSyncAvailable(false)
+    expect(await store.reconcileDriveBackedFiles()).toEqual([base.id])
+    await new Promise((resolve) => setTimeout(resolve, 5))
+    expect(sync).not.toHaveBeenCalled()
+    store.setDriveSyncAvailable(true)
+    await vi.waitFor(() => expect(sync).toHaveBeenCalledTimes(1))
+    store.stopSyncQueue()
   })
 
-  it('limits background work to two files and stops when auth is lost', async () => {
+  it('runs one source sync at a time and keeps queued work after auth loss', async () => {
     const store = createTestStore({})
     for (const id of ['one', 'two', 'three'])
       await store.files.put({ ...record(id), md5Checksum: 'new' })
@@ -8524,15 +8520,18 @@ describe('LocalNotebooks level-based Drive recovery', () => {
       enqueueMarkdownSync: vi.fn(),
       enqueueIpynbSync: vi.fn(),
     })
-    let active = true
-    const pass = store.reconcileDriveBackedFiles({
-      shouldContinue: () => active,
-    })
+    expect(await store.reconcileDriveBackedFiles()).toHaveLength(3)
+    await vi.waitFor(() => expect(sync).toHaveBeenCalledTimes(1))
+    store.setDriveSyncAvailable(false)
+    releases.shift()!()
+    await new Promise((resolve) => setTimeout(resolve, 5))
+    expect(sync).toHaveBeenCalledTimes(1)
+    store.setDriveSyncAvailable(true)
     await vi.waitFor(() => expect(sync).toHaveBeenCalledTimes(2))
-    active = false
-    releases.forEach((resolve) => resolve())
-    expect(await pass).toHaveLength(2)
-    expect(sync).toHaveBeenCalledTimes(2)
+    releases.shift()!()
+    await vi.waitFor(() => expect(sync).toHaveBeenCalledTimes(3))
+    releases.shift()!()
+    store.stopSyncQueue()
   })
   it('recovers a failed first download after reload without an edit or an upload', async () => {
     const notebook = create(parser_pb.NotebookSchema, {
@@ -8584,7 +8583,7 @@ describe('LocalNotebooks level-based Drive recovery', () => {
     expect(await restored.listDriveBackedFilesNeedingSync()).toEqual([])
   })
 
-  it('continues past a failed file and honors a failure recorded by another tab while waiting for its lock', async () => {
+  it('serializes independent controllers and continues past a failed file', async () => {
     const files = createMockTable<LocalFileRecord>()
     const coordinator = createTestDriveSyncCoordinator()
     const first = createTestStore(
@@ -8611,9 +8610,16 @@ describe('LocalNotebooks level-based Drive recovery', () => {
       first.reconcileDriveBackedFiles(),
       second.reconcileDriveBackedFiles(),
     ])
-    expect(
-      inner.mock.calls.filter(([uri]) => uri.endsWith('failure'))
-    ).toHaveLength(1)
+    await vi.waitFor(() =>
+      expect(
+        inner.mock.calls.filter(([uri]) => uri.endsWith('failure'))
+      ).toHaveLength(2)
+    )
+    await vi.waitFor(async () =>
+      expect(
+        (await files.get('local://file/success'))?.lastRemoteChecksum
+      ).toBe('new')
+    )
     expect((await files.get('local://file/success'))?.lastRemoteChecksum).toBe(
       'new'
     )
@@ -8642,4 +8648,172 @@ describe('LocalNotebooks level-based Drive recovery', () => {
     await store.listDriveBackedFilesNeedingSync()
     expect((await store.files.get(base.id))?.md5Checksum).toBe('newer-append')
   })
+})
+
+describe('durable direct Drive creation', () => {
+  it('persists input before I/O and replays it after controller restart without opening a tab', async () => {
+    const first = createTestStore({})
+    const notebook = create(parser_pb.NotebookSchema, { cells: [] })
+    const result = {
+      fileId: 'created',
+      fileName: 'created.runme',
+      remoteUri: 'https://drive.google.com/file/d/created/view',
+      localUri: 'local://file/created',
+    }
+    const replay = vi
+      .spyOn(driveTransfer, 'completeDriveNotebookCreation')
+      .mockRejectedValueOnce(new Error('lost response'))
+      .mockResolvedValue(result)
+    try {
+      await expect(
+        first.createDriveNotebookRequest(
+          notebook,
+          'folder',
+          'created.runme',
+          'key'
+        )
+      ).rejects.toThrow('lost response')
+      const pending = await first.driveCreates.get('key')
+      expect(JSON.parse(pending!.notebookJson)).toEqual({})
+      expect(pending?.lastError).toContain('lost response')
+      first.stopSyncQueue()
+      const second = createTestStore({})
+      second.driveCreates = first.driveCreates
+      await second.reconcileDriveBackedFiles()
+      await vi.waitFor(async () =>
+        expect((await second.driveCreates.get('key'))?.result).toEqual(result)
+      )
+      expect(replay).toHaveBeenLastCalledWith(
+        expect.anything(),
+        'folder',
+        'created.runme',
+        { createOperationId: 'key', background: true }
+      )
+      expect((await second.driveCreates.get('key'))?.notebookJson).toBe('')
+      second.stopSyncQueue()
+    } finally {
+      replay.mockRestore()
+      first.stopSyncQueue()
+    }
+  })
+
+  it('rejects key reuse with changed input before another Drive mutation', async () => {
+    const store = createTestStore({})
+    const replay = vi
+      .spyOn(driveTransfer, 'completeDriveNotebookCreation')
+      .mockRejectedValue(new Error('offline'))
+    try {
+      const notebook = create(parser_pb.NotebookSchema, { cells: [] })
+      await expect(
+        store.createDriveNotebookRequest(notebook, 'folder', 'a.runme', 'same')
+      ).rejects.toThrow('offline')
+      await expect(
+        store.createDriveNotebookRequest(notebook, 'folder', 'b.runme', 'same')
+      ).rejects.toThrow('IDEMPOTENCY_CONFLICT')
+      expect(replay).toHaveBeenCalledTimes(1)
+    } finally {
+      store.stopSyncQueue()
+      replay.mockRestore()
+    }
+  })
+})
+
+describe('creation recovery safety', () => {
+  it('retains corrupt payloads, displays the failure, and never calls Drive', async () => {
+    const store = createTestStore({})
+    const replay = vi.spyOn(driveTransfer, 'completeDriveNotebookCreation')
+    const request = {
+      id: 'corrupt',
+      folder: 'folder',
+      name: 'a.runme',
+      notebookJson: 'damaged',
+      fingerprint: 'original',
+    }
+    await store.driveCreates.put(request)
+    try {
+      await expect(store.sync('drive-create:corrupt')).rejects.toThrow(
+        'checksum mismatch'
+      )
+      expect(replay).not.toHaveBeenCalled()
+      expect((await store.driveCreates.get('corrupt'))?.notebookJson).toBe(
+        'damaged'
+      )
+      expect(await store.listFileSyncStatuses()).toContainEqual(
+        expect.objectContaining({
+          localUri: 'drive-create:corrupt',
+          syncStatus: 'error',
+          lastError: expect.stringContaining('checksum mismatch'),
+        })
+      )
+    } finally {
+      store.stopSyncQueue()
+      replay.mockRestore()
+    }
+  })
+
+  it('retains unfinished requests but expires completed receipts after seven days', async () => {
+    const store = createTestStore({})
+    store.setDriveSyncAvailable(false)
+    const request = {
+      id: 'pending',
+      folder: 'folder',
+      name: 'a.runme',
+      notebookJson: '{}',
+      fingerprint: 'hash',
+    }
+    await store.driveCreates.put(request)
+    await store.driveCreates.put({
+      ...request,
+      id: 'complete',
+      completedAt: Date.now() - 8 * 24 * 60 * 60 * 1000,
+      result: { fileId: 'done' } as any,
+    })
+    try {
+      await store.reconcileDriveBackedFiles()
+      expect(await store.driveCreates.get('pending')).toEqual(request)
+      expect(await store.driveCreates.get('complete')).toBeUndefined()
+    } finally {
+      store.stopSyncQueue()
+    }
+  })
+})
+
+it('serializes source, export, and creation across controllers sharing an origin lock', async () => {
+  const coordinator = createTestDriveSyncCoordinator()
+  const a = createTestStore({}, { driveSyncCoordinator: coordinator })
+  const b = createTestStore({}, { driveSyncCoordinator: coordinator })
+  let release!: () => void
+  const blocked = new Promise<void>((resolve) => {
+    release = resolve
+  })
+  const source = vi
+    .spyOn(a as any, 'performSyncFile')
+    .mockImplementation(async () => {
+      await blocked
+    })
+  const exporting = vi
+    .spyOn(b as any, 'performIpynbSync')
+    .mockResolvedValue(undefined)
+  const creating = vi
+    .spyOn(b as any, 'performDriveCreate')
+    .mockResolvedValue({})
+  try {
+    const first = a.sync('local://file/source')
+    await vi.waitFor(() => expect(source).toHaveBeenCalledOnce())
+    const others = [
+      b.syncIpynbFile('local://file/export'),
+      b.sync('drive-create:pending'),
+    ]
+    await new Promise((resolve) => setTimeout(resolve, 10))
+    expect(exporting).not.toHaveBeenCalled()
+    expect(creating).not.toHaveBeenCalled()
+    release()
+    await Promise.all([first, ...others])
+    expect(exporting).toHaveBeenCalledOnce()
+    expect(creating).toHaveBeenCalledOnce()
+  } finally {
+    release()
+    a.stopSyncQueue()
+    b.stopSyncQueue()
+  }
 })

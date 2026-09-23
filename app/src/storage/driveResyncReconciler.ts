@@ -24,7 +24,7 @@ export function startDriveResyncReconciler(
     }
     running = true
     try {
-      const attempted = await store.reconcileDriveBackedFiles({
+      const queued = await store.reconcileDriveBackedFiles({
         retryErrors,
         shouldContinue: canRun,
       })
@@ -32,8 +32,8 @@ export function startDriveResyncReconciler(
         attrs: {
           scope: 'storage.drive.sync',
           code: 'DRIVE_RESYNC_RECONCILE_COMPLETE',
-          attemptedCount: attempted.length,
-          localUris: attempted,
+          queuedCount: queued.length,
+          workKeys: queued,
         },
       })
     } catch (error) {

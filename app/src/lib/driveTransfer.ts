@@ -351,7 +351,7 @@ export async function moveDriveFileToTrash(idOrUri: string) {
   }
 }
 
-type DriveNotebookCreationResult = {
+export type DriveNotebookCreationResult = {
   fileId: string
   fileName: string
   remoteUri: string
@@ -507,11 +507,36 @@ async function hashCreateOperationId(value: string): Promise<string> {
   ).join('')
 }
 
+/** Persist an immutable request before Drive I/O; retries reuse its operation ID. */
 export async function saveNotebookAsDriveCopy(
   notebook: parser_pb.Notebook,
   folder: string,
   name: string,
   options: { createOperationId?: string } = {}
+): Promise<DriveNotebookCreationResult> {
+  const localStore = ensureLocalStore()
+  const folderRef = canonicalDriveFolderRef(
+    folder,
+    'drive.saveAsCurrentNotebook'
+  )
+  const operationId = options.createOperationId?.trim() || crypto.randomUUID()
+  const result = await localStore.createDriveNotebookRequest(
+    notebook,
+    folderRef,
+    name,
+    operationId
+  )
+  // Opening is an explicit caller action, never a side effect of background replay.
+  await appState.openNotebook(result.localUri)
+  return result
+}
+
+/** Replay one durable creation request. Only the sync controller uses background=true. */
+export async function completeDriveNotebookCreation(
+  notebook: parser_pb.Notebook,
+  folder: string,
+  name: string,
+  options: { createOperationId?: string; background?: boolean } = {}
 ): Promise<DriveNotebookCreationResult> {
   if (!notebook) {
     throw new Error('drive.saveAsCurrentNotebook requires a notebook')
@@ -839,11 +864,13 @@ export async function saveNotebookAsDriveCopy(
       upstreamVersion
     )
     if (!initialized) {
-      await localStore.reconcileDriveNotebook(localUri)
+      if (options.background)
+        await localStore.enqueueDriveBackedFilesNeedingSync()
+      else await localStore.reconcileDriveNotebook(localUri)
     }
 
     try {
-      await appState.openNotebook(localUri)
+      if (!options.background) await appState.openNotebook(localUri)
     } catch (error) {
       appLogger.error(
         'Saved Drive copy but failed to switch current notebook',

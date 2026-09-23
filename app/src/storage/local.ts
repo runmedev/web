@@ -1,7 +1,6 @@
 import { create, fromJsonString, toJsonString } from '@bufbuild/protobuf'
 import Dexie, { Table } from 'dexie'
 import md5 from 'md5'
-import { Subject, debounceTime } from 'rxjs'
 import { v4 as uuidv4 } from 'uuid'
 
 import { migrateNotebookCellIds } from '../lib/cellIdentity'
@@ -133,6 +132,7 @@ import {
   type RevisionDocStorage,
   createDefaultRevisionDocStorage,
 } from './revisionDocs'
+import { SyncDeferred, SyncWorkQueue } from './syncWorkQueue'
 
 // Local folder URI is a special folder that contains all notebooks which are local (i.e. not synced to Drive)
 export const LOCAL_FOLDER_URI = 'local://folder/local'
@@ -152,6 +152,18 @@ const PROVISIONAL_DRIVE_CHILD_TTL_MS = 60_000
 // both sessions are actively editing. Each attempt performs network I/O, so a
 // larger bounded budget improves convergence without creating a tight loop.
 const DRIVE_OPERATION_LOG_MERGE_ATTEMPTS = 8
+
+/** Creation payload and identity are one atomic IndexedDB record, never a visible staging notebook. */
+export interface PendingDriveCreate {
+  id: string
+  folder: string
+  name: string
+  notebookJson: string
+  fingerprint: string
+  result?: import('../lib/driveTransfer').DriveNotebookCreationResult
+  completedAt?: number
+  lastError?: string
+}
 
 /**
  * LocalFileRecord captures the information needed to persist a notebook locally.
@@ -200,10 +212,8 @@ export interface LocalFileRecord {
   lastSynced: string
   /** Last successfully observed upstream revision/checksum metadata. */
   lastUpstreamVersion?: UpstreamVersion
-  /** Persisted attempt/backoff metadata; checksums remain the source of dirtiness. */
+  /** Diagnostic attempt time; retry counters/deadlines belong to the live queue. */
   lastSyncAttemptedAt?: string
-  nextSyncAttemptAt?: string
-  syncFailureCount?: number
   /** Last sync failure, if any. Cleared after successful sync. */
   lastSyncError?: string
   /** Durable local-vs-upstream conflict snapshot, if upstream sync is blocked. */
@@ -391,6 +401,7 @@ export interface LocalFolderRecord {
 export class LocalNotebooks extends Dexie {
   /** IndexedDB table where notebook files are stored. */
   files!: Table<LocalFileRecord, string>
+  driveCreates!: Table<PendingDriveCreate, string>
 
   /** IndexedDB table where folder metadata is stored. */
   folders!: Table<LocalFolderRecord, string>
@@ -403,9 +414,146 @@ export class LocalNotebooks extends Dexie {
   private readonly ipynbShadowStorage: IpynbShadowStorage
   private readonly operationLogStorage: OperationLogStorage
 
-  private readonly syncSubjects = new Map<string, Subject<void>>()
-  private readonly markdownSyncSubjects = new Map<string, Subject<void>>()
-  private readonly ipynbSyncSubjects = new Map<string, Subject<void>>()
+  private workQueue?: SyncWorkQueue
+  private driveAvailable = true
+
+  /** Store the exact input before attempting creation; a crash can replay it. */
+  async createDriveNotebookRequest(
+    notebook: parser_pb.Notebook,
+    folder: string,
+    name: string,
+    id: string
+  ): Promise<import('../lib/driveTransfer').DriveNotebookCreationResult> {
+    if (!detectNotebookFileFormat(name))
+      throw new Error('Notebook name must end in .runme, .ipynb, or .json')
+    const notebookJson = serializeNotebook(notebook)
+    const request: PendingDriveCreate = {
+      id,
+      folder,
+      name,
+      notebookJson,
+      fingerprint: md5(notebookJson),
+    }
+    await this.transaction('rw', this.driveCreates, async () => {
+      const existing = await this.driveCreates.get(id)
+      if (
+        existing &&
+        (existing.folder !== folder ||
+          existing.name !== name ||
+          existing.fingerprint !== request.fingerprint)
+      )
+        throw new Error(
+          'IDEMPOTENCY_CONFLICT: creation key already has different input'
+        )
+      if (!existing) await this.driveCreates.put(request)
+    })
+    await this.queueDriveWork(
+      'create',
+      id,
+      async () => {
+        await this.performDriveCreate(id)
+      },
+      { immediate: true }
+    )
+    const result = (await this.driveCreates.get(id))?.result
+    if (!result) throw new Error('Drive creation has not completed')
+    return result
+  }
+
+  private async performDriveCreate(
+    id: string
+  ): Promise<import('../lib/driveTransfer').DriveNotebookCreationResult> {
+    const request = await this.driveCreates.get(id)
+    if (!request) throw new Error('Pending Drive creation request missing')
+    if (request.result) return request.result
+    try {
+      if (md5(request.notebookJson) !== request.fingerprint)
+        throw new Error(
+          'Creation payload checksum mismatch; preserving request for recovery'
+        )
+      const parsed = parseSerializedNotebook(request.notebookJson)
+      if (!parsed.ok)
+        throw new Error(
+          'Creation payload is corrupt; preserving request for recovery'
+        )
+      const { completeDriveNotebookCreation } = await import(
+        '../lib/driveTransfer'
+      )
+      const result = await completeDriveNotebookCreation(
+        parsed.notebook,
+        request.folder,
+        request.name,
+        { createOperationId: request.id, background: true }
+      )
+      await this.driveCreates.update(id, {
+        result,
+        completedAt: Date.now(),
+        notebookJson: '',
+        lastError: undefined,
+      })
+      return result
+    } catch (error) {
+      await this.driveCreates.update(id, { lastError: String(error) })
+      throw error
+    }
+  }
+
+  /** Authentication gates I/O, never local persistence or enqueueing. */
+  setDriveSyncAvailable(available: boolean): void {
+    this.driveAvailable = available
+    if (available) this.workQueue?.wake()
+  }
+
+  /** Timers are ephemeral; the next controller rebuilds work from stored state. */
+  stopSyncQueue(): void {
+    this.workQueue?.close()
+    this.workQueue = undefined
+  }
+
+  private getWorkQueue(): SyncWorkQueue {
+    return (this.workQueue ??= new SyncWorkQueue({
+      onChange: (key) => this.notifySync(key.slice(key.indexOf(':') + 1)),
+    }))
+  }
+
+  /** All save/export paths share one queue and one same-origin network lock. */
+  private queueDriveWork(
+    kind: string,
+    uri: string,
+    operation: () => Promise<void>,
+    options: { immediate?: boolean; delayMs?: number } = {}
+  ): Promise<void> {
+    const run = () =>
+      this.driveSyncCoordinator.runExclusive('__all_drive_work__', async () => {
+        const record = kind === 'create' ? undefined : await this.files.get(uri)
+        const usesDrive =
+          kind === 'create' ||
+          (record &&
+            (isDriveUri(record.remoteId) || record.parentRemoteIdWhenCreated))
+        if (
+          usesDrive &&
+          (this.driveAvailable === false ||
+            (typeof navigator !== 'undefined' && navigator.onLine === false))
+        ) {
+          throw new SyncDeferred(120_000)
+        }
+        if (!options.immediate && record) {
+          const succeededAt =
+            kind === 'source'
+              ? record.lastSynced
+              : kind === 'ipynb'
+                ? record.ipynbExportedAt
+                : undefined
+          const remaining = Date.parse(succeededAt ?? '') + 120_000 - Date.now()
+          if (remaining > 0) throw new SyncDeferred(remaining)
+        }
+        await operation()
+      })
+    const queue = this.getWorkQueue()
+    if (options.immediate) return queue.run(`${kind}:${uri}`, run)
+    queue.add(`${kind}:${uri}`, run, options.delayMs ?? 0)
+    return Promise.resolve()
+  }
   private readonly inFlightSyncs = new Map<string, Promise<void>>()
   private readonly syncListeners = new Map<string, Set<() => void>>()
 
@@ -504,9 +652,12 @@ export class LocalNotebooks extends Dexie {
       folders: '&id, remoteId, name, lastSynced',
     })
 
+    this.version(7).stores({ driveCreates: '&id' })
+
     // Bind the table helpers so callers can access them directly.
     this.files = this.table('files')
     this.folders = this.table('folders')
+    this.driveCreates = this.table('driveCreates')
 
     this.driveStore = driveStore
     this.driveSyncCoordinator = driveSyncCoordinator
@@ -1222,6 +1373,18 @@ export class LocalNotebooks extends Dexie {
   }
 
   async sync(localUri: string): Promise<void> {
+    if (localUri.startsWith('drive-create:')) {
+      const id = localUri.slice('drive-create:'.length)
+      await this.queueDriveWork(
+        'create',
+        id,
+        async () => {
+          await this.performDriveCreate(id)
+        },
+        { immediate: true }
+      )
+      return
+    }
     if (localUri.startsWith('local://file/')) {
       await this.syncFile(localUri)
       return
@@ -1333,12 +1496,26 @@ export class LocalNotebooks extends Dexie {
           '',
         lastSynced: state.lastSynced,
         lastSyncAttemptedAt: state.lastSyncAttemptedAt,
-        nextSyncAttemptAt: state.nextSyncAttemptAt,
+        nextSyncAttemptAt: this.workQueue?.nextAttempt(`source:${record.id}`),
         syncStatus: state.status,
         lastError: state.lastError,
       })
     }
 
+    for (const request of await this.driveCreates.toArray()) {
+      if (request.result) continue
+      rows.push({
+        localUri: `drive-create:${request.id}`,
+        title: request.name,
+        googleDriveUrl: '',
+        revision: '',
+        upstreamRevision: '',
+        lastSynced: '',
+        nextSyncAttemptAt: this.workQueue?.nextAttempt(`create:${request.id}`),
+        syncStatus: request.lastError ? 'error' : 'pending-upstream-create',
+        lastError: request.lastError,
+      })
+    }
     return rows
   }
 
@@ -4048,6 +4225,15 @@ export class LocalNotebooks extends Dexie {
    * by Google Drive.
    */
   async syncMarkdownFile(localUri: string): Promise<void> {
+    return this.queueDriveWork(
+      'markdown',
+      localUri,
+      () => this.performMarkdownSync(localUri),
+      { immediate: true }
+    )
+  }
+
+  private async performMarkdownSync(localUri: string): Promise<void> {
     if (!localUri.startsWith('local://file/')) {
       throw new Error('syncMarkdownFile expects a local://file/ URI')
     }
@@ -4121,8 +4307,10 @@ export class LocalNotebooks extends Dexie {
           : deserializeNotebook(record.doc ?? '')
       markdownContent = serializeNotebookToMarkdown(notebook)
     } catch (error) {
-      console.error('Failed to serialize notebook to markdown', error)
-      return
+      appLogger.warn('Failed to serialize notebook to markdown', {
+        attrs: { scope: 'storage.drive.sync', error: String(error) },
+      })
+      throw error
     }
 
     try {
@@ -4132,7 +4320,7 @@ export class LocalNotebooks extends Dexie {
         'text/markdown'
       )
     } catch (error) {
-      console.error('Failed to upload markdown sidecar to Drive', error)
+      throw error
     }
   }
 
@@ -4164,38 +4352,30 @@ export class LocalNotebooks extends Dexie {
     const pending: string[] = []
 
     for (const record of driveBackedFiles) {
-      if (record.conflict) {
-        continue
-      }
-      if (record.remoteId === '' && record.parentRemoteIdWhenCreated) {
-        pending.push(record.id)
-        continue
-      }
-      // A failed read is also unfinished work, even when both cached hashes
-      // are empty or unchanged. Do not erase its diagnostic to call it clean.
-      if (record.lastSyncError) {
-        pending.push(record.id)
-        continue
-      }
-      let localChecksum: string
-      try {
-        localChecksum = await this.getOrBackfillLocalChecksum(record.id, record)
-      } catch {
-        // Let normal sync report/recover this file; one corrupt OPFS entry must
-        // not abort reconciliation of every other notebook.
-        pending.push(record.id)
-        continue
-      }
-      const upstreamNotebookChecksum =
+      if (await this.needsDriveSourceSync(record)) pending.push(record.id)
+    }
+    return pending
+  }
+
+  /** Read only this record at dequeue time, rather than rescanning all files per item. */
+  private async needsDriveSourceSync(
+    record: LocalFileRecord
+  ): Promise<boolean> {
+    if (record.conflict) return false
+    if (record.remoteId === '' && record.parentRemoteIdWhenCreated) return true
+    if (!isDriveUri(record.remoteId)) return false
+    if (record.lastSyncError) return true
+    try {
+      const local = await this.getOrBackfillLocalChecksum(record.id, record)
+      const baseline =
         detectNotebookFileFormat(record.name) === 'ipynb'
           ? (record.ipynbPreservation?.baselineNotebookChecksum ?? '')
           : (record.lastRemoteChecksum ?? '')
-      if (localChecksum !== upstreamNotebookChecksum) {
-        pending.push(record.id)
-      }
+      return local !== baseline
+    } catch {
+      // One corrupt record must neither disappear nor abort the whole scan.
+      return true
     }
-
-    return pending
   }
 
   /**
@@ -4249,10 +4429,10 @@ export class LocalNotebooks extends Dexie {
   }
 
   /**
-   * Reconcile durable source work with two workers. The timer is only a wake-up:
-   * all pending work and retry deadlines are recovered from IndexedDB each pass.
-   * Manual sync and auth recovery may bypass the deadline; periodic/online work
-   * respects it. Existing syncFile locks and format-specific conflict rules own
+   * Enqueue durable source/creation work for the single delaying worker. The timer is only a wake-up:
+   * pending work is reconstructed from IndexedDB; retry deadlines remain in memory.
+   * Manual sync may request an immediate attempt; automatic work respects
+   * queue delays and the last successful save. Existing syncFile locks and format-specific conflict rules own
    * the actual upload/download decision.
    */
   async reconcileDriveBackedFiles(
@@ -4262,50 +4442,43 @@ export class LocalNotebooks extends Dexie {
     } = {}
   ): Promise<string[]> {
     const pending = await this.listDriveBackedFilesNeedingSync()
-    const attempted: string[] = []
-    let index = 0
-    const worker = async () => {
-      while (index < pending.length && (options.shouldContinue?.() ?? true)) {
-        const uri = pending[index++]
-        const record = await this.files.get(uri)
-        if (!record || record.conflict) continue
+    if (options.retryErrors) this.workQueue?.wake()
+    const queued: string[] = []
+    for (const request of await this.driveCreates.toArray()) {
+      if (request.result) {
         if (
-          !options.retryErrors &&
-          Date.parse(record.nextSyncAttemptAt ?? '') > Date.now()
+          request.completedAt &&
+          request.completedAt < Date.now() - 7 * 86_400_000
         )
-          continue
-        attempted.push(uri)
-        try {
-          await this.syncFile(uri, !options.retryErrors)
-          this.enqueueMarkdownSync(uri)
-        } catch {
-          // syncFile persisted and logged the failure. Other files still run.
-        }
+          await this.driveCreates.delete(request.id)
+        continue
       }
+      if (!(options.shouldContinue?.() ?? true)) break
+      await this.queueDriveWork('create', request.id, async () => {
+        if (await this.driveCreates.get(request.id))
+          await this.performDriveCreate(request.id)
+      })
     }
-    await Promise.all([worker(), worker()])
-    // Derived copies have independent recovery state; clean sources can still
-    // need an export retry. Do not reset source debounce timers from each tick.
+    for (const uri of pending) {
+      if (!(options.shouldContinue?.() ?? true)) break
+      queued.push(uri)
+      await this.queueDriveWork('source', uri, async () => {
+        // State may have changed while delayed or while another tab held the lock.
+        const record = await this.files.get(uri)
+        if (!record || !(await this.needsDriveSourceSync(record))) return
+        await this.performSyncFile(uri)
+        this.enqueueMarkdownSync(uri)
+      })
+    }
     if (options.shouldContinue?.() ?? true)
       await this.enqueueFailedDriveExports()
-    return attempted
+    return queued
   }
 
   private enqueueSync(uri: string): void {
-    let subject = this.syncSubjects.get(uri)
-    if (!subject) {
-      subject = new Subject<void>()
-      const DEBOUNCE_TIME_MS = 20 * 1000 // 20 seconds
-      subject.pipe(debounceTime(DEBOUNCE_TIME_MS)).subscribe(async () => {
-        try {
-          await this.syncFile(uri)
-        } catch {
-          // syncFile retains and logs the error; the level reconciler retries it.
-        }
-      })
-      this.syncSubjects.set(uri, subject)
-    }
-    subject.next()
+    void this.queueDriveWork('source', uri, () => this.performSyncFile(uri), {
+      delayMs: 20_000,
+    })
   }
 
   private notifySync(uri: string): void {
@@ -4330,37 +4503,29 @@ export class LocalNotebooks extends Dexie {
 
   private enqueueMarkdownSync(uri: string): void {
     this.enqueueIpynbSync(uri)
-    let mdSubject = this.markdownSyncSubjects.get(uri)
-    if (!mdSubject) {
-      mdSubject = new Subject<void>()
-      const DEBOUNCE_TIME_MS = 20 * 1000 // 20 seconds
-      mdSubject.pipe(debounceTime(DEBOUNCE_TIME_MS)).subscribe(async () => {
-        try {
-          await this.syncMarkdownFile(uri)
-        } catch (error) {
-          console.error('Failed to synchronise markdown sidecar', uri, error)
-        }
-      })
-      this.markdownSyncSubjects.set(uri, mdSubject)
-    }
-    mdSubject.next()
+    void this.queueDriveWork(
+      'markdown',
+      uri,
+      () => this.performMarkdownSync(uri),
+      { delayMs: 20_000 }
+    )
   }
 
-  /** Queue derived work independently: export failure cannot reject a source save. */
+  /** Derived failures retry independently and never reject a persisted source edit. */
   private enqueueIpynbSync(uri: string): void {
-    let subject = this.ipynbSyncSubjects.get(uri)
-    if (!subject) {
-      subject = new Subject<void>()
-      subject.pipe(debounceTime(20_000)).subscribe(() => {
-        void this.syncIpynbFile(uri).catch(() => undefined)
-      })
-      this.ipynbSyncSubjects.set(uri, subject)
-    }
-    subject.next()
+    void this.queueDriveWork('ipynb', uri, () => this.performIpynbSync(uri), {
+      delayMs: 20_000,
+    })
   }
 
   /** Publish the latest committed .runme snapshot as an optional Drive sibling. */
   async syncIpynbFile(uri: string): Promise<void> {
+    return this.queueDriveWork('ipynb', uri, () => this.performIpynbSync(uri), {
+      immediate: true,
+    })
+  }
+
+  private async performIpynbSync(uri: string): Promise<void> {
     await this.driveSyncCoordinator.runExclusive(uri, async () => {
       try {
         const record = await this.files.get(uri)
@@ -4765,10 +4930,18 @@ export class LocalNotebooks extends Dexie {
     return null
   }
 
-  private async syncFile(
-    localUri: string,
-    respectRetryAfter = false
-  ): Promise<void> {
+  private async syncFile(localUri: string): Promise<void> {
+    const existing = this.inFlightSyncs.get(localUri)
+    if (existing) return existing
+    return this.queueDriveWork(
+      'source',
+      localUri,
+      () => this.performSyncFile(localUri),
+      { immediate: true }
+    )
+  }
+
+  private async performSyncFile(localUri: string): Promise<void> {
     const existingSync = this.inFlightSyncs.get(localUri)
     if (existingSync) {
       return existingSync
@@ -4776,14 +4949,6 @@ export class LocalNotebooks extends Dexie {
 
     const operation = Promise.resolve().then(() =>
       this.driveSyncCoordinator.runExclusive(localUri, async () => {
-        // Another tab can fail while this caller waits for its lock. Recheck
-        // the durable backoff before retrying from a periodic scan.
-        const record = await this.files.get(localUri)
-        if (
-          respectRetryAfter &&
-          Date.parse(record?.nextSyncAttemptAt ?? '') > Date.now()
-        )
-          return
         await this.files.update(localUri, {
           lastSyncAttemptedAt: nowIsoString(),
         })
@@ -4793,27 +4958,16 @@ export class LocalNotebooks extends Dexie {
           await this.syncFileInner(localUri)
           await this.files.update(localUri, {
             lastSyncError: undefined,
-            nextSyncAttemptAt: undefined,
-            syncFailureCount: 0,
           })
           this.enqueueIpynbSync(localUri)
         } catch (error) {
-          const failures = Math.min(16, (record?.syncFailureCount ?? 0) + 1)
-          const delay = Math.min(30 * 60_000, 2 * 60_000 * 2 ** (failures - 1))
-          const nextSyncAttemptAt = new Date(Date.now() + delay).toISOString()
-          await this.files.update(localUri, {
-            lastSyncError: String(error),
-            syncFailureCount: failures,
-            nextSyncAttemptAt,
-          })
-          appLogger.warn('Notebook sync failed; retained for reconciliation', {
+          await this.files.update(localUri, { lastSyncError: String(error) })
+          appLogger.warn('Notebook sync failed; queued for retry', {
             attrs: {
               scope: 'storage.drive.sync',
               code: 'NOTEBOOK_SYNC_FAILED',
               localUri,
               error: String(error),
-              nextSyncAttemptAt,
-              failures,
             },
           })
           throw error
@@ -6192,7 +6346,7 @@ function syncStateForRecord(
     parentRemoteIdWhenCreated: record.parentRemoteIdWhenCreated,
     lastSynced: record.lastSynced || undefined,
     lastSyncAttemptedAt: record.lastSyncAttemptedAt,
-    nextSyncAttemptAt: record.nextSyncAttemptAt,
+    nextSyncAttemptAt: undefined,
     lastUpstreamVersion: record.lastUpstreamVersion,
     conflict: summarizeConflictForSync(record.conflict),
     lastError: record.lastSyncError || fallbackError,
