@@ -86,3 +86,39 @@ Record the commit, origin, identity type (no tokens), status and upstream conten
 
 Permission/quota failures need corrective action; retries cannot grant either.
 Different origins/profiles are outside the same-origin coordination guarantee.
+
+## Local-first notebook opening
+
+Opening a cached notebook must not wait for Drive, including an already running
+sync for a different notebook. A `.runme` operation-log reference identifies local
+content even though its IndexedDB `doc` is empty. Cached JSON/IPYNB models also
+open locally. An old or missing successful-sync timestamp schedules background
+reconciliation; it does not make available content an initial-download miss.
+Only an uncached notebook waits for upstream content, and a failed first download
+must surface the error instead of showing an empty notebook.
+
+Creating a file in a mounted Drive folder already persists it locally and starts
+Drive creation asynchronously. Its subsequent open must honor that contract:
+users can edit, save, close and reopen while `pending-upstream-create` remains.
+The existing operation ID and retry state own eventual upstream creation.
+
+Automated coverage:
+
+- `local.test.ts`, `LocalNotebooks local-first open`: blocked shared queue, cached
+  OPFS and legacy models, offline pending creation/edit/reopen, and failed first
+  downloads even when metadata has a recent successful-sync timestamp.
+- The stale operation-log merge test opens local content first, then explicitly
+  reconciles and verifies convergence without rewriting the loaded snapshot.
+- `storage-owner-smoke.ts` stalls credential delivery in an isolated Chromium
+  profile so no real Drive request is sent. While that worker reconciliation is
+  pending, a second tab opens cached OPFS content and creates/edits/reopens a new
+  notebook in a test Drive folder. Each local open has a two-second deadline,
+  shorter than credential or RPC timeouts. Browser restart preserves exact bytes.
+
+Manual acceptance: with a development build and disposable notebooks, take Drive
+credentials/connectivity offline, reopen an existing cached notebook, and create a
+new file in an already mounted Drive folder. Edit and reopen both. Restore Drive
+and verify eventual convergence and a single upstream identity. A notebook never
+downloaded locally must still report the unavailable dependency. Background
+reconciliation does not replace an editor's mounted causal view; explicit refresh
+continues to read the local log without upstream I/O.

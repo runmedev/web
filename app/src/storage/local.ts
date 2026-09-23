@@ -3282,27 +3282,29 @@ export class LocalNotebooks extends Dexie {
       )
     }
 
-    const shouldSync = needsSync(existing.lastSynced, 8 * 60 * 60 * 1000)
+    const operationLog =
+      detectNotebookFileFormat(existing.name) === 'runme-operation-log'
+    // A .runme file keeps its content in OPFS, not the empty IndexedDB doc
+    // placeholder. Pending Drive creation does not make that local log a miss.
+    const hasLocalContent = operationLog
+      ? Boolean(existing.operationLogRef)
+      : Boolean(existing.doc) || isLocalFileUpstream(existing.remoteId, uri)
 
     let record = existing
-    if (shouldSync) {
-      // Best-effort attempt to ensure the local cache reflects the latest remote state
-      // before we hydrate the notebook for the caller.
-      try {
-        await this.syncFile(uri)
-      } catch (error) {
-        appLogger.warn(
-          'Continuing with local notebook after sync-on-load failed',
-          {
-            attrs: {
-              scope: 'storage.local.sync',
-              localUri: uri,
-              error: String(error),
-            },
-          }
-        )
+    if (hasLocalContent) {
+      // Reconciliation must never gate offline editing. Use the background queue
+      // so auth deferrals/backoff survive opening a tab, and do not replace its
+      // mounted causal view when upstream work eventually completes.
+      if (
+        needsSync(existing.lastSynced, 8 * 60 * 60 * 1000) &&
+        !isLocalFileUpstream(existing.remoteId, uri)
+      ) {
+        this.enqueueSync(uri)
       }
-
+    } else {
+      // Only the first download needs foreground upstream I/O. Propagate its
+      // failure rather than presenting an empty notebook as a successful load.
+      await this.syncFile(uri)
       const refreshed = await this.files.get(uri)
       if (!refreshed) {
         throw new Error(`Local notebook record missing for ${uri} after sync.`)

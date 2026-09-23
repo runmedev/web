@@ -2303,7 +2303,7 @@ describe('LocalNotebooks operation-log storage', () => {
     expect(reviews).toHaveLength(1)
   })
 
-  it('loads stale Drive-backed .runme data by merging local and remote operations', async () => {
+  it('opens stale local .runme data before separately merging remote operations', async () => {
     const header: NotebookLogHeader = {
       record_type: 'runme.notebook',
       format_version: 1,
@@ -2419,9 +2419,13 @@ describe('LocalNotebooks operation-log storage', () => {
     })
 
     const loaded = await store.load('local://file/shared')
+    expect(loaded.cells.map((cell) => cell.value)).toEqual(['Bob'])
+    await store.sync('local://file/shared')
+    const reconciled = await store.load('local://file/shared')
+    store.stopSyncQueue()
 
     const localAfter = await store.loadContent('local://file/shared')
-    expect(new Set(loaded.cells.map((cell) => cell.value))).toEqual(
+    expect(new Set(reconciled.cells.map((cell) => cell.value))).toEqual(
       new Set(['Alice', 'Bob'])
     )
     expect(
@@ -8840,4 +8844,171 @@ describe('SharedWorker metadata discovery', () => {
     await store.listFileSyncStatuses()
     expect(read).not.toHaveBeenCalled()
   })
+})
+
+describe('LocalNotebooks local-first open', () => {
+  /** Seed a real local journal, then make its Drive baseline stale. */
+  async function cachedNotebook() {
+    const store = createTestStore({})
+    await store.folders.put({
+      id: LOCAL_FOLDER_URI,
+      name: 'Local',
+      remoteId: '',
+      children: [],
+      lastSynced: '',
+    })
+    const file = await store.create(LOCAL_FOLDER_URI, 'cached.runme')
+    const journal = await store.createOperationLogSaveStore(file.uri, {
+      actorId: 'local-first-test',
+    })
+    await journal.save(
+      file.uri,
+      create(parser_pb.NotebookSchema, {
+        cells: [
+          create(parser_pb.CellSchema, {
+            refId: 'cell',
+            kind: parser_pb.CellKind.CODE,
+            languageId: 'python',
+            value: 'print("local")',
+          }),
+        ],
+      })
+    )
+    store.stopSyncQueue()
+    await store.files.update(file.uri, {
+      remoteId: 'https://drive.google.com/file/d/cached/view',
+      lastSynced: '2020-01-01T00:00:00Z',
+    })
+    return { store, uri: file.uri }
+  }
+
+  it('opens cached OPFS content while an unrelated Drive queue item is blocked', async () => {
+    const { store, uri } = await cachedNotebook()
+    let release!: () => void
+    const blocked = new Promise<void>((resolve) => {
+      release = resolve
+    })
+    const run = vi.fn(() => blocked)
+    const sync = (store as any).queueDriveWork('source', 'other', run, {
+      immediate: true,
+    })
+    await vi.waitFor(() => expect(run).toHaveBeenCalled())
+    try {
+      const opened = vi.fn()
+      const load = store.load(uri).then(opened)
+      await vi.waitFor(() => expect(opened).toHaveBeenCalled())
+      expect(opened.mock.calls[0][0].cells[0].value).toBe('print("local")')
+      await load
+    } finally {
+      store.stopSyncQueue()
+      release()
+      await sync
+    }
+  })
+
+  it('opens offline without calling Drive and preserves a pending reconciliation', async () => {
+    const { store, uri } = await cachedNotebook()
+    store.setDriveSyncAvailable(false)
+    const source = vi.spyOn(store as any, 'performSyncFile')
+    try {
+      expect((await store.load(uri)).cells[0].value).toBe('print("local")')
+      expect(source).not.toHaveBeenCalled()
+      expect(
+        (store as any).workQueue.nextAttempt(`source:${uri}`)
+      ).toBeDefined()
+    } finally {
+      store.stopSyncQueue()
+    }
+  })
+
+  it('creates, opens, edits and reopens locally while upstream creation is blocked', async () => {
+    const drive = { create: vi.fn(() => new Promise(() => {})) }
+    const store = createTestStore(drive)
+    store.setDriveSyncAvailable(false)
+    const parent = 'local://folder/drive'
+    await store.folders.put({
+      id: parent,
+      name: 'Drive',
+      remoteId: 'https://drive.google.com/drive/folders/parent',
+      children: [],
+      lastSynced: '',
+    })
+    try {
+      const file = await store.create(parent, 'new.runme')
+      const opened = vi.fn()
+      const load = store.load(file.uri).then(opened)
+      await vi.waitFor(() => expect(opened).toHaveBeenCalled())
+      await load
+      const notebook = opened.mock.calls[0][0]
+      const journal = await store.createOperationLogSaveStore(file.uri, {
+        actorId: 'offline-editor',
+      })
+      notebook.cells.push(
+        create(parser_pb.CellSchema, {
+          refId: 'offline-cell',
+          kind: parser_pb.CellKind.MARKUP,
+          value: 'written before Drive creation',
+        })
+      )
+      await journal.save(file.uri, notebook)
+      expect((await store.load(file.uri)).cells[0].value).toBe(
+        'written before Drive creation'
+      )
+      expect((await store.getSyncState(file.uri)).status).toBe(
+        'pending-upstream-create'
+      )
+      expect(drive.create).not.toHaveBeenCalled()
+      expect(
+        (await store.files.get(file.uri))?.driveCreateOperationId
+      ).toBeTruthy()
+    } finally {
+      store.stopSyncQueue()
+    }
+  })
+
+  it.each(['json', 'ipynb'])(
+    'opens a cached %s notebook without awaiting sync',
+    async (format) => {
+      const store = createTestStore({})
+      const uri = await store.addFile(
+        'https://drive.google.com/file/d/cached/view',
+        `cached.${format}`
+      )
+      await store.files.update(uri, {
+        doc: notebookJson('cached legacy content'),
+      })
+      const sync = vi
+        .spyOn(store as any, 'syncFile')
+        .mockImplementation(() => new Promise(() => {}))
+      try {
+        const opened = vi.fn()
+        const load = store.load(uri).then(opened)
+        await vi.waitFor(() => expect(opened).toHaveBeenCalled())
+        await load
+        expect(opened.mock.calls[0][0].cells[0].value).toBe(
+          'cached legacy content'
+        )
+        expect(sync).not.toHaveBeenCalled()
+      } finally {
+        store.stopSyncQueue()
+      }
+    }
+  )
+
+  it.each(['runme', 'json', 'ipynb'])(
+    'propagates a first-download failure for uncached %s instead of returning an empty notebook',
+    async (format) => {
+      const store = createTestStore({})
+      const uri = await store.addFile(
+        'https://drive.google.com/file/d/uncached/view',
+        `uncached.${format}`
+      )
+      // A metadata timestamp alone cannot establish that content is cached.
+      await store.files.update(uri, { lastSynced: new Date().toISOString() })
+      vi.spyOn(store as any, 'syncFile').mockRejectedValue(
+        new Error('offline first download')
+      )
+      await expect(store.load(uri)).rejects.toThrow('offline first download')
+    }
+  )
 })
