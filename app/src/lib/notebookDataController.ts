@@ -200,7 +200,11 @@ export class NotebookDataController {
       // Opening/focusing an already-mounted editor is not a refresh. Replacing
       // its store here can discard debounced edits before a review captures them.
       if (existing?.loaded && !existing.data.isReadOnly()) {
-        entry = this.upsertOpenEntry({ ...entry, state: 'loaded', readOnly: false })
+        entry = this.upsertOpenEntry({
+          ...entry,
+          state: 'loaded',
+          readOnly: false,
+        })
         return { localUri, entry }
       }
       const handle = this.ensureNotebookData({
@@ -863,6 +867,15 @@ export class NotebookDataController {
     const handle = this.notebooks.get(uri)
     if (handle) {
       handle.unsubscribe()
+      // Flush the closing editor before releasing its worker-side causal view.
+      void handle.data
+        .flushPendingPersist()
+        .then(() => handle.data.setNotebookStore(null))
+        .catch((error) => {
+          appLogger.error('Closing notebook could not flush its pending edit', {
+            attrs: { scope: 'notebook-session', uri, error: String(error) },
+          })
+        })
     }
     this.notebooks.delete(uri)
     this.analyticsOpenedNotebooks.delete(uri)

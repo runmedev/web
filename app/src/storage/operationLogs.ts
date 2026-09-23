@@ -10,6 +10,8 @@ export interface OperationLogSnapshot {
   document: string
   sizeBytes: number
   checksum: string
+  /** Durable content generation when captured by the SharedWorker owner. */
+  generation?: number
 }
 
 export interface OperationLogAppendOptions {
@@ -131,11 +133,15 @@ function snapshot(
   ref: OperationLogRef,
   document: string
 ): OperationLogSnapshot {
+  // Most local saves only need bytes/ref; hashing belongs to reconciliation.
+  let checksum: string | undefined
   return {
     ref,
     document,
     sizeBytes: textEncoder.encode(document).byteLength,
-    checksum: md5(document),
+    get checksum() {
+      return (checksum ??= md5(document))
+    },
   }
 }
 

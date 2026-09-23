@@ -125,9 +125,14 @@ import {
 import { NotebookStoreItem, NotebookStoreItemType } from './notebook'
 import {
   type OperationLogRef,
+  type OperationLogSnapshot,
   type OperationLogStorage,
   createDefaultOperationLogStorage,
 } from './operationLogs'
+import {
+  type ContentGeneration,
+  OwnedOperationLogs,
+} from './ownedOperationLogs'
 import {
   type RevisionDocStorage,
   createDefaultRevisionDocStorage,
@@ -177,6 +182,8 @@ export interface LocalFileRecord {
   id: string
   /** Friendly name for the notebook, used when rendering the UI. */
   name: string
+  /** Temporary creation payload, retained until OPFS initialization commits. */
+  pendingOperationLogInitialization?: string
   /** Content MIME type used to select the document renderer. */
   mimeType?: string
   /** Upstream URI. Browser-only notebooks use the same local://file/... URI. */
@@ -402,6 +409,30 @@ export class LocalNotebooks extends Dexie {
   /** IndexedDB table where notebook files are stored. */
   files!: Table<LocalFileRecord, string>
   driveCreates!: Table<PendingDriveCreate, string>
+  readonly ready: Promise<unknown>
+  /** Corrupt legacy creation identities must not block ordinary notebook edits. */
+  driveCreationRecoveryError?: string
+  contentGenerations!: Table<ContentGeneration, string>
+  driveCreateAttempts!: Table<
+    {
+      id: string
+      requestId: string
+      attempt: import('../lib/driveTransfer').DurableDriveCreateAttempt
+    },
+    string
+  >
+  private readonly runtime: {
+    owner?: boolean
+    client?: boolean
+    onChange?: (uri: string) => void
+    onEvent?: (type: string, detail: unknown) => void
+  }
+  private ownedLogs?: OwnedOperationLogs
+
+  /** Local writes remain pending; only reconciliation publishes a checksum. */
+  private localWriteChecksum(snapshot: { checksum: string }): string {
+    return this.runtime?.owner ? '' : snapshot.checksum
+  }
 
   /** IndexedDB table where folder metadata is stored. */
   folders!: Table<LocalFolderRecord, string>
@@ -467,6 +498,8 @@ export class LocalNotebooks extends Dexie {
     if (!request) throw new Error('Pending Drive creation request missing')
     if (request.result) return request.result
     try {
+      if (this.driveCreationRecoveryError)
+        throw new Error(this.driveCreationRecoveryError)
       if (md5(request.notebookJson) !== request.fingerprint)
         throw new Error(
           'Creation payload checksum mismatch; preserving request for recovery'
@@ -483,7 +516,34 @@ export class LocalNotebooks extends Dexie {
         parsed.notebook,
         request.folder,
         request.name,
-        { createOperationId: request.id, background: true }
+        {
+          createOperationId: request.id,
+          background: true,
+          ...(this.runtime?.owner
+            ? {
+                journal: {
+                  read: async (key: string) => ({
+                    available: true,
+                    attempt: (await this.driveCreateAttempts.get(key))?.attempt,
+                  }),
+                  write: async (
+                    key: string,
+                    attempt: import('../lib/driveTransfer').DurableDriveCreateAttempt
+                  ) => {
+                    await this.driveCreateAttempts.put({
+                      id: key,
+                      requestId: request.id,
+                      attempt,
+                    })
+                    return true
+                  },
+                  remove: async (key: string) => {
+                    await this.driveCreateAttempts.delete(key)
+                  },
+                },
+              }
+            : {}),
+        }
       )
       await this.driveCreates.update(id, {
         result,
@@ -491,6 +551,19 @@ export class LocalNotebooks extends Dexie {
         notebookJson: '',
         lastError: undefined,
       })
+      if (this.runtime?.owner) {
+        // The durable completion is authoritative; cleanup cannot turn it into
+        // a failed creation that callers might repeat with a new operation ID.
+        await this.driveCreateAttempts
+          .where('requestId')
+          .equals(id)
+          .delete()
+          .catch((error) =>
+            appLogger.warn('Completed creation journal cleanup deferred', {
+              attrs: { scope: 'storage.owner', error: String(error) },
+            })
+          )
+      }
       return result
     } catch (error) {
       await this.driveCreates.update(id, { lastError: String(error) })
@@ -500,8 +573,9 @@ export class LocalNotebooks extends Dexie {
 
   /** Authentication gates I/O, never local persistence or enqueueing. */
   setDriveSyncAvailable(available: boolean): void {
+    const recovered = available && !this.driveAvailable
     this.driveAvailable = available
-    if (available) this.workQueue?.wake()
+    if (recovered) this.workQueue?.wake()
   }
 
   /** Timers are ephemeral; the next controller rebuilds work from stored state. */
@@ -564,9 +638,16 @@ export class LocalNotebooks extends Dexie {
     revisionDocStorage: RevisionDocStorage = createDefaultRevisionDocStorage(),
     driveSyncCoordinator: DriveSyncCoordinator = browserDriveSyncCoordinator,
     ipynbShadowStorage: IpynbShadowStorage = createDefaultIpynbShadowStorage(),
-    operationLogStorage: OperationLogStorage = createDefaultOperationLogStorage()
+    operationLogStorage: OperationLogStorage = createDefaultOperationLogStorage(),
+    runtime: {
+      owner?: boolean
+      client?: boolean
+      onChange?: (uri: string) => void
+      onEvent?: (type: string, detail: unknown) => void
+    } = {}
   ) {
     super(databaseName)
+    this.runtime = runtime
 
     // Define the database schema. Version(1) gives us a clear starting point
     // for future migrations. Both tables are keyed by the `id` property.
@@ -653,20 +734,35 @@ export class LocalNotebooks extends Dexie {
     })
 
     this.version(7).stores({ driveCreates: '&id' })
+    this.version(8).stores({
+      contentGenerations: '&path',
+      driveCreateAttempts: '&id, requestId',
+    })
 
     // Bind the table helpers so callers can access them directly.
     this.files = this.table('files')
     this.folders = this.table('folders')
     this.driveCreates = this.table('driveCreates')
+    this.contentGenerations = this.table('contentGenerations')
+    this.driveCreateAttempts = this.table('driveCreateAttempts')
 
     this.driveStore = driveStore
     this.driveSyncCoordinator = driveSyncCoordinator
     this.conflictDocStorage = conflictDocStorage
     this.revisionDocStorage = revisionDocStorage
     this.ipynbShadowStorage = ipynbShadowStorage
-    this.operationLogStorage = operationLogStorage
+    this.ownedLogs = runtime.owner
+      ? new OwnedOperationLogs(
+          operationLogStorage,
+          this.files,
+          this.contentGenerations
+        )
+      : undefined
+    this.operationLogStorage = this.ownedLogs ?? operationLogStorage
 
-    void this.ensureFolderRecord(LOCAL_FOLDER_URI, 'Local Notebooks')
+    this.ready = runtime.client
+      ? Promise.resolve()
+      : this.ensureFolderRecord(LOCAL_FOLDER_URI, 'Local Notebooks')
   }
 
   setFilesystemStore(store: FilesystemNotebookStore | null): void {
@@ -954,8 +1050,8 @@ export class LocalNotebooks extends Dexie {
                   provisionalChildrenAttachedAt: attachedAt,
                 })
               }
-              if (canDispatchWindowEvents()) {
-                window.dispatchEvent(
+              if (this.canDispatchStorageEvents()) {
+                this.dispatchStorageEvent(
                   new CustomEvent('local-notebook-updated', {
                     detail: {
                       uri: localFileUri,
@@ -1094,6 +1190,7 @@ export class LocalNotebooks extends Dexie {
       const upstreamChecksum = upstreamVersion.checksum ?? md5(upstreamContent)
       const format = detectNotebookFileFormat(record.name)
       let operationLogRef: OperationLogRef | undefined
+      let initializedGeneration: number | undefined
       const decoded =
         format === 'ipynb'
           ? await this.decodeUpstreamNotebook({
@@ -1110,9 +1207,12 @@ export class LocalNotebooks extends Dexie {
               }
             : { notebook, serialized: serializeNotebook(notebook) }
       if (format === 'runme-operation-log') {
-        operationLogRef = (
-          await this.operationLogStorage.initialize(localUri, upstreamContent)
-        ).ref
+        const initializedLog = await this.operationLogStorage.initialize(
+          localUri,
+          upstreamContent
+        )
+        operationLogRef = initializedLog.ref
+        initializedGeneration = initializedLog.generation
       }
       const localChecksum =
         format === 'runme-operation-log'
@@ -1123,32 +1223,43 @@ export class LocalNotebooks extends Dexie {
       // The Web Lock serializes Drive sync work across tabs. The IndexedDB
       // transaction also re-checks the record immediately before updating so a
       // local edit that does not take that lock cannot be overwritten.
-      await this.transaction('rw', this.files, async () => {
-        const current = await this.files.get(localUri)
-        if (
-          !current ||
-          current.remoteId !== record.remoteId ||
-          current.name !== record.name ||
-          !isUninitializedDriveMirror(current)
-        ) {
-          return
+      await this.transaction(
+        'rw',
+        this.ownedLogs ? [this.files, this.contentGenerations] : [this.files],
+        async () => {
+          const current = await this.files.get(localUri)
+          if (
+            this.ownedLogs &&
+            operationLogRef &&
+            (await this.contentGenerations.get(operationLogRef.path))
+              ?.generation !== initializedGeneration
+          )
+            return
+          if (
+            !current ||
+            current.remoteId !== record.remoteId ||
+            current.name !== record.name ||
+            !isUninitializedDriveMirror(current)
+          ) {
+            return
+          }
+          await this.files.update(localUri, {
+            doc: decoded.serialized,
+            md5Checksum: localChecksum,
+            lastRemoteChecksum: upstreamChecksum,
+            lastUpstreamVersion: {
+              ...upstreamVersion,
+              checksum: upstreamChecksum,
+            },
+            lastSynced: nowIsoString(),
+            lastSyncError: undefined,
+            conflict: undefined,
+            ipynbPreservation: decoded.ipynbPreservation,
+            operationLogRef,
+          })
+          initialized = true
         }
-        await this.files.update(localUri, {
-          doc: decoded.serialized,
-          md5Checksum: localChecksum,
-          lastRemoteChecksum: upstreamChecksum,
-          lastUpstreamVersion: {
-            ...upstreamVersion,
-            checksum: upstreamChecksum,
-          },
-          lastSynced: nowIsoString(),
-          lastSyncError: undefined,
-          conflict: undefined,
-          ipynbPreservation: decoded.ipynbPreservation,
-          operationLogRef,
-        })
-        initialized = true
-      })
+      )
 
       if (!initialized) {
         const latest = await this.files.get(localUri)
@@ -1455,17 +1566,16 @@ export class LocalNotebooks extends Dexie {
       return syncStateForRecord(record, 'error')
     }
 
-    const localChecksum = await this.getOrBackfillLocalChecksum(
-      localUri,
-      record
-    )
+    const localChecksum = this.runtime?.owner
+      ? record.md5Checksum
+      : await this.getOrBackfillLocalChecksum(localUri, record)
     const upstreamChecksum =
       detectNotebookFileFormat(record.name) === 'ipynb'
         ? (record.ipynbPreservation?.baselineNotebookChecksum ?? '')
         : (record.lastRemoteChecksum ?? '')
     return syncStateForRecord(
       { ...record, md5Checksum: localChecksum },
-      localChecksum === upstreamChecksum ? 'synced' : 'pending'
+      localChecksum && localChecksum === upstreamChecksum ? 'synced' : 'pending'
     )
   }
 
@@ -1479,7 +1589,11 @@ export class LocalNotebooks extends Dexie {
       let localRevision = record.md5Checksum ?? ''
       try {
         state = await this.getSyncState(record.id)
-        localRevision = await this.getOrBackfillLocalChecksum(record.id, record)
+        if (!this.runtime?.owner)
+          localRevision = await this.getOrBackfillLocalChecksum(
+            record.id,
+            record
+          )
       } catch (error) {
         state = syncStateForRecord(record, 'error', String(error))
       }
@@ -1677,7 +1791,7 @@ export class LocalNotebooks extends Dexie {
           previous = next
           await this.files.update(uri, {
             doc: '',
-            md5Checksum: stored.checksum,
+            md5Checksum: this.localWriteChecksum(stored),
             operationLogRef: stored.ref,
           })
           this.notifySync(uri)
@@ -2035,7 +2149,7 @@ export class LocalNotebooks extends Dexie {
       )
       await this.files.update(uri, {
         doc: '',
-        md5Checksum: stored.checksum,
+        md5Checksum: this.localWriteChecksum(stored),
         operationLogRef: stored.ref,
       })
       this.notifySync(uri)
@@ -2548,7 +2662,7 @@ export class LocalNotebooks extends Dexie {
       )
       await this.files.update(uri, {
         doc: '',
-        md5Checksum: stored.checksum,
+        md5Checksum: this.localWriteChecksum(stored),
         operationLogRef: stored.ref,
       })
       this.notifySync(uri)
@@ -2640,7 +2754,7 @@ export class LocalNotebooks extends Dexie {
       )
       await this.files.update(uri, {
         doc: '',
-        md5Checksum: stored.checksum,
+        md5Checksum: this.localWriteChecksum(stored),
         operationLogRef: stored.ref,
       })
       this.notifySync(uri)
@@ -2657,6 +2771,7 @@ export class LocalNotebooks extends Dexie {
   }
 
   async loadContent(uri: string): Promise<string> {
+    await this.recoverLocalInitialization(uri)
     if (!uri.startsWith('local://file/')) {
       throw new Error(
         'LocalNotebooks.loadContent expects a local://file/ URI; got ' + uri
@@ -2827,7 +2942,7 @@ export class LocalNotebooks extends Dexie {
         : await this.operationLogStorage.initialize(uri, content)
       await this.files.update(uri, {
         doc: '',
-        md5Checksum: stored.checksum,
+        md5Checksum: this.localWriteChecksum(stored),
         mimeType: RUNME_OPERATION_LOG_MIME_TYPE,
         operationLogRef: stored.ref,
       })
@@ -3153,6 +3268,7 @@ export class LocalNotebooks extends Dexie {
   }
 
   async load(uri: string): Promise<parser_pb.Notebook> {
+    await this.recoverLocalInitialization(uri)
     if (!uri.startsWith('local://file/')) {
       throw new Error(
         'LocalNotebooks.load expects a local://file/ URI; got ' + uri
@@ -3643,7 +3759,7 @@ export class LocalNotebooks extends Dexie {
           )
           await this.files.update(childUri, {
             doc: '',
-            md5Checksum: refreshed.checksum,
+            md5Checksum: this.localWriteChecksum(refreshed),
             operationLogRef: refreshed.ref,
             legacyConversionAttempt: {
               originalGoogleDriveId,
@@ -3745,7 +3861,31 @@ export class LocalNotebooks extends Dexie {
     let operationLogRef: OperationLogRef | undefined
     const format = detectNotebookFileFormat(name)
     if (format === 'runme-operation-log') {
-      const initialLog = options.content || createInitialNotebookFile(name)
+      if (this.runtime?.owner) {
+        await this.files.put({
+          id: fileUri,
+          name,
+          mimeType: options.mimeType,
+          remoteId: isDriveBackedParent ? '' : fileUri,
+          parentRemoteIdWhenCreated: isDriveBackedParent
+            ? parent.remoteId
+            : undefined,
+          driveCreateOperationId: isDriveBackedParent ? uuidv4() : undefined,
+          lastRemoteChecksum: '',
+          lastSynced: '',
+          doc: '',
+          md5Checksum: '',
+          lastSyncError: 'Local notebook initialization is pending',
+          pendingOperationLogInitialization:
+            options.content || createInitialNotebookFile(name),
+        })
+        await this.mutateFolderChildren(parentUri, (children) =>
+          children.includes(fileUri) ? children : [...children, fileUri]
+        )
+      }
+      const initialLog =
+        (await this.files.get(fileUri))?.pendingOperationLogInitialization ??
+        (options.content || createInitialNotebookFile(name))
       decodeNotebookFile(initialLog, name)
       const stored = await this.operationLogStorage.initialize(
         fileUri,
@@ -3770,9 +3910,10 @@ export class LocalNotebooks extends Dexie {
         baselineOutputHashes: decoded.ipynb?.baselineOutputHashes ?? {},
       }
     }
-    const operationLogChecksum = operationLogRef
-      ? (await this.operationLogStorage.read(operationLogRef)).checksum
-      : undefined
+    const operationLogChecksum =
+      operationLogRef && !this.runtime?.owner
+        ? (await this.operationLogStorage.read(operationLogRef)).checksum
+        : undefined
     const checksum =
       operationLogChecksum ?? (localContent ? md5(localContent) : '')
     const record: LocalFileRecord = {
@@ -3783,7 +3924,9 @@ export class LocalNotebooks extends Dexie {
       parentRemoteIdWhenCreated: isDriveBackedParent
         ? parent.remoteId
         : undefined,
-      driveCreateOperationId: isDriveBackedParent ? uuidv4() : undefined,
+      driveCreateOperationId: isDriveBackedParent
+        ? ((await this.files.get(fileUri))?.driveCreateOperationId ?? uuidv4())
+        : undefined,
       legacyConversionAttempt: options.legacyConversionAttempt,
       lastRemoteChecksum: '',
       lastSynced: isDriveBackedParent ? '' : nowIsoString(),
@@ -3798,8 +3941,8 @@ export class LocalNotebooks extends Dexie {
       children.includes(fileUri) ? children : [...children, fileUri]
     )
 
-    if (canDispatchWindowEvents()) {
-      window.dispatchEvent(
+    if (this.canDispatchStorageEvents()) {
+      this.dispatchStorageEvent(
         new CustomEvent('local-notebook-updated', {
           detail: { uri: fileUri, name, remoteUri: undefined },
         })
@@ -3876,8 +4019,8 @@ export class LocalNotebooks extends Dexie {
       children.includes(folderUri) ? children : [...children, folderUri]
     )
 
-    if (canDispatchWindowEvents()) {
-      window.dispatchEvent(
+    if (this.canDispatchStorageEvents()) {
+      this.dispatchStorageEvent(
         new CustomEvent('local-notebook-updated', {
           detail: {
             uri: folderUri,
@@ -3950,8 +4093,8 @@ export class LocalNotebooks extends Dexie {
 
       const parentFolder = await this.findParentFolder(uri)
 
-      if (canDispatchWindowEvents()) {
-        window.dispatchEvent(
+      if (this.canDispatchStorageEvents()) {
+        this.dispatchStorageEvent(
           new CustomEvent('local-notebook-updated', {
             detail: {
               uri,
@@ -4028,8 +4171,8 @@ export class LocalNotebooks extends Dexie {
 
     const parentFolder = await this.findParentFolder(uri)
 
-    if (canDispatchWindowEvents()) {
-      window.dispatchEvent(
+    if (this.canDispatchStorageEvents()) {
+      this.dispatchStorageEvent(
         new CustomEvent('local-notebook-updated', {
           detail: {
             uri,
@@ -4366,7 +4509,10 @@ export class LocalNotebooks extends Dexie {
     if (!isDriveUri(record.remoteId)) return false
     if (record.lastSyncError) return true
     try {
-      const local = await this.getOrBackfillLocalChecksum(record.id, record)
+      if (this.runtime?.owner && !record.md5Checksum) return true
+      const local = this.runtime?.owner
+        ? record.md5Checksum
+        : await this.getOrBackfillLocalChecksum(record.id, record)
       const baseline =
         detectNotebookFileFormat(record.name) === 'ipynb'
           ? (record.ipynbPreservation?.baselineNotebookChecksum ?? '')
@@ -4481,7 +4627,17 @@ export class LocalNotebooks extends Dexie {
     })
   }
 
+  private dispatchStorageEvent(event: CustomEvent): void {
+    this.runtime?.onEvent?.(event.type, event.detail)
+    if (canDispatchWindowEvents()) window.dispatchEvent(event)
+  }
+
+  private canDispatchStorageEvents(): boolean {
+    return canDispatchWindowEvents() || Boolean(this.runtime?.onEvent)
+  }
+
   private notifySync(uri: string): void {
+    this.runtime?.onChange?.(uri)
     const listeners = this.syncListeners.get(uri)
     if (listeners) {
       for (const listener of listeners) {
@@ -4492,8 +4648,8 @@ export class LocalNotebooks extends Dexie {
         }
       }
     }
-    if (canDispatchWindowEvents()) {
-      window.dispatchEvent(
+    if (this.canDispatchStorageEvents()) {
+      this.dispatchStorageEvent(
         new CustomEvent('local-notebook-sync-updated', {
           detail: { uri },
         })
@@ -4746,6 +4902,12 @@ export class LocalNotebooks extends Dexie {
     localUri: string,
     record: LocalFileRecord
   ): Promise<string> {
+    if (this.runtime?.owner) {
+      if (record.md5Checksum) return record.md5Checksum
+      return record.operationLogRef
+        ? (await this.operationLogStorage.read(record.operationLogRef)).checksum
+        : checksumForSerializedNotebook(record.doc ?? '')
+    }
     // .runme deliberately keeps doc empty; an absent cached hash must come
     // from the authoritative OPFS log, never the empty snapshot placeholder.
     if (!record.md5Checksum && record.operationLogRef) {
@@ -4941,6 +5103,38 @@ export class LocalNotebooks extends Dexie {
     )
   }
 
+  /** Resume the exact initialization payload, preserving partial/corrupt bytes on error. */
+  private async recoverLocalInitialization(uri: string): Promise<void> {
+    const record = await this.files.get(uri)
+    if (!record?.pendingOperationLogInitialization) return
+    let stored: OperationLogSnapshot
+    try {
+      stored = await this.operationLogStorage.initialize(
+        uri,
+        record.pendingOperationLogInitialization
+      )
+    } catch (error) {
+      // A failed initialization must not hide an already readable notebook.
+      // Keep the pending payload and original bytes for diagnosis, but allow
+      // the existing operation log to open, accept edits and reconcile.
+      if (record.operationLogRef) {
+        try {
+          await this.operationLogStorage.read(record.operationLogRef)
+          return
+        } catch {
+          /* Missing/unreadable bytes still require explicit recovery. */
+        }
+      }
+      throw error
+    }
+    await this.files.update(uri, {
+      operationLogRef: stored.ref,
+      pendingOperationLogInitialization: undefined,
+      md5Checksum: '',
+      lastSyncError: undefined,
+    })
+  }
+
   private async performSyncFile(localUri: string): Promise<void> {
     const existingSync = this.inFlightSyncs.get(localUri)
     if (existingSync) {
@@ -4955,10 +5149,12 @@ export class LocalNotebooks extends Dexie {
         try {
           // Re-read and reconcile only after acquiring the cross-context lock.
           // Another tab may have completed the pending create while we waited.
+          await this.recoverLocalInitialization(localUri)
           await this.syncFileInner(localUri)
-          await this.files.update(localUri, {
-            lastSyncError: undefined,
-          })
+          if (!this.runtime?.owner)
+            await this.files.update(localUri, {
+              lastSyncError: undefined,
+            })
           this.enqueueIpynbSync(localUri)
         } catch (error) {
           await this.files.update(localUri, { lastSyncError: String(error) })
@@ -5481,7 +5677,7 @@ export class LocalNotebooks extends Dexie {
       await this.files.update(localUri, {
         doc: '',
         operationLogRef: stored.ref,
-        md5Checksum: stored.checksum,
+        md5Checksum: this.localWriteChecksum(stored),
       })
       record = { ...record, operationLogRef: stored.ref }
     }
@@ -5650,24 +5846,38 @@ export class LocalNotebooks extends Dexie {
       )
       if (!sameDriveVersion(snapshot.version, finalMetadata)) continue
       const version = driveMetadataToUpstreamVersion(finalMetadata)
-      const latestLocal = await this.operationLogStorage.read(local.ref)
-      await this.files.update(localUri, {
-        doc: '',
-        operationLogRef: latestLocal.ref,
-        md5Checksum: latestLocal.checksum,
-        // For operation logs this is the local byte snapshot whose operation
-        // set was uploaded. The upstream may use a different canonical record
-        // order while representing the same set.
-        lastRemoteChecksum: stored.checksum,
-        lastUpstreamVersion: version,
-        lastSynced: nowIsoString(),
-        lastSyncError: undefined,
-      })
-      if (latestLocal.checksum !== stored.checksum) {
-        // An append landed while the remote save was in flight. Preserve its
-        // pending status and schedule a follow-up sync instead of losing the
-        // only enqueue to the in-flight promise.
-        this.enqueueSync(localUri)
+      if (this.ownedLogs) {
+        const current = await this.ownedLogs.acknowledge(
+          localUri,
+          stored,
+          record.remoteId,
+          {
+            lastUpstreamVersion: version,
+            lastSynced: nowIsoString(),
+            lastSyncError: undefined,
+          }
+        )
+        if (!current) this.enqueueSync(localUri)
+      } else {
+        const latestLocal = await this.operationLogStorage.read(local.ref)
+        await this.files.update(localUri, {
+          doc: '',
+          operationLogRef: latestLocal.ref,
+          md5Checksum: latestLocal.checksum,
+          // For operation logs this is the local byte snapshot whose operation
+          // set was uploaded. The upstream may use a different canonical record
+          // order while representing the same set.
+          lastRemoteChecksum: stored.checksum,
+          lastUpstreamVersion: version,
+          lastSynced: nowIsoString(),
+          lastSyncError: undefined,
+        })
+        if (latestLocal.checksum !== stored.checksum) {
+          // An append landed while the remote save was in flight. Preserve its
+          // pending status and schedule a follow-up sync instead of losing the
+          // only enqueue to the in-flight promise.
+          this.enqueueSync(localUri)
+        }
       }
       return
     }
@@ -5791,8 +6001,8 @@ export class LocalNotebooks extends Dexie {
       },
     })
 
-    if (canDispatchWindowEvents()) {
-      window.dispatchEvent(
+    if (this.canDispatchStorageEvents()) {
+      this.dispatchStorageEvent(
         new CustomEvent('local-notebook-updated', {
           detail: {
             uri: localUri,
@@ -5838,7 +6048,7 @@ export class LocalNotebooks extends Dexie {
       await this.files.update(localUri, {
         doc: '',
         operationLogRef: stored.ref,
-        md5Checksum: stored.checksum,
+        md5Checksum: this.localWriteChecksum(stored),
         lastRemoteChecksum: checksum,
         lastUpstreamVersion: { checksum },
         lastSynced: nowIsoString(),
@@ -5913,18 +6123,32 @@ export class LocalNotebooks extends Dexie {
       await upstreamStore.saveContent(record.remoteId, mergedDocument)
     }
     const checksum = md5(mergedDocument)
-    const latestLocal = await this.operationLogStorage.read(local.ref)
-    await this.files.update(localUri, {
-      doc: '',
-      operationLogRef: latestLocal.ref,
-      md5Checksum: latestLocal.checksum,
-      lastRemoteChecksum: stored.checksum,
-      lastUpstreamVersion: { checksum },
-      lastSynced: nowIsoString(),
-      lastSyncError: undefined,
-    })
-    if (latestLocal.checksum !== stored.checksum) {
-      this.enqueueSync(localUri)
+    if (this.ownedLogs) {
+      const current = await this.ownedLogs.acknowledge(
+        localUri,
+        stored,
+        record.remoteId,
+        {
+          lastUpstreamVersion: { checksum },
+          lastSynced: nowIsoString(),
+          lastSyncError: undefined,
+        }
+      )
+      if (!current) this.enqueueSync(localUri)
+    } else {
+      const latestLocal = await this.operationLogStorage.read(local.ref)
+      await this.files.update(localUri, {
+        doc: '',
+        operationLogRef: latestLocal.ref,
+        md5Checksum: latestLocal.checksum,
+        lastRemoteChecksum: stored.checksum,
+        lastUpstreamVersion: { checksum },
+        lastSynced: nowIsoString(),
+        lastSyncError: undefined,
+      })
+      if (latestLocal.checksum !== stored.checksum) {
+        this.enqueueSync(localUri)
+      }
     }
   }
 

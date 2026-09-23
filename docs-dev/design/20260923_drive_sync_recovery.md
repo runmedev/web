@@ -49,7 +49,7 @@ as the acknowledged local baseline.
 
 All tabs submit mutations to one SharedWorker. Its per-notebook commit queue:
 
-1. Commits an IndexedDB transaction incrementing `localGeneration` and clearing
+1. Commits an IndexedDB transaction incrementing `contentGenerations[path].generation` and clearing
    `md5Checksum`. Await the commit; abort before OPFS if it fails.
 2. Writes/appends OPFS and awaits durable close, then records necessary log identity.
 3. Leaves the checksum unset, acknowledges the local save and enqueues reconciliation.
@@ -98,11 +98,14 @@ old completions cannot overwrite newer metadata; all mutation paths use the owne
 and original bytes survive corruption. Immutable creation-request fingerprints are
 separate idempotency metadata and are not eliminated by lazy notebook hashing.
 
-**Implementation status:** current PR code still computes hashes on saves and
-backfills missing hashes. SharedWorker ownership, a durable generation,
-non-hashing local saves and conditional sync-only checksum publication are design
-requirements not yet implemented. The existing tests do not establish this new
-protocol.
+**Implementation:** `OwnedOperationLogs` wraps the physical OPFS store in the
+worker. Schema version 8 adds `contentGenerations`, keyed by OPFS path, separately
+from file records so a failed initialization also has a durable generation.
+Snapshots expose a lazy cached checksum; ordinary writes do not compute it.
+`acknowledge` checks generation, path and upstream identity in an IndexedDB
+transaction before publishing the current checksum. Scans/status never read OPFS.
+Tests cover failed invalidation, failed writes, restart, concurrent writes, delayed
+acknowledgements, metadata-only discovery and preservation of original bytes.
 
 ## Keyed delaying queue
 
@@ -186,8 +189,61 @@ for redundant locking inside the new exclusive-owner architecture.
 References: [SharedWorker](https://developer.mozilla.org/en-US/docs/Web/API/SharedWorker)
 and [JavaScript execution model](https://developer.mozilla.org/en-US/docs/Web/JavaScript/Reference/Execution_model).
 
-**Implementation status:** PR #391 still uses tab-local queues and cross-tab Web
-Locks. The SharedWorker migration remains to be implemented.
+### Implemented message and lifecycle boundary
+
+`storageOwner.worker.ts` constructs the only application `LocalNotebooks` writer,
+filesystem adapter and Drive reconciler. `storageOwnerClient.ts` keeps Dexie
+live-query readers in tabs and routes notebook operations through an explicit RPC
+allowlist. Each mounted editor has its own worker-side causal view and actor;
+closing an editor flushes its pending save before releasing that view. Tab close
+releases its port. A BFCache transition retains the connection.
+
+The production entry is `/storage-owner.js`, named `runme-storage-owner`; other
+workers retain separate hashed filenames. The version handshake rejects incompatible
+clients. Worker startup errors, timeouts and uncertain mutation outcomes are surfaced,
+never retried blindly or replaced by a second tab writer. SharedWorker support is a
+requirement. Reload all tabs when upgrading from the pre-worker application; old
+clients do not implement this protocol. Low-level compatibility locks are retained,
+but the new network scheduler uses owner-local serialization. Those locks alone do
+not make mixed legacy/new clients safe across the OPFS/IndexedDB boundary.
+
+Drive uses the fetch adapter inside the worker. The worker requests noninteractive
+credentials over MessagePorts from live authenticated tabs, tries another tab when
+one cannot provide a credential, and never persists or logs the token. Availability
+heartbeats do not reset backoff; only unavailable-to-available recovery wakes it.
+No authenticated tab means local persistence continues and Drive work is deferred.
+
+The Markdown parser uses the portable entity decoder in worker builds; its default
+browser decoder requires `document`, which does not exist in a SharedWorker.
+
+```mermaid
+flowchart LR
+  A[Tab A: model and view] --> P[MessagePorts]
+  B[Tab B: model and view] --> P
+  P --> W[SharedWorker RPC host]
+  W --> C[Per-notebook commit queues]
+  C --> O[OPFS and IndexedDB generations]
+  W --> Q[Keyed delaying reconciliation queue]
+  Q --> D[Google Drive]
+  Q --> C
+```
+
+## Creation migration and partial local initialization
+
+Before enabling recovery, the tab sends existing localStorage creation-attempt
+identities to the worker. The worker imports them into schema-v8
+`driveCreateAttempts` without overwriting a newer record. Subsequent creation
+attempts use this IndexedDB journal: workers cannot use localStorage. A corrupt
+legacy journal pauses direct-creation recovery with an error while existing
+notebooks remain readable/editable. Legacy attempts without a complete creation
+payload still need the original caller; an ID cannot reconstruct missing content.
+
+For a new local `.runme` or first download, persist the exact initialization payload
+and intended log reference before OPFS I/O. Clear the temporary payload only after
+durable close. Retry uses identical bytes/identity and refuses to overwrite different
+existing bytes. A readable existing log can still open after a failed initialization.
+The temporary initialization payload is a recovery exception to the normal OPFS-only
+content rule, not a second long-lived notebook copy.
 
 ## Creation and Save As
 

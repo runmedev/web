@@ -1,3 +1,4 @@
+import { createSharedNotebookStore } from './storage/storageOwnerClient'
 import { useCallback, useEffect, useMemo, useRef } from 'react'
 import { Helmet } from 'react-helmet'
 import { BrowserRouter, Navigate, Route, Routes } from 'react-router-dom'
@@ -207,7 +208,7 @@ function NotebookStoreInitializer() {
     // Background Drive store operations should never force an OAuth redirect.
     // Interactive login is handled explicitly via UI actions (picker/status tab).
     const driveStore = new DriveNotebookStore(ensureAccessToken)
-    const localStore = new LocalNotebooks(driveStore)
+    const localStore = createSharedNotebookStore(driveStore)
     const localComments = new LocalComments(driveStore)
     localStore.setFilesystemStore(fsInstanceRef.current)
 

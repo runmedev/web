@@ -363,12 +363,20 @@ const driveNotebookCreationFlights = new Map<
   { requestFingerprint: string; promise: Promise<DriveNotebookCreationResult> }
 >()
 
-type DurableDriveCreateAttempt = {
+export type DurableDriveCreateAttempt = {
   fileName: string
   expectedChecksum: string
   createdAtMs: number
   remoteUri?: string
   creationRevisionId?: string
+}
+
+export interface DriveCreateJournal {
+  read(
+    key: string
+  ): Promise<{ available: boolean; attempt?: DurableDriveCreateAttempt }>
+  write(key: string, attempt: DurableDriveCreateAttempt): Promise<boolean>
+  remove(key: string): Promise<void>
 }
 
 const DRIVE_CREATE_ATTEMPT_STORAGE_PREFIX = 'runme:drive-create-attempt:'
@@ -536,7 +544,11 @@ export async function completeDriveNotebookCreation(
   notebook: parser_pb.Notebook,
   folder: string,
   name: string,
-  options: { createOperationId?: string; background?: boolean } = {}
+  options: {
+    createOperationId?: string
+    background?: boolean
+    journal?: DriveCreateJournal
+  } = {}
 ): Promise<DriveNotebookCreationResult> {
   if (!notebook) {
     throw new Error('drive.saveAsCurrentNotebook requires a notebook')
@@ -586,6 +598,11 @@ export async function completeDriveNotebookCreation(
     ? hashCreateOperationId(`${name}\u0000${uploadedChecksum}`)
     : Promise.resolve(undefined)
 
+  const journal: DriveCreateJournal = options.journal ?? {
+    read: async (key) => readDriveCreateAttempt(key),
+    write: async (key, attempt) => writeDriveCreateAttempt(key, attempt),
+    remove: async (key) => removeDriveCreateAttempt(key),
+  }
   const createOnce = async (): Promise<DriveNotebookCreationResult> => {
     const persistedCreateOperationId = await persistedCreateOperationIdPromise
     const expectedRequestFingerprint = await expectedRequestFingerprintPromise
@@ -594,7 +611,7 @@ export async function completeDriveNotebookCreation(
       ? driveCreateAttemptStorageKey(folderRef, persistedCreateOperationId)
       : undefined
     const durableAttempt = attemptStorageKey
-      ? readDriveCreateAttempt(attemptStorageKey)
+      ? await journal.read(attemptStorageKey)
       : { available: false as const }
     if (attemptStorageKey && !durableAttempt.available) {
       throw new Error(
@@ -664,7 +681,7 @@ export async function completeDriveNotebookCreation(
         reservedRemoteUri = driveFileUrl(await driveStore.generateFileId())
         createdFreshReservation = true
       }
-      const persisted = writeDriveCreateAttempt(attemptStorageKey, {
+      const persisted = await journal.write(attemptStorageKey, {
         fileName: name,
         expectedChecksum: uploadedChecksum,
         createdAtMs: Date.now(),
@@ -712,7 +729,7 @@ export async function completeDriveNotebookCreation(
         )
       } catch (error) {
         if (attemptStorageKey && error instanceof DriveFileCreatedError) {
-          writeDriveCreateAttempt(attemptStorageKey, {
+          await journal.write(attemptStorageKey, {
             fileName: name,
             expectedChecksum: uploadedChecksum,
             createdAtMs: durableAttempt.attempt?.createdAtMs ?? Date.now(),
@@ -727,14 +744,14 @@ export async function completeDriveNotebookCreation(
           !canReserveDriveId &&
           error instanceof DriveCreateNotCommittedError
         ) {
-          removeDriveCreateAttempt(attemptStorageKey)
+          await journal.remove(attemptStorageKey)
         }
         throw error
       }
     }
     const remoteUri = createdFile.uri
     if (attemptStorageKey) {
-      writeDriveCreateAttempt(attemptStorageKey, {
+      await journal.write(attemptStorageKey, {
         fileName: name,
         expectedChecksum: uploadedChecksum,
         createdAtMs: durableAttempt.attempt?.createdAtMs ?? Date.now(),

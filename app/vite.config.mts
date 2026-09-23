@@ -4,6 +4,8 @@ import { execFileSync } from "node:child_process";
 import { createHash } from "node:crypto";
 import { readFile, stat } from "node:fs/promises";
 import path from "node:path";
+import { createRequire } from "node:module";
+const require = createRequire(import.meta.url);
 import type { Plugin } from "vite";
 import { defineConfig } from "vite";
 import svgr from "vite-plugin-svgr";
@@ -221,6 +223,13 @@ export default defineConfig({
     "import.meta.env.VITE_RUNME_VERSION_WEB_COMMIT":
       JSON.stringify(webCommit ?? ""),
   },
+  // The DOM conditional export in this parser dependency cannot run in workers.
+  // Its portable entity table works in both tabs and SharedWorkers.
+  resolve: { alias: { "decode-named-character-reference": require.resolve("decode-named-character-reference") } },
+  // A stable URL/name avoids a second owner after a page-bundle deployment.
+  worker: { format: "es", rollupOptions: { output: {
+    entryFileNames: chunk => chunk.name === "storageOwner.worker" ? "storage-owner.js" : "assets/[name]-[hash].js",
+  } } },
   publicDir: "assets",
   optimizeDeps: {
     exclude: ["@runmedev/renderers"],

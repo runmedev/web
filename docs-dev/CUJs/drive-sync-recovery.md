@@ -9,7 +9,7 @@ Preserve content and existing conflict handling. See the
 ## Automated coverage
 
 - `local.test.ts`: format-correct predicates, unchanged/empty failed downloads,
-  OPFS checksum repair, concurrent metadata publication, corrupt-log isolation,
+  metadata-only owner discovery, legacy OPFS repair, corrupt-log isolation,
   retry reconstruction, durable creation payloads, changed-input key rejection,
   corrupt-payload preservation, receipt retention and cross-controller serialization.
 - `syncWorkQueue.test.ts`: coalescing, dirty-during-processing, save interval,
@@ -20,22 +20,48 @@ Preserve content and existing conflict handling. See the
 - `DriveSyncStatusTab.test.tsx`: error/attempt/success status and pending-create retry.
 - `notebookData.test.ts` and `appJsGlobals.test.ts`: AppKernel creation/Save As callers.
 
-## Live acceptance (not performed by the automated suite)
+- `ownedOperationLogs.test.ts`: lazy hashing, invalidation failure, interrupted
+  initialization, original-byte preservation, write serialization and stale acknowledgements.
+- `storageOwner.test.ts`: two MessagePorts, local saves during blocked sync,
+  causal-view isolation, protocol mismatch, credential deferral and backoff wake-up.
+- `legacyCreationJournal.test.ts` and `driveTransfer.test.ts`: legacy identity import,
+  injected worker journal replay and no remote creation after journal commit failure.
+- `storage-owner-smoke.ts`: real Chromium SharedWorker, two tabs, concurrent causal
+  edits, unset checksums and exact OPFS restoration after a browser restart.
+- `storage-owner-production.ts`: emitted worker entry, handshake, durable creation
+  and notebook decoding; catches DOM-only dependencies in the production bundle.
+
+### Run the browser checks on a devbox
+
+Start `pnpm --dir app dev --host 127.0.0.1 --port 5193` after building packages.
+Run from `app/` with `CHROMIUM_PATH` pointing to an installed Chromium:
+
+```sh
+pnpm exec tsc --target es2022 --module nodenext --moduleResolution nodenext --esModuleInterop --skipLibCheck --outDir test/browser/.generated test/browser/storage-owner-smoke.ts test/browser/storage-owner-production.ts
+node test/browser/.generated/storage-owner-smoke.js
+```
+
+The test creates/removes a disposable profile and writes
+`test/browser/test-output/storage-owner.json`. For production, run the app build,
+start `pnpm preview --host 127.0.0.1 --port 5194`, then run
+`node test/browser/.generated/storage-owner-production.js`. Both tests accept
+`RUNME_TEST_URL`. Neither uses production credentials or the user's browser profile.
+
+## Live Drive acceptance (not performed by the automated suite)
 
 Use disposable notebooks and a development build, not production failure injection.
 Record the commit, origin, identity type (no tokens), status and upstream contents.
 
 1. Save `.runme`, `.json` and `.ipynb`; inject an auth/network failure. Restore the
    dependency without an edit. Verify delayed retry and cleared error after success.
-   Close/reopen the tab and repeat: unfinished state survives, retry clock resets.
+   Close/reopen a tab and repeat: unfinished state survives; a live worker keeps its retry clock. Closing every tab may end the worker and reset backoff.
 2. Fail the first download with empty checksums. Verify recovery downloads the
    original content and never uploads/creates an empty notebook.
-3. Remove a cached `.runme` hash in a test record. Verify backfill uses OPFS and
-   preserves a concurrently published hash. Corrupt a separate disposable log;
+3. Remove a cached `.runme` hash in a test record. Verify discovery/status leave it unset without reading OPFS; reconciliation computes it and preserves a newer generation. Corrupt a separate disposable log;
    confirm other files and status still work and original bytes remain preserved.
 4. Burst edits and periodic wake-ups. Verify one queued key, no continually pushed
    deadline, a subsequent pass for edits during upload, and the two-minute automatic
-   interval. Manual retry may bypass delay but still uses the shared lock.
+   interval. Manual retry may bypass delay but still uses the owner queue.
 5. Run two same-origin tabs, including source, IPYNB export and direct-create work.
    Verify at most one active attempt. Close the active tab and confirm recovery.
    A blocked key must not prevent other ready keys; conflicts must not be overwritten.

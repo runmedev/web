@@ -1786,8 +1786,11 @@ async function ensureDriveFilesClient(
   accessToken: string
 ): Promise<DriveFilesClient> {
   const baseUrl = getGoogleDriveBaseUrl()
-  if (baseUrl) {
-    return new FetchDriveFilesClient(baseUrl, accessToken)
+  if (baseUrl || typeof window === 'undefined') {
+    return new FetchDriveFilesClient(
+      baseUrl || 'https://www.googleapis.com',
+      accessToken
+    )
   }
 
   const gapi = await ensureGapi()

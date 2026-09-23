@@ -8817,3 +8817,27 @@ it('serializes source, export, and creation across controllers sharing an origin
     b.stopSyncQueue()
   }
 })
+
+describe('SharedWorker metadata discovery', () => {
+  it('selects unknown checksums without reading OPFS or marking the mirror clean', async () => {
+    const logs = new MemoryOperationLogStorage()
+    const read = vi.spyOn(logs, 'read')
+    const store = createTestStore({}, { operationLogStorage: logs })
+    ;(store as any).runtime = { owner: true }
+    const uri = 'local://file/unread-first-download'
+    await store.files.put({
+      id: uri,
+      name: 'pending.runme',
+      remoteId: 'https://drive.google.com/file/d/pending/view',
+      doc: '',
+      md5Checksum: '',
+      lastRemoteChecksum: '',
+      lastSynced: '',
+      operationLogRef: { storage: 'opfs', path: 'missing' },
+    })
+    expect((await store.getSyncState(uri)).status).toBe('pending')
+    expect(await store.listDriveBackedFilesNeedingSync()).toContain(uri)
+    await store.listFileSyncStatuses()
+    expect(read).not.toHaveBeenCalled()
+  })
+})

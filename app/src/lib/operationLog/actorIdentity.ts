@@ -57,7 +57,9 @@ export class NotebookActorIdentity {
 }
 
 const browserNotebookActorIdentity = new NotebookActorIdentity(
-  getClaimedSessionId
+  typeof window === 'undefined'
+    ? async () => 'storage-owner'
+    : getClaimedSessionId
 )
 
 export function getNotebookActorId(canonicalUri: string): Promise<string> {
