@@ -376,16 +376,18 @@ if (run(`curl -sf ${FRONTEND_URL}`).status !== 0) {
   process.exit(1);
 }
 
-// Configure the endpoint before the first app opens its shared storage owner.
+// Record and seed a same-origin blank page. Recording may recreate the browser
+// context; opening the app before seeding can leave its SharedWorker configured
+// with the default endpoint while the test later changes only tab-local state.
 runWithRetry(`agent-browser open ${FRONTEND_URL}/test/fixtures/storage-owner.html`);
-runOrThrow(`agent-browser eval "localStorage.setItem('${GOOGLE_DRIVE_RUNTIME_STORAGE_KEY}', JSON.stringify({ baseUrl: '${FAKE_DRIVE_URL}' }))"`);
-runWithRetry(`agent-browser open ${FRONTEND_URL}`);
 run("agent-browser record stop");
 runWithRetry(`agent-browser record start ${MOVIE_PATH}`);
 run("agent-browser wait 2500");
 
 const seedRuntime = run(
   `agent-browser eval "(async () => {
+    const { ensureSessionQueryParam } = await import('/src/lib/tabIdentity.ts');
+    ensureSessionQueryParam();
     localStorage.setItem('${GOOGLE_DRIVE_RUNTIME_STORAGE_KEY}', JSON.stringify({ baseUrl: '${FAKE_DRIVE_URL}' }));
     localStorage.setItem('${GOOGLE_CLIENT_STORAGE_KEY}', JSON.stringify({}));
     localStorage.removeItem('${GOOGLE_AUTH_STORAGE_KEY}');
