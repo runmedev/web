@@ -25,6 +25,12 @@ can make raw Drive `.runme` bytes differ from the acknowledged local snapshot;
 raw upstream identity remains in `lastUpstreamVersion.checksum`. Do not collapse
 these domains or weaken conflict/version checks.
 
+For example, independent operations may appear locally as `[B, A]` and upstream
+in canonical order `[A, B]`: the same operations have different byte hashes.
+`lastRemoteChecksum` remembers the local snapshot acknowledged upstream;
+`lastUpstreamVersion.checksum` identifies the actual upstream bytes/version.
+Compare current local bytes with the acknowledged local snapshot for local edits.
+
 The IndexedDB-backed scan compares fields in application code. Conflicts are
 excluded. Pending creation qualifies before checksum comparison. A retained
 `lastSyncError` qualifies regardless of checksum equality: matching or empty
@@ -36,9 +42,51 @@ OPFS, then reread metadata transactionally before publishing it; preserve a newe
 checksum or changed log reference. An unreadable log is a per-file error and
 cannot break the whole scan or status table.
 
-OPFS and IndexedDB are not one atomic transaction. This repairs missing hashes;
-it does not detect every nonempty stale hash after an interrupted pair of writes.
-A content-generation/commit protocol or integrity sweep is a separate follow-up.
+### Review requirement: invalidate before changing OPFS
+
+An interrupted save can leave newer OPFS bytes with an old cached checksum. If
+that hash equals the acknowledged baseline, a scan can incorrectly call the file
+clean. Clear `md5Checksum` **before** the OPFS write, not afterward. Empty means
+unknown and requiring recomputation; it does not mean an empty notebook or prove
+that content differs. Keep `lastRemoteChecksum` as the acknowledged baseline.
+
+Use one per-notebook, same-origin consistency lock for writers and checksum repair:
+
+1. Acquire the lock; commit and await IndexedDB `md5Checksum = ""`.
+2. If invalidation fails, abort before writing OPFS.
+3. Write/append OPFS and await durable close.
+4. Publish the resulting snapshot's checksum and log-reference metadata while
+   still holding the lock, then release it. If publication fails, leave the hash
+   unknown. Never restore the old cached value on failure.
+5. Checksum repair acquires the same lock, rereads the record, reads/hashes OPFS
+   only if still unknown, and publishes before releasing it.
+
+Without that shared lock, repair could hash the old OPFS bytes after invalidation
+but before the writer commits. A crash after the OPFS write would then leave the
+old hash again. A physical OPFS-only lock is insufficient. Older asynchronous
+save/sync callbacks must also not publish captured hashes outside this protocol.
+All mutation paths must participate: edits, executions, annotations/revisions,
+imports/replacements, upgrades and sync merges. First initialization must retain
+a discoverable creation/download record and intended log identity before creating
+bytes; missing references must not make that operation look clean.
+
+A crash before invalidation leaves untouched bytes; after invalidation it leaves
+an unknown checksum. On restart, recompute from whichever bytes actually committed.
+This may do an extra check when the OPFS write never happened, which is safe.
+Unreadable/corrupt bytes remain preserved with a per-file error. Never hash the
+empty IndexedDB `doc` placeholder. This protocol prevents future stale caches;
+a one-time integrity sweep is still needed to find nonempty stale hashes left by
+older code. It does not make the two stores atomic.
+
+**Implementation status:** code at `1f855a6` implements missing-hash repair and its
+fresh-metadata guard, not this complete writer/repair protocol. This review
+requirement must be implemented across every mutation path before claiming the
+crash window is closed.
+
+Required tests interrupt before/after invalidation and after OPFS close, recreate
+the controller, race two writers with a repairing reader, and delay an older
+metadata callback. Cover initialization, replacement, merge, edits and annotations;
+retain corruption isolation and verify acknowledgement only covers uploaded bytes.
 
 ## Keyed delaying queue
 
