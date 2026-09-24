@@ -239,3 +239,17 @@ After rollout, close all Runme tabs and worker inspectors before reopening so th
 new owner and schema are used. Do not clear site data. Repeat the heap comparison
 on the affected profile; isolated fixtures cannot establish that every source of
 memory growth in a deployed session has been fixed.
+
+### Payload recovery and save ordering regressions
+
+- Hold an earlier JSON save's filesystem write open, then submit a newer save.
+  The later save must remain the final content after both complete. A rejected
+  write must not prevent the next queued save from succeeding.
+- With a notebook already recovered in memory, make its old payload unreadable.
+  Saving the recovered content and reopening must work without reading the old
+  payload. Metadata/status and upstream-revision access must remain available.
+- Leave an unreadable pending initialization reference beside a healthy `.runme`
+  journal. Open, edit, save, and reopen the journal; retain the pending reference
+  for diagnosis while normal edits continue to work.
+- Retry a completed Drive creation with the same key/input while OPFS writes
+  fail. Return the durable receipt without another payload write or Drive call.

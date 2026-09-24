@@ -139,6 +139,7 @@ import {
   type ContentGeneration,
   OwnedOperationLogs,
 } from './ownedOperationLogs'
+import { OwnerCommitQueue } from './ownerCommitQueue'
 import {
   type RevisionDocStorage,
   createDefaultRevisionDocStorage,
@@ -462,6 +463,17 @@ export class LocalNotebooks extends Dexie {
   private readonly ipynbShadowStorage: IpynbShadowStorage
   private readonly operationLogStorage: OperationLogStorage
 
+  // Queue local replacements before any asynchronous payload/shadow I/O. Otherwise
+  // a slower earlier save can publish after a newer one. SharedWorker RPCs share
+  // this queue; operation-log appends retain their own causal commit queue.
+  private localSaveQueue?: OwnerCommitQueue
+  private serializeLocalSave<T>(
+    uri: string,
+    operation: () => Promise<T>
+  ): Promise<T> {
+    return (this.localSaveQueue ??= new OwnerCommitQueue()).run(uri, operation)
+  }
+
   private workQueue?: SyncWorkQueue
   private driveAvailable = true
 
@@ -482,9 +494,7 @@ export class LocalNotebooks extends Dexie {
       notebookJson,
       fingerprint: md5(notebookJson),
     }
-    const durableRequest = await this.prepareCreation(request)
-    await this.transaction('rw', this.driveCreates, async () => {
-      const existing = await this.driveCreates.get(id)
+    const validateExisting = (existing: PendingDriveCreate | undefined) => {
       if (
         existing &&
         (existing.folder !== folder ||
@@ -494,8 +504,20 @@ export class LocalNotebooks extends Dexie {
         throw new Error(
           'IDEMPOTENCY_CONFLICT: creation key already has different input'
         )
-      if (!existing) await this.driveCreates.put(durableRequest)
-    })
+    }
+    // Replays already have durable input. They must also succeed when storage
+    // is full; do not allocate another immutable payload for the same request.
+    const existing = await this.driveCreates.get(id)
+    validateExisting(existing)
+    if (existing?.result) return existing.result
+    if (!existing) {
+      const durableRequest = await this.prepareCreation(request)
+      await this.transaction('rw', this.driveCreates, async () => {
+        const current = await this.driveCreates.get(id)
+        validateExisting(current)
+        if (!current) await this.driveCreates.put(durableRequest)
+      })
+    }
     await this.queueDriveWork(
       'create',
       id,
@@ -865,12 +887,21 @@ export class LocalNotebooks extends Dexie {
         (record.contentRef
           ? await this.payloadIO(this.payloadStorage.read(record.contentRef))
           : ''),
-      pendingOperationLogInitialization: record.pendingInitializationRef
-        ? await this.payloadIO(
+    }
+  }
+
+  /** Initialization bytes are recovery input, not part of ordinary content reads. */
+  private async readPendingInitialization(
+    record: LocalFileRecord | undefined
+  ): Promise<string | undefined> {
+    return (
+      record?.pendingOperationLogInitialization ??
+      (record?.pendingInitializationRef
+        ? this.payloadIO(
             this.payloadStorage.read(record.pendingInitializationRef)
           )
-        : record.pendingOperationLogInitialization,
-    }
+        : undefined)
+    )
   }
 
   /** Empty fields remove a reference; absent fields leave the current content intact. */
@@ -1204,7 +1235,7 @@ export class LocalNotebooks extends Dexie {
     return this.driveSyncCoordinator.runExclusive(
       `file-parent:${localFileUri}`,
       async () => {
-        const file = await this.getFileRecord(localFileUri)
+        const file = await this.files.get(localFileUri)
         if (!file) {
           throw new Error(`Local file record not found for ${localFileUri}`)
         }
@@ -1997,6 +2028,18 @@ export class LocalNotebooks extends Dexie {
    * (e.g. `local://file/<uuid>`) that acts as the primary key for the record.
    */
   async save(uri: string, notebook: parser_pb.Notebook): Promise<void> {
+    // Preserve the caller's stable cell identities before taking a queued snapshot.
+    migrateNotebookCellIds(notebook)
+    const snapshot = cloneNotebook(notebook)
+    return this.serializeLocalSave(uri, () =>
+      this.saveNotebookInner(uri, snapshot)
+    )
+  }
+
+  private async saveNotebookInner(
+    uri: string,
+    notebook: parser_pb.Notebook
+  ): Promise<void> {
     if (!uri.startsWith('local://file/')) {
       throw new Error(
         'LocalNotebooks.save expects a local://file/ URI; got ' + uri
@@ -2004,7 +2047,7 @@ export class LocalNotebooks extends Dexie {
     }
 
     await this.persistNotebook(uri, notebook)
-    const record = await this.getFileRecord(uri)
+    const record = await this.files.get(uri)
     if (!record?.conflict) {
       this.enqueueSync(uri)
       this.enqueueMarkdownSync(uri)
@@ -2020,7 +2063,7 @@ export class LocalNotebooks extends Dexie {
     getObservedOperationHeads(): string[]
     initialNotebook: parser_pb.Notebook
   }> {
-    const record = await this.getFileRecord(uri)
+    const record = await this.files.get(uri)
     if (!record || !record.operationLogRef) {
       throw new Error(`Operation-log reference missing for ${uri}`)
     }
@@ -2119,7 +2162,7 @@ export class LocalNotebooks extends Dexie {
   }
 
   async isOperationLogNotebook(uri: string): Promise<boolean> {
-    const record = await this.getFileRecord(uri)
+    const record = await this.files.get(uri)
     return (
       Boolean(record?.operationLogRef) &&
       detectNotebookFileFormat(record?.name ?? '') === 'runme-operation-log'
@@ -3016,7 +3059,7 @@ export class LocalNotebooks extends Dexie {
   }
 
   private async readMaterializedOperationLog(uri: string) {
-    const record = await this.getFileRecord(uri)
+    const record = await this.files.get(uri)
     if (!record?.operationLogRef) {
       throw new Error(`Operation-log reference missing for ${uri}`)
     }
@@ -3032,7 +3075,7 @@ export class LocalNotebooks extends Dexie {
     suppliedActorId?: string,
     reverts?: string[]
   ): Promise<void> {
-    const record = await this.getFileRecord(uri)
+    const record = await this.files.get(uri)
     if (!record?.operationLogRef) {
       throw new Error(`Operation-log reference missing for ${uri}`)
     }
@@ -3188,7 +3231,7 @@ export class LocalNotebooks extends Dexie {
           uri
       )
     }
-    const record = await this.getFileRecord(uri)
+    const record = await this.files.get(uri)
     if (!record) {
       throw new Error(`Local notebook record not found for ${uri}`)
     }
@@ -3206,7 +3249,7 @@ export class LocalNotebooks extends Dexie {
 
   /** Expose only the worker's source locator; notebook history stays in OPFS. */
   async trainingExampleJob(uri: string): Promise<ExampleJob> {
-    const record = await this.getFileRecord(uri)
+    const record = await this.files.get(uri)
     if (!record?.operationLogRef)
       throw new Error('Training examples require a .runme notebook in OPFS')
     return {
@@ -3224,13 +3267,23 @@ export class LocalNotebooks extends Dexie {
     content: string,
     mimeType: string
   ): Promise<void> {
+    return this.serializeLocalSave(uri, () =>
+      this.saveContentInner(uri, content, mimeType)
+    )
+  }
+
+  private async saveContentInner(
+    uri: string,
+    content: string,
+    mimeType: string
+  ): Promise<void> {
     if (!uri.startsWith('local://file/')) {
       throw new Error(
         'LocalNotebooks.saveContent expects a local://file/ URI; got ' + uri
       )
     }
 
-    const record = await this.getFileRecord(uri)
+    const record = await this.files.get(uri)
     if (!record) {
       throw new Error(`Local file record not found for ${uri}`)
     }
@@ -3430,7 +3483,7 @@ export class LocalNotebooks extends Dexie {
   }
 
   async getConflictUpstreamDoc(localUri: string): Promise<string> {
-    const record = await this.getFileRecord(localUri)
+    const record = await this.files.get(localUri)
     if (!record) {
       throw new Error(`Local notebook record not found for ${localUri}`)
     }
@@ -3467,7 +3520,7 @@ export class LocalNotebooks extends Dexie {
   async getDriveUpstreamDoc(
     localUri: string
   ): Promise<{ doc: string; version?: UpstreamVersion }> {
-    const record = await this.getFileRecord(localUri)
+    const record = await this.files.get(localUri)
     if (!record) {
       throw new Error(`Local notebook record not found for ${localUri}`)
     }
@@ -3498,7 +3551,7 @@ export class LocalNotebooks extends Dexie {
   }
 
   async listDriveRevisions(localUri: string): Promise<DriveRevision[]> {
-    const record = await this.getFileRecord(localUri)
+    const record = await this.files.get(localUri)
     if (!record) {
       throw new Error(`Local notebook record not found for ${localUri}`)
     }
@@ -3518,7 +3571,7 @@ export class LocalNotebooks extends Dexie {
     if (!normalizedRevisionId) {
       throw new Error('getDriveRevisionDoc requires a revision id')
     }
-    const record = await this.getFileRecord(localUri)
+    const record = await this.files.get(localUri)
     if (!record) {
       throw new Error(`Local notebook record not found for ${localUri}`)
     }
@@ -3557,7 +3610,7 @@ export class LocalNotebooks extends Dexie {
     uri: string,
     notebook: parser_pb.Notebook
   ): Promise<void> {
-    const record = await this.getFileRecord(uri)
+    const record = await this.files.get(uri)
     if (!record) {
       throw new Error(
         `Local notebook record not found for ${uri}. Call addFile first.`
@@ -4196,8 +4249,7 @@ export class LocalNotebooks extends Dexie {
         )
       }
       const initialLog =
-        (await this.getFileRecord(fileUri))
-          ?.pendingOperationLogInitialization ??
+        (await this.readPendingInitialization(await this.files.get(fileUri))) ??
         (options.content || createInitialNotebookFile(name))
       decodeNotebookFile(initialLog, name)
       const stored = await this.operationLogStorage.initialize(
@@ -5187,7 +5239,7 @@ export class LocalNotebooks extends Dexie {
     exportedAt?: string
     needsCreateRecovery?: boolean
   }> {
-    const record = await this.getFileRecord(uri)
+    const record = await this.files.get(uri)
     return {
       uri: record?.ipynbExportUri,
       error: record?.ipynbExportError,
@@ -5199,7 +5251,7 @@ export class LocalNotebooks extends Dexie {
   /** Explicit user recovery: never clear a newer claim or a confirmed copy. */
   async retryUnconfirmedIpynbCreation(uri: string): Promise<void> {
     await this.driveSyncCoordinator.runExclusive(uri, async () => {
-      const record = await this.getFileRecord(uri)
+      const record = await this.files.get(uri)
       if (!record?.ipynbExportPendingClaim || !isDriveUri(record.remoteId))
         return
       const drive = appState.driveNotebookStore ?? this.driveStore
@@ -5427,13 +5479,18 @@ export class LocalNotebooks extends Dexie {
 
   /** Resume the exact initialization payload, preserving partial/corrupt bytes on error. */
   private async recoverLocalInitialization(uri: string): Promise<void> {
-    const record = await this.getFileRecord(uri)
-    if (!record?.pendingOperationLogInitialization) return
+    const record = await this.files.get(uri)
+    if (
+      !record ||
+      (!record.pendingOperationLogInitialization &&
+        !record.pendingInitializationRef)
+    )
+      return
     let stored: OperationLogSnapshot
     try {
       stored = await this.operationLogStorage.initialize(
         uri,
-        record.pendingOperationLogInitialization
+        (await this.readPendingInitialization(record))!
       )
     } catch (error) {
       // A failed initialization must not hide an already readable notebook.

@@ -69,7 +69,15 @@ Writes close a new OPFS file before publishing its reference in IndexedDB.
 Existing content is never overwritten in place. An interrupted write or failed
 metadata commit leaves the previous record readable. `getFileRecord()` hydrates
 content for explicit consumers; metadata readers use `files.get()` and never
-open OPFS. Existing IndexedDB inline records remain readable during migration.
+open OPFS. Pending operation-log initialization is hydrated only when recovery
+needs it; an unreadable pending payload cannot block a healthy existing journal.
+Explicit saves can persist recovered content even if its previous payload is
+unreadable. Local `save` and `saveContent` calls share a per-notebook queue so
+slow filesystem writes cannot reorder submitted edits. Notebook objects are
+snapshotted at submission. Creation retries reuse their durable input/receipt,
+including when OPFS has no room for another payload.
+
+Existing IndexedDB inline records remain readable during migration.
 
 Migration starts in the background, so a large legacy database cannot prevent
 the worker handshake. It processes one record at a time, writes its payload,

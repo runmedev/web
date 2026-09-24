@@ -9391,6 +9391,180 @@ describe('OPFS notebook payload migration', () => {
     }
   )
 
+  it('serializes a slow save before a newer full-content save', async () => {
+    const store = createTestStore({})
+    await store.files.put(baseline())
+    const payloads = (store as any).payloadStorage as MemoryFilePayloadStorage
+    const write = payloads.write.bind(payloads)
+    let release!: () => void
+    const gate = new Promise<void>((resolve) => {
+      release = resolve
+    })
+    const writes = vi
+      .spyOn(payloads, 'write')
+      .mockImplementationOnce(async (content) => {
+        await gate
+        return write(content)
+      })
+    const first = store.save(
+      uri,
+      create(parser_pb.NotebookSchema, {
+        cells: [
+          create(parser_pb.CellSchema, {
+            value: 'older',
+            kind: parser_pb.CellKind.CODE,
+          }),
+        ],
+      })
+    )
+    await vi.waitFor(() => expect(writes).toHaveBeenCalledTimes(1))
+    const second = store.saveContent(
+      uri,
+      notebookJson('newer'),
+      'application/json'
+    )
+    try {
+      // A later invocation must not publish while the earlier write is suspended.
+      await new Promise((resolve) => setTimeout(resolve, 20))
+      expect(writes).toHaveBeenCalledTimes(1)
+    } finally {
+      release()
+      await Promise.all([first, second])
+      store.stopSyncQueue()
+    }
+    expect((await store.getFileRecord(uri))?.doc).toContain('newer')
+  })
+
+  it('continues queued saves after a failed write and captures the submitted notebook', async () => {
+    const store = createTestStore({})
+    await store.files.put(baseline())
+    vi.spyOn((store as any).payloadStorage, 'write').mockRejectedValueOnce(
+      new Error('interrupted')
+    )
+    const notebook = create(parser_pb.NotebookSchema, {
+      cells: [
+        create(parser_pb.CellSchema, {
+          value: 'submitted',
+          kind: parser_pb.CellKind.CODE,
+        }),
+      ],
+    })
+    const first = store.saveContent(
+      uri,
+      notebookJson('failed'),
+      'application/json'
+    )
+    const second = store.save(uri, notebook)
+    notebook.cells[0].value = 'not yet saved'
+    try {
+      await expect(first).rejects.toThrow('interrupted')
+      await second
+      expect((await store.load(uri)).cells[0].value).toBe('submitted')
+    } finally {
+      store.stopSyncQueue()
+    }
+  })
+
+  it('saves recovered content without reading the damaged previous payload', async () => {
+    const store = createTestStore({})
+    await store.files.put(baseline())
+    await (store as any).migrateFilePayloads()
+    const payloads = (store as any).payloadStorage as MemoryFilePayloadStorage
+    payloads.values.clear()
+    const read = vi.spyOn(payloads, 'read')
+    try {
+      await store.saveContent(
+        uri,
+        notebookJson('recovered'),
+        'application/json'
+      )
+      expect(read).not.toHaveBeenCalled()
+      expect((await store.load(uri)).cells[0].value).toBe('recovered')
+      await store.save(
+        uri,
+        create(parser_pb.NotebookSchema, {
+          cells: [
+            create(parser_pb.CellSchema, {
+              value: 'rerun',
+              kind: parser_pb.CellKind.CODE,
+            }),
+          ],
+        })
+      )
+      expect((await store.load(uri)).cells[0].value).toBe('rerun')
+    } finally {
+      store.stopSyncQueue()
+    }
+  })
+
+  it('opens, edits, and reopens a healthy log despite a missing pending initialization payload', async () => {
+    const logs = new MemoryOperationLogStorage()
+    const store = createTestStore({}, { operationLogStorage: logs })
+    const notebook = create(parser_pb.NotebookSchema, {
+      cells: [
+        create(parser_pb.CellSchema, {
+          value: 'healthy',
+          kind: parser_pb.CellKind.CODE,
+        }),
+      ],
+    })
+    const conversion = await convertLegacyNotebookFileToRunme(
+      encodeRunmeNotebook(notebook),
+      'source.json'
+    )
+    const stored = await logs.initialize(uri, conversion.content)
+    const payloads = (store as any).payloadStorage as MemoryFilePayloadStorage
+    const pendingInitializationRef = await payloads.write(
+      'unreadable pending bytes'
+    )
+    payloads.values.clear()
+    await store.files.put({
+      ...baseline('payload.runme'),
+      doc: '',
+      operationLogRef: stored.ref,
+      pendingInitializationRef,
+    })
+    try {
+      expect((await store.load(uri)).cells[0].value).toBe('healthy')
+      const editor = await store.createOperationLogSaveStore(uri, {
+        actorId: 'recovery-test',
+      })
+      editor.initialNotebook.cells[0].value = 'edited and rerun'
+      await editor.save(uri, editor.initialNotebook)
+      expect((await store.load(uri)).cells[0].value).toBe('edited and rerun')
+      expect((await store.files.get(uri))?.pendingInitializationRef).toEqual(
+        pendingInitializationRef
+      )
+    } finally {
+      store.stopSyncQueue()
+    }
+  })
+
+  it('returns a completed creation receipt without writing another payload', async () => {
+    const store = createTestStore({})
+    const notebook = create(parser_pb.NotebookSchema, {})
+    const result = {
+      fileId: 'done',
+      fileName: 'a.runme',
+      remoteUri: 'remote',
+      localUri: uri,
+    }
+    await store.driveCreates.put({
+      id: 'done',
+      folder: 'folder',
+      name: 'a.runme',
+      notebookJson: '',
+      fingerprint: md5('{}'),
+      result,
+    })
+    vi.spyOn((store as any).payloadStorage, 'write').mockRejectedValue(
+      new Error('quota')
+    )
+    await expect(
+      store.createDriveNotebookRequest(notebook, 'folder', 'a.runme', 'done')
+    ).resolves.toEqual(result)
+  })
+
   it('moves pending initialization, conflict, and creation payloads out of metadata', async () => {
     const store = createTestStore({})
     await store.files.put({
@@ -9416,7 +9590,7 @@ describe('OPFS notebook payload migration', () => {
     expect(raw?.pendingOperationLogInitialization).toBeUndefined()
     expect(raw?.conflict?.upstreamDoc).toBeUndefined()
     expect(
-      (await store.getFileRecord(uri))?.pendingOperationLogInitialization
+      await (store as any).payloadStorage.read(raw!.pendingInitializationRef)
     ).toBe('initial bytes')
     expect(await store.getConflictUpstreamDoc(uri)).toBe('conflict bytes')
     const request = await store.driveCreates.get('create')
