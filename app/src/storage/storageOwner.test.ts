@@ -35,6 +35,7 @@ function setup() {
     createOperationLogSaveStore: vi.fn(async () => ({
       save: vi.fn(async () => {}),
       getObservedOperationHeads: () => ['op-1'],
+      initialNotebook: { cells: [{ refId: 'captured-cell' }] },
     })),
   }
   return {
@@ -157,8 +158,10 @@ describe('SharedWorker message boundary', () => {
     const view = (await first.request('createView', ['a'])) as {
       id: string
       heads: string[]
+      initialNotebook: { cells: { refId: string }[] }
     }
     expect(view.heads).toEqual(['op-1'])
+    expect(view.initialNotebook.cells).toEqual([{ refId: 'captured-cell' }])
     await expect(
       second.request('saveView', [view.id, 'a', {}])
     ).rejects.toThrow('view disconnected')

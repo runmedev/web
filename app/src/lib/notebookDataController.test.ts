@@ -100,7 +100,10 @@ function createFakeLocalNotebooks() {
     sync: vi.fn(async () => undefined),
     operationLogSupportsConcurrentWriters: vi.fn(() => true),
     save: vi.fn(),
-    createOperationLogSaveStore: vi.fn(async () => ({ save: vi.fn() })),
+    createOperationLogSaveStore: vi.fn(async (uri: string) => ({
+      save: vi.fn(),
+      initialNotebook: records.get(uri)!.notebook,
+    })),
   }
 }
 
@@ -271,6 +274,34 @@ describe('NotebookDataController', () => {
     )
   })
 
+  it('renders the save baseline when sync appends between load and view creation', async () => {
+    const uri = 'local://file/shared'
+    const localStore = createFakeLocalNotebooks()
+    localStore.records.set(uri, {
+      id: uri,
+      name: 'shared.runme',
+      remoteId: 'https://drive.google.com/file/d/shared/view',
+      notebook: createNotebook('before sync'),
+    })
+    localStore.load.mockImplementationOnce(async () => {
+      const beforeSync = localStore.records.get(uri)!.notebook
+      localStore.records.get(uri)!.notebook = createNotebook('after sync')
+      return beforeSync
+    })
+    const controller = getNotebookDataController()
+    controller.configureOwnershipManager(createFakeOwnershipManager())
+    controller.configureStores({
+      localNotebooks: localStore as unknown as LocalNotebooks,
+    })
+
+    const result = await controller.openNotebook(uri)
+
+    expect(result.entry.state).toBe('loaded')
+    expect(controller.getNotebookData(uri)?.getNotebook().cells[0]?.value).toBe(
+      'after sync'
+    )
+  })
+
   it('fails closed for .runme when Web Locks are unavailable', async () => {
     const localStore = createFakeLocalNotebooks()
     localStore.operationLogSupportsConcurrentWriters.mockReturnValue(false)
@@ -306,10 +337,6 @@ describe('NotebookDataController', () => {
       remoteId: 'https://drive.google.com/file/d/shared/view',
       notebook: createNotebook('before'),
     })
-    localStore.loadOperationLogSnapshot.mockImplementation(async () => {
-      localStore.records.get(uri)!.notebook = createNotebook('after')
-      return localStore.records.get(uri)!.notebook
-    })
     const controller = getNotebookDataController()
     controller.configureOwnershipManager(createFakeOwnershipManager())
     controller.configureStores({
@@ -320,6 +347,7 @@ describe('NotebookDataController', () => {
     const flushPendingPersist = vi.spyOn(notebookData, 'flushPendingPersist')
     notebookData.setReviewPending(true)
     notebookData.setReviewReloadRequired(true)
+    localStore.records.get(uri)!.notebook = createNotebook('after')
 
     await controller.refreshReadOnlyNotebook(uri)
 
@@ -327,10 +355,12 @@ describe('NotebookDataController', () => {
     expect(notebookData.isReviewReloadRequired()).toBe(false)
 
     expect(localStore.sync).not.toHaveBeenCalled()
-    expect(localStore.loadOperationLogSnapshot).toHaveBeenCalledWith(uri)
+    expect(localStore.loadOperationLogSnapshot).not.toHaveBeenCalled()
+    expect(localStore.load).toHaveBeenCalledOnce()
+    expect(localStore.createOperationLogSaveStore).toHaveBeenCalledTimes(2)
     expect(flushPendingPersist).toHaveBeenCalledOnce()
     expect(
-      localStore.loadOperationLogSnapshot.mock.invocationCallOrder.at(-1)
+      localStore.createOperationLogSaveStore.mock.invocationCallOrder.at(-1)
     ).toBeGreaterThan(flushPendingPersist.mock.invocationCallOrder.at(-1)!)
     expect(controller.getNotebookData(uri)?.getNotebook().cells[0]?.value).toBe(
       'after'
@@ -346,15 +376,15 @@ describe('NotebookDataController', () => {
       remoteId: 'https://drive.google.com/file/d/shared/view',
       notebook: createNotebook('current'),
     })
-    localStore.loadOperationLogSnapshot.mockRejectedValue(
-      new Error('OPFS unavailable')
-    )
     const controller = getNotebookDataController()
     controller.configureOwnershipManager(createFakeOwnershipManager())
     controller.configureStores({
       localNotebooks: localStore as unknown as LocalNotebooks,
     })
     await controller.openNotebook(uri)
+    localStore.createOperationLogSaveStore.mockRejectedValueOnce(
+      new Error('OPFS unavailable')
+    )
 
     await controller.refreshReadOnlyNotebook(uri)
 

@@ -16,7 +16,9 @@ async function connect(page: Page, baseUrl: string) {
     )
     ;(window as any).store = createSharedNotebookStore(
       new DriveNotebookStore(async () => {
-        throw new Error('No credentials in storage smoke test')
+        // Intentionally stall credential delivery when the test starts a sync.
+        // No real Drive request or production credentials are used.
+        return new Promise<string>(() => {})
       })
     )
   })
@@ -57,7 +59,7 @@ async function main() {
         page.evaluate(async (uri) => {
           const store = (window as any).store
           ;(window as any).view = await store.createOperationLogSaveStore(uri)
-          ;(window as any).notebook = await store.loadOperationLogSnapshot(uri)
+          ;(window as any).notebook = (window as any).view.initialNotebook
         }, uri)
       )
     )
@@ -103,6 +105,74 @@ async function main() {
       throw new Error('Concurrent edits did not converge')
     if (result.checksum !== '')
       throw new Error('Local save eagerly published checksum')
+    // Make a real worker sync stall before network I/O, then prove that cached
+    // opens and newly created pending notebooks still work through MessagePorts.
+    await a.evaluate(async (uri) => {
+      const store = (window as any).store
+      await store.files.update(uri, {
+        remoteId:
+          'https://drive.google.com/file/d/storage-owner-test-blocked/view',
+        lastSynced: '',
+      })
+      store.setDriveSyncAvailable(true)
+      void store.sync(uri).catch(() => {})
+    }, uri)
+    await a.waitForFunction(
+      async (uri) =>
+        (await (window as any).store.getSyncState(uri)).status === 'syncing',
+      uri
+    )
+    const offline = await b.evaluate(async (uri) => {
+      const store = (window as any).store
+      // Fail quickly instead of waiting for the five-minute RPC timeout.
+      const withinDeadline = <T>(operation: Promise<T>): Promise<T> => {
+        let timer: ReturnType<typeof setTimeout>
+        return Promise.race([
+          operation,
+          new Promise<T>((_, reject) => {
+            timer = setTimeout(
+              () => reject(new Error('Local open waited for upstream work')),
+              2000
+            )
+          }),
+        ]).finally(() => clearTimeout(timer))
+      }
+      const cached = await withinDeadline<any>(store.load(uri))
+      // Turning auth off must not wait for the already running sync either.
+      store.setDriveSyncAvailable(false)
+      await store.folders.put({
+        id: 'local://folder/offline-test',
+        name: 'Offline test',
+        remoteId: 'https://drive.google.com/drive/folders/storage-owner-test',
+        children: [],
+        lastSynced: '',
+      })
+      const created = await withinDeadline<any>(
+        store.create('local://folder/offline-test', 'offline.runme')
+      )
+      const notebook = await withinDeadline<any>(store.load(created.uri))
+      const view = await store.createOperationLogSaveStore(created.uri)
+      notebook.cells.push({
+        ...cached.cells[0],
+        refId: 'offline-cell',
+        value: 'Saved before upstream creation',
+      })
+      await view.save(created.uri, notebook)
+      const reopened = await withinDeadline<any>(store.load(created.uri))
+      return {
+        cached: cached.cells.map((cell: any) => cell.value).sort(),
+        value: reopened.cells[0].value,
+        state: (await store.getSyncState(created.uri)).status,
+      }
+    }, uri)
+    if (
+      JSON.stringify(offline.cached) !== JSON.stringify(result.cells) ||
+      offline.value !== 'Saved before upstream creation' ||
+      offline.state !== 'pending-upstream-create'
+    )
+      throw new Error(
+        'Offline open/create/edit/reopen did not preserve local content'
+      )
     await context.close()
     context = await launch()
     const restored = await context.newPage()
@@ -128,6 +198,8 @@ async function main() {
             'real SharedWorker + two MessagePorts',
             'concurrent causal edits preserved',
             'checksum remains unset',
+            'cached open bypasses stalled worker reconciliation',
+            'offline Drive-folder create/edit/reopen before upstream creation',
             'browser restart restores exact OPFS bytes',
           ],
           cells: recovered.cells,
