@@ -193,6 +193,12 @@ one underlying scan, shared failure, and a successful subsequent read.
 `local.test.ts` rejects bulk payload reads and checks a single read per file,
 including deletion between key enumeration and retrieval.
 
+`tableScan.test.ts` covers the shared row/byte caps, overflow cursors, skipped
+records, oversized projections, early stream termination and a 50 MiB legacy
+body. `boundedStorageReads.test.js` verifies the storage lint rule and checks
+production sources for direct bulk-read bypasses. All status pages go through
+`readTablePage()`; background and migration enumeration goes through `scanTable()`.
+
 Manual acceptance: open the status document in two same-origin tabs while Drive
 sync is producing updates. Profile the storage SharedWorker in Chrome DevTools.
 Compare worker allocation sampling and heap snapshots with the status document

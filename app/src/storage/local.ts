@@ -144,7 +144,7 @@ import {
   createDefaultRevisionDocStorage,
 } from './revisionDocs'
 import { SyncDeferred, SyncWorkQueue } from './syncWorkQueue'
-import { STORAGE_SCAN_BATCH_SIZE, scanTable, tableKeyPage } from './tableScan'
+import { readTablePage, scanTable, tableHasRecords } from './tableScan'
 
 // Local folder URI is a special folder that contains all notebooks which are local (i.e. not synced to Drive)
 export const LOCAL_FOLDER_URI = 'local://folder/local'
@@ -1903,57 +1903,37 @@ export class LocalNotebooks extends Dexie {
       limit?: number
     } = {}
   ): Promise<NotebookSyncStatusPage> {
-    const limit = Math.max(
-      1,
-      Math.min(
-        STORAGE_SCAN_BATCH_SIZE,
-        Number.isFinite(options.limit)
-          ? Math.floor(options.limit!)
-          : STORAGE_SCAN_BATCH_SIZE
-      )
-    )
     const table = options.cursor?.table ?? 'files'
-    const after = options.cursor?.after
-    const rows: NotebookSyncStatusRow[] = []
+    const pageOptions = { after: options.cursor?.after, limit: options.limit }
     if (table === 'files') {
-      const keys = await tableKeyPage(this.files, after, limit + 1)
-      for (const key of keys.slice(0, limit)) {
-        const record = await this.files.get(key)
-        if (record) rows.push(await this.fileSyncStatusRow(record))
-      }
+      const page = await readTablePage(
+        this.files,
+        (record) => this.fileSyncStatusRow(record),
+        pageOptions
+      )
       return {
-        rows,
+        rows: page.rows,
         nextCursor:
-          keys.length > limit
-            ? { table, after: keys[limit - 1] }
-            : (await tableKeyPage(this.driveCreates, undefined, 1)).length
+          page.nextAfter !== undefined
+            ? { table, after: page.nextAfter }
+            : (await tableHasRecords(this.driveCreates))
               ? { table: 'creates' }
               : undefined,
       }
     }
-    const keys = await tableKeyPage(this.driveCreates, after, limit + 1)
-    for (const key of keys.slice(0, limit)) {
-      const request = await this.driveCreates.get(key)
-      if (request && !request.result)
-        rows.push(this.creationSyncStatusRow(request))
-    }
+    const page = await readTablePage(
+      this.driveCreates,
+      (request) =>
+        request.result ? undefined : this.creationSyncStatusRow(request),
+      pageOptions
+    )
     return {
-      rows,
+      rows: page.rows,
       nextCursor:
-        keys.length > limit ? { table, after: keys[limit - 1] } : undefined,
+        page.nextAfter !== undefined
+          ? { table, after: page.nextAfter }
+          : undefined,
     }
-  }
-
-  /** Compatibility API for automation: only small result rows accumulate. */
-  async listFileSyncStatuses(): Promise<NotebookSyncStatusRow[]> {
-    const rows: NotebookSyncStatusRow[] = []
-    let cursor: NotebookSyncStatusPage['nextCursor']
-    do {
-      const page = await this.listFileSyncStatusPage({ cursor })
-      rows.push(...page.rows)
-      cursor = page.nextCursor
-    } while (cursor)
-    return rows
   }
 
   async getMetadata(uri: string): Promise<NotebookStoreItem | null> {

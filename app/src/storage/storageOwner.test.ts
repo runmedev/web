@@ -85,7 +85,7 @@ describe('SharedWorker message boundary', () => {
   it('shares an in-flight status scan across tabs and releases it after failure', async () => {
     const { host, store } = setup()
     let rejectScan!: (error: Error) => void
-    const listFileSyncStatuses = vi
+    const listFileSyncStatusPage = vi
       .fn()
       .mockImplementationOnce(
         () =>
@@ -93,28 +93,28 @@ describe('SharedWorker message boundary', () => {
             rejectScan = reject
           })
       )
-      .mockResolvedValue([{ title: 'Recovered' }])
-    Object.assign(store, { listFileSyncStatuses })
+      .mockResolvedValue({ rows: [{ title: 'Recovered' }] })
+    Object.assign(store, { listFileSyncStatusPage })
     const first = connect(host),
       second = connect(host)
     const requests = [
-      first.request('listFileSyncStatuses'),
-      second.request('listFileSyncStatuses'),
+      first.request('listFileSyncStatusPage'),
+      second.request('listFileSyncStatusPage'),
     ]
     const outcomes = Promise.allSettled(requests)
     // Per-port barriers ensure both reads have reached the host.
     await Promise.all([first.request('heartbeat'), second.request('heartbeat')])
-    await vi.waitFor(() => expect(listFileSyncStatuses).toHaveBeenCalled())
-    expect(listFileSyncStatuses).toHaveBeenCalledTimes(1)
+    await vi.waitFor(() => expect(listFileSyncStatusPage).toHaveBeenCalled())
+    expect(listFileSyncStatusPage).toHaveBeenCalledTimes(1)
     rejectScan(new Error('Read failed'))
     expect((await outcomes).map((result) => result.status)).toEqual([
       'rejected',
       'rejected',
     ])
-    await expect(first.request('listFileSyncStatuses')).resolves.toEqual([
-      { title: 'Recovered' },
-    ])
-    expect(listFileSyncStatuses).toHaveBeenCalledTimes(2)
+    await expect(first.request('listFileSyncStatusPage')).resolves.toEqual({
+      rows: [{ title: 'Recovered' }],
+    })
+    expect(listFileSyncStatusPage).toHaveBeenCalledTimes(2)
   })
 
   it('times out diagnostics promptly without a mutation-outcome warning', async () => {

@@ -17,7 +17,6 @@ export const STORAGE_METHODS = [
   'sync',
   'getSyncState',
   'getDriveQueueMetrics',
-  'listFileSyncStatuses',
   'listFileSyncStatusPage',
   'getMetadata',
   'save',

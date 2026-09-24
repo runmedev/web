@@ -3,6 +3,7 @@ import globals from "globals";
 import reactHooks from "eslint-plugin-react-hooks";
 import reactRefresh from "eslint-plugin-react-refresh";
 import tseslint from "typescript-eslint";
+import storageRules from "./tools/bounded-storage-reads.mjs";
 
 export default tseslint.config(
   { ignores: ["dist"] },
@@ -24,5 +25,11 @@ export default tseslint.config(
         { allowConstantExport: true },
       ],
     },
+  },
+  {
+    files: ["src/**/*.{ts,tsx}"],
+    ignores: ["src/**/*.test.*"],
+    plugins: { storage: storageRules },
+    rules: { "storage/bounded-storage-reads": "error" },
   },
 );

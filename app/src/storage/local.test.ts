@@ -62,6 +62,18 @@ import { NotebookStoreItemType } from './notebook'
 import { MemoryOperationLogStorage } from './operationLogs'
 import { MemoryRevisionDocStorage } from './revisionDocs'
 
+/** Collect small fixture pages for assertions; production APIs always expose a cursor. */
+async function listStatuses(store: LocalNotebooks) {
+  const rows = []
+  let cursor: import('./local').NotebookSyncStatusPage['nextCursor']
+  do {
+    const page = await store.listFileSyncStatusPage({ cursor })
+    rows.push(...page.rows)
+    cursor = page.nextCursor
+  } while (cursor)
+  return rows
+}
+
 const NOTEBOOK_JSON_WRITE_OPTIONS = {
   emitDefaultValues: true,
 } as unknown as Parameters<typeof toJsonString>[2]
@@ -4469,7 +4481,7 @@ describe('LocalNotebooks pending Drive create', () => {
       md5Checksum: checksum,
     })
 
-    await expect(store.listFileSyncStatuses()).resolves.toEqual([
+    await expect(listStatuses(store)).resolves.toEqual([
       {
         localUri: 'local://file/synced',
         title: 'synced.json',
@@ -4572,7 +4584,7 @@ describe('LocalNotebooks pending Drive create', () => {
       return get(id)
     })
 
-    const statuses = await store.listFileSyncStatuses()
+    const statuses = await listStatuses(store)
     expect(statuses.map((row) => [row.title, row.syncStatus])).toEqual([
       ['first.json', 'synced'],
       ['last.json', 'synced'],
@@ -8588,7 +8600,7 @@ describe('LocalNotebooks level-based Drive recovery', () => {
       corrupt.id,
       'local://file/dirty',
     ])
-    const statuses = await store.listFileSyncStatuses()
+    const statuses = await listStatuses(store)
     expect(
       statuses.find(
         (row: { localUri: string; syncStatus: string }) =>
@@ -8896,7 +8908,7 @@ describe('creation recovery safety', () => {
       expect((await store.driveCreates.get('corrupt'))?.notebookJson).toBe(
         'damaged'
       )
-      expect(await store.listFileSyncStatuses()).toContainEqual(
+      expect(await listStatuses(store)).toContainEqual(
         expect.objectContaining({
           localUri: 'drive-create:corrupt',
           syncStatus: 'error',
@@ -8991,7 +9003,7 @@ describe('SharedWorker metadata discovery', () => {
     expect(await store.reconcileDriveBackedFiles()).toEqual([])
     expect(await store.reconcileDriveBackedFiles()).toEqual([])
     expect((await store.getDriveQueueMetrics()).depth).toBe(0)
-    const statuses = await store.listFileSyncStatuses()
+    const statuses = await listStatuses(store)
     expect(statuses).toHaveLength(1_000)
     expect(statuses.every((row) => row.syncStatus === 'not-downloaded')).toBe(
       true
@@ -9093,7 +9105,7 @@ describe('SharedWorker metadata discovery', () => {
     })
     expect((await store.getSyncState(uri)).status).toBe('pending')
     expect(await store.listDriveBackedFilesNeedingSync()).toContain(uri)
-    await store.listFileSyncStatuses()
+    await listStatuses(store)
     expect(read).not.toHaveBeenCalled()
   })
 })

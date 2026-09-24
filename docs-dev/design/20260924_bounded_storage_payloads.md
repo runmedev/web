@@ -17,6 +17,23 @@ Filters, sorting, and Sync Required operate on the current page. There is no
 global count query or payload-based sort. Pagination is a live view, not a
 snapshot: concurrent inserts before a cursor appear when that page is revisited.
 
+`readTablePage(table, project, options)` owns both caps: 50 source record reads
+and 1 MiB of estimated returned metadata per call. Callers may lower these
+budgets but cannot raise them. Each record is projected before it enters the
+result array, so legacy inline content is discarded immediately. An individually
+oversized projection fails explicitly; if the next row would exceed the page's
+byte budget, its key is retried on the next page. Missing and filtered-out rows
+still consume the read budget and advance the cursor. The byte estimate charges
+strings at two bytes per character plus object/property allowances; it avoids
+serializing large strings and does not claim to bound all engine heap overhead.
+
+`scanTable()` streams full records for migration and background tasks without
+prefetching bodies. Both helpers share private capped key reads. The unbounded
+`listFileSyncStatuses()` compatibility API has been removed; callers use the page
+API and its cursor. The storage ESLint rule rejects bulk enumeration on file and
+creation tables, including query chains and local aliases. An app test runs this
+rule over production sources so CI catches regressions even without a lint job.
+
 Each mounted status view coalesces events for 100 ms and allows one active read
 plus one pending refresh. The owner shares identical in-flight pages between
 tabs. Background work uses batches of 50 keys and reads one record at a time.

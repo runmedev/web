@@ -41,9 +41,6 @@ export class StorageOwnerHost {
   private configuredBaseUrl: string | undefined
   private available = false
   private scanning: Promise<unknown> | undefined
-  private statusScan:
-    | ReturnType<LocalNotebooks['listFileSyncStatuses']>
-    | undefined
 
   constructor(private readonly store: LocalNotebooks) {}
 
@@ -266,14 +263,6 @@ export class StorageOwnerHost {
           value = await page
           break
         }
-        case 'listFileSyncStatuses':
-          // A status view in every tab must not multiply full database scans.
-          // Only share in-flight work; later refreshes always get a fresh read.
-          this.statusScan ??= this.store.listFileSyncStatuses().finally(() => {
-            this.statusScan = undefined
-          })
-          value = await this.statusScan
-          break
         case 'reconcileDriveBackedFiles':
           value = await this.rescan(
             Boolean((request.args[0] as { retryErrors?: boolean })?.retryErrors)
