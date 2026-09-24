@@ -12,6 +12,7 @@ import { SyncWorkQueue } from './syncWorkQueue'
 const clients: StorageOwnerClient[] = []
 const ports: MessagePort[] = []
 afterEach(() => {
+  vi.useRealTimers()
   for (const client of clients.splice(0)) client.close()
   for (const port of ports.splice(0)) port.close()
 })
@@ -46,6 +47,22 @@ function setup() {
 }
 
 describe('SharedWorker message boundary', () => {
+  it('times out diagnostics promptly without a mutation-outcome warning', async () => {
+    vi.useFakeTimers()
+    const channel = new MessageChannel()
+    ports.push(channel.port1 as unknown as MessagePort)
+    const client = new StorageOwnerClient(
+      channel.port2 as unknown as MessagePort,
+      async () => 'token'
+    )
+    clients.push(client)
+    const result = expect(
+      client.request('getDriveQueueMetrics')
+    ).rejects.toThrow('Storage worker did not respond to queue diagnostics.')
+    await vi.advanceTimersByTimeAsync(10_000)
+    await result
+  })
+
   it('serves the same queue diagnostics to both tabs through the RPC allowlist', async () => {
     const { host, store } = setup()
     const queue = new SyncWorkQueue()

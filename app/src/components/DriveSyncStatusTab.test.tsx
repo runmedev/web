@@ -133,6 +133,22 @@ async function waitForStatusLoad(): Promise<void> {
 }
 
 describe('DriveSyncStatusTab', () => {
+  it('excludes untouched Drive placeholders from bulk sync and allows filtering them', async () => {
+    listFileSyncStatusesMock.mockResolvedValue([
+      ...rows,
+      { ...rows[0], localUri: 'local://file/unopened', title: 'Unopened', syncStatus: 'not-downloaded' },
+    ])
+    render(<DriveSyncStatusTab />)
+    await waitForStatusLoad()
+    fireEvent.click(screen.getByRole('button', { name: 'Sync Required (1)' }))
+    await waitFor(() => expect(syncMock).toHaveBeenCalledWith('local://file/beta'))
+    expect(syncMock).not.toHaveBeenCalledWith('local://file/unopened')
+    fireEvent.click(screen.getByRole('button', { name: 'Filter Sync Status: All statuses' }))
+    fireEvent.click(screen.getByRole('checkbox', { name: 'Filter Sync Status: not-downloaded' }))
+    expect(screen.getByText('Unopened')).toBeTruthy()
+    expect(screen.queryByText('Beta Notebook')).toBeNull()
+  })
+
   it('includes owner queue monitoring above the file status table', async () => {
     render(<DriveSyncStatusTab />)
     await waitForStatusLoad()

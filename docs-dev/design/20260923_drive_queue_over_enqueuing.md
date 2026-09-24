@@ -80,10 +80,24 @@ MessagePort tests verify both tabs read the same owner's metrics. UI tests cover
 both charts, empty observations, polling without overlap, cleanup and errors.
 
 Validation completed on this branch: `runme run build test` passed; the full app
-suite passed 1,766 tests, followed by 191 focused tests after adding the Drive
-status integration assertion. Both charts were visually inspected using the real
+suite passed 1,769 tests with two workers after an existing Actions lifecycle test
+hit its five-second timeout in the default parallel run. The focused review suite
+also passed 299 tests. Both charts were visually inspected using the real
 component with synthetic queue data in a local browser preview. The standalone
 app typecheck reports the same 125 errors as the base commit, with no additional
 file/error-code diagnostics.
 
 Tracking issue: https://github.com/runmedev/web/issues/393.
+
+## Review corrections
+
+The status table must share the lazy-discovery semantics. Untouched placeholders
+now report `not-downloaded`, appear in that filter, and are excluded from the
+status page's bulk “Sync Required” action. Explicit opening/downloading still works;
+failed downloads and pending creations keep their retryable states.
+
+Queue diagnostics use a ten-second read timeout and a diagnostic-specific error.
+They must not leave stale charts looking current for the mutation RPC's five-minute
+timeout or warn that notebook creation may have committed. The chart displays its
+last snapshot time. The file table retains bounded vertical scrolling below the
+monitoring section.

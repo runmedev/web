@@ -70,6 +70,7 @@ const stringColumns: Array<{
 ]
 
 const syncStatusOptions: NotebookSyncStatus[] = [
+  'not-downloaded',
   'local-only',
   'synced',
   'pending',
@@ -91,7 +92,7 @@ const columnDescriptions: Record<SortKey, string> = {
   lastSynced:
     'Time of the last successful local-to-upstream or upstream-to-local sync.',
   syncStatus:
-    'Computed local sync state, such as synced, pending, syncing, conflicted, error, or local-only.',
+    'Computed local sync state. Not-downloaded files are untouched Drive placeholders and are excluded from Sync Required.',
 }
 
 const refreshDescription =
@@ -187,6 +188,7 @@ function statusClassName(status: NotebookSyncStatus): string {
       return 'bg-orange-50 text-orange-700'
     case 'error':
       return 'bg-red-50 text-red-700'
+    case 'not-downloaded':
     case 'local-only':
       return 'bg-slate-100 text-slate-700'
     default:
@@ -865,7 +867,7 @@ export function DriveSyncStatusTab() {
             </Text>
           </div>
         ) : (
-          <div className="min-h-[300px] shrink-0 overflow-auto rounded-lg border border-nb-border bg-white">
+          <div className="max-h-[60vh] min-h-[300px] shrink-0 overflow-auto rounded-lg border border-nb-border bg-white">
             <table className="w-max min-w-full border-collapse text-left text-sm">
               <thead>
                 <tr className="sticky top-0 z-10 border-b border-nb-border bg-nb-surface-2 text-xs uppercase tracking-wide">

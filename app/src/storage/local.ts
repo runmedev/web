@@ -270,6 +270,7 @@ export interface NotebookConflictSummary {
 }
 
 export type NotebookSyncStatus =
+  | 'not-downloaded'
   | 'local-only'
   | 'synced'
   | 'pending'
@@ -1569,6 +1570,17 @@ export class LocalNotebooks extends Dexie {
 
     if (record.lastSyncError) {
       return syncStateForRecord(record, 'error')
+    }
+
+    // Folder discovery is not a local edit. Keep the status table's bulk-sync
+    // action from recreating the placeholder backlog excluded by reconciliation.
+    if (
+      isDriveUri(record.remoteId) &&
+      !record.md5Checksum &&
+      !record.operationLogRef &&
+      !record.doc
+    ) {
+      return syncStateForRecord(record, 'not-downloaded')
     }
 
     const localChecksum = this.runtime?.owner

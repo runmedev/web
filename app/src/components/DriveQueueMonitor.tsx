@@ -163,7 +163,8 @@ export function DriveQueueCharts({ metrics }: { metrics: DriveQueueMetrics }) {
         </figure>
       </div>
       <p className="mt-3 text-xs text-nb-text-muted">
-        Shared across tabs on this origin. History starts{' '}
+        Last updated {new Date(metrics.capturedAt).toLocaleTimeString()}. Shared
+        across tabs on this origin. History starts{' '}
         {new Date(metrics.startedAt).toLocaleString()} and resets when the
         storage worker restarts. Refreshes every 5 seconds.
       </p>

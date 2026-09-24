@@ -165,3 +165,9 @@ retain owner history. Restore connectivity and observe the waiting count drain.
 Check that the histogram excludes scheduled delays and the current oldest-wait
 summary grows behind a deliberately stalled attempt. Close all same-origin tabs
 and reopen: history restarts without deleting pending notebook work.
+
+Untouched placeholders are labeled `not-downloaded` and can be filtered in the
+status table. “Sync Required” must exclude them, even when another row needs sync.
+Explicit opening still downloads them. If the worker stops responding, diagnostics
+show an unavailable message after ten seconds; the charts identify the time of
+the last received snapshot instead of implying current health.
