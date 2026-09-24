@@ -11,6 +11,7 @@ import type { ButtonHTMLAttributes, ElementType, HTMLAttributes } from 'react'
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 
 import type { NotebookSyncStatusRow } from '../storage/local'
+import { SyncWorkQueue } from '../storage/syncWorkQueue'
 import type { GoogleDriveCredentialStatus } from '../contexts/GoogleAuthContext'
 
 let isDriveSyncing = false
@@ -33,7 +34,9 @@ const openNotebookMock = vi.fn(async (uri: string) => ({
 const setCurrentDocMock = vi.fn()
 const showDocumentMock = vi.fn()
 const clearLinkedResourceCacheMock = vi.fn(async () => 1536)
+const queueMetrics = new SyncWorkQueue().getMetrics()
 const storeMock = {
+  getDriveQueueMetrics: vi.fn(async () => queueMetrics),
   listFileSyncStatuses: listFileSyncStatusesMock,
   sync: syncMock,
 }
@@ -130,6 +133,29 @@ async function waitForStatusLoad(): Promise<void> {
 }
 
 describe('DriveSyncStatusTab', () => {
+  it('excludes untouched Drive placeholders from bulk sync and allows filtering them', async () => {
+    listFileSyncStatusesMock.mockResolvedValue([
+      ...rows,
+      { ...rows[0], localUri: 'local://file/unopened', title: 'Unopened', syncStatus: 'not-downloaded' },
+    ])
+    render(<DriveSyncStatusTab />)
+    await waitForStatusLoad()
+    fireEvent.click(screen.getByRole('button', { name: 'Sync Required (1)' }))
+    await waitFor(() => expect(syncMock).toHaveBeenCalledWith('local://file/beta'))
+    expect(syncMock).not.toHaveBeenCalledWith('local://file/unopened')
+    fireEvent.click(screen.getByRole('button', { name: 'Filter Sync Status: All statuses' }))
+    fireEvent.click(screen.getByRole('checkbox', { name: 'Filter Sync Status: not-downloaded' }))
+    expect(screen.getByText('Unopened')).toBeTruthy()
+    expect(screen.queryByText('Beta Notebook')).toBeNull()
+  })
+
+  it('includes owner queue monitoring above the file status table', async () => {
+    render(<DriveSyncStatusTab />)
+    await waitForStatusLoad()
+    expect(await screen.findByRole('img', { name: 'Waiting queue depth, peak per ten seconds' })).toBeTruthy()
+    expect(screen.getByRole('img', { name: 'Eligible-to-dequeue wait histogram, 0 attempts' })).toBeTruthy()
+  })
+
   beforeEach(() => {
     window.localStorage.clear()
     isDriveSyncing = true

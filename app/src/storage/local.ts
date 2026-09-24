@@ -270,6 +270,7 @@ export interface NotebookConflictSummary {
 }
 
 export type NotebookSyncStatus =
+  | 'not-downloaded'
   | 'local-only'
   | 'synced'
   | 'pending'
@@ -582,6 +583,11 @@ export class LocalNotebooks extends Dexie {
   stopSyncQueue(): void {
     this.workQueue?.close()
     this.workQueue = undefined
+  }
+
+  /** Read bounded owner-side diagnostics without scanning files or touching OPFS. */
+  async getDriveQueueMetrics() {
+    return this.getWorkQueue().getMetrics()
   }
 
   private getWorkQueue(): SyncWorkQueue {
@@ -1564,6 +1570,17 @@ export class LocalNotebooks extends Dexie {
 
     if (record.lastSyncError) {
       return syncStateForRecord(record, 'error')
+    }
+
+    // Folder discovery is not a local edit. Keep the status table's bulk-sync
+    // action from recreating the placeholder backlog excluded by reconciliation.
+    if (
+      isDriveUri(record.remoteId) &&
+      !record.md5Checksum &&
+      !record.operationLogRef &&
+      !record.doc
+    ) {
+      return syncStateForRecord(record, 'not-downloaded')
     }
 
     const localChecksum = this.runtime?.owner
@@ -4517,7 +4534,12 @@ export class LocalNotebooks extends Dexie {
     if (!isDriveUri(record.remoteId)) return false
     if (record.lastSyncError) return true
     try {
-      if (this.runtime?.owner && !record.md5Checksum) return true
+      if (this.runtime?.owner && !record.md5Checksum) {
+        // A folder listing creates metadata-only placeholders with empty hashes.
+        // Only materialized content can have an invalidated local checksum.
+        // Do not read OPFS here: the owner verifies it when processing the item.
+        return Boolean(record.operationLogRef || record.doc)
+      }
       const local = this.runtime?.owner
         ? record.md5Checksum
         : await this.getOrBackfillLocalChecksum(record.id, record)

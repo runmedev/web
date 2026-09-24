@@ -262,6 +262,13 @@ function syncIndicatorPresentation(state: NotebookSyncState | null): {
   clickable: boolean
 } {
   switch (state?.status) {
+    case 'not-downloaded':
+      return {
+        label: 'Notebook has not been downloaded to this browser. Click to download now.',
+        className: 'border border-nb-text-faint bg-transparent',
+        clickable: true,
+      }
+
     case 'synced':
       return {
         label: 'Notebook is synced',

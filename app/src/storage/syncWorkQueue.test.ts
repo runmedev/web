@@ -94,3 +94,79 @@ describe('delaying sync work queue', () => {
     expect(secondRun).toHaveBeenCalledTimes(1)
   })
 })
+
+describe('owner queue diagnostics', () => {
+  it('counts deduplicated waiting keys and measures only eligible wait', async () => {
+    vi.useFakeTimers()
+    vi.setSystemTime(new Date('2026-09-23T00:00:00Z'))
+    const q = queue()
+    let release!: () => void
+    q.add(
+      'active',
+      () =>
+        new Promise<void>((resolve) => {
+          release = resolve
+        })
+    )
+    await vi.advanceTimersByTimeAsync(0)
+    q.add('delayed', async () => {}, 20_000)
+    q.add('delayed', async () => {}, 20_000)
+    expect(q.getMetrics()).toMatchObject({
+      depth: 1,
+      eligible: 0,
+      delayed: 1,
+      active: 1,
+    })
+    await vi.advanceTimersByTimeAsync(25_000)
+    expect(q.getMetrics()).toMatchObject({
+      oldestEligibleWaitMs: 5_000,
+      activeForMs: 25_000,
+    })
+    // Neither a repeated credential wake nor explicit sync resets time already waiting.
+    q.wake()
+    const done = q.run('delayed', async () => {})
+    expect(q.getMetrics().oldestEligibleWaitMs).toBe(5_000)
+    release()
+    await vi.advanceTimersByTimeAsync(0)
+    await done
+    const metrics = q.getMetrics()
+    expect(metrics).toMatchObject({ depth: 0, active: 0 })
+    expect(metrics.waitHistogram.map((bucket) => bucket.count)).toEqual([
+      1, 0, 0, 1, 0, 0, 0,
+    ])
+    expect(metrics.history.some((point) => point.depth === 1)).toBe(true)
+  })
+
+  it('counts retries separately without including their backoff', async () => {
+    vi.useFakeTimers()
+    const q = queue()
+    const run = vi
+      .fn()
+      .mockRejectedValueOnce(new SyncDeferred(120_000))
+      .mockResolvedValue(undefined)
+    q.add('a', run)
+    await vi.advanceTimersByTimeAsync(0)
+    expect(q.getMetrics()).toMatchObject({ depth: 1, eligible: 0, delayed: 1 })
+    await vi.advanceTimersByTimeAsync(120_000)
+    expect(q.getMetrics().waitHistogram.map((bucket) => bucket.count)).toEqual([
+      2, 0, 0, 0, 0, 0, 0,
+    ])
+  })
+
+  it('keeps bounded history while the view is closed and returns detached snapshots', async () => {
+    vi.useFakeTimers()
+    const q = queue()
+    q.add('future', async () => {}, 10 * 60 * 60_000)
+    await vi.advanceTimersByTimeAsync(2 * 60 * 60_000)
+    const metrics = q.getMetrics()
+    expect(metrics.history).toHaveLength(360)
+    expect(metrics.history.every((point) => point.depth === 1)).toBe(true)
+    metrics.history[0].depth = 900
+    metrics.waitHistogram[0].count = 900
+    expect(q.getMetrics().history[0].depth).toBe(1)
+    expect(q.getMetrics().waitHistogram[0].count).toBe(0)
+    q.close()
+    expect(q.getMetrics().depth).toBe(0)
+    expect(queue().getMetrics().waitHistogram[0].count).toBe(0)
+  })
+})

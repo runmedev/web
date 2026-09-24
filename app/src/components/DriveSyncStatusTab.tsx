@@ -22,6 +22,8 @@ import type {
   NotebookSyncStatusRow,
 } from '../storage/local'
 
+import { DriveQueueMonitor } from './DriveQueueMonitor'
+
 type SortDirection = 'asc' | 'desc'
 
 type SortKey = keyof Pick<
@@ -68,6 +70,7 @@ const stringColumns: Array<{
 ]
 
 const syncStatusOptions: NotebookSyncStatus[] = [
+  'not-downloaded',
   'local-only',
   'synced',
   'pending',
@@ -89,7 +92,7 @@ const columnDescriptions: Record<SortKey, string> = {
   lastSynced:
     'Time of the last successful local-to-upstream or upstream-to-local sync.',
   syncStatus:
-    'Computed local sync state, such as synced, pending, syncing, conflicted, error, or local-only.',
+    'Computed local sync state. Not-downloaded files are untouched Drive placeholders and are excluded from Sync Required.',
 }
 
 const refreshDescription =
@@ -185,6 +188,7 @@ function statusClassName(status: NotebookSyncStatus): string {
       return 'bg-orange-50 text-orange-700'
     case 'error':
       return 'bg-red-50 text-red-700'
+    case 'not-downloaded':
     case 'local-only':
       return 'bg-slate-100 text-slate-700'
     default:
@@ -631,10 +635,10 @@ export function DriveSyncStatusTab() {
 
   return (
     <div
-      className="flex h-full min-h-0 flex-1 overflow-hidden p-4"
+      className="flex h-full min-h-0 flex-1 overflow-auto p-4"
       data-testid="drive-sync-status-scroll"
     >
-      <div className="flex h-full min-h-0 w-full flex-1 flex-col gap-5 text-sm">
+      <div className="flex min-h-0 w-full flex-1 flex-col gap-5 text-sm">
         <div className="flex flex-wrap items-start justify-between gap-3">
           <div className="space-y-2">
             <Text size="5" weight="bold" as="p" className="text-nb-text">
@@ -688,6 +692,8 @@ export function DriveSyncStatusTab() {
             </Button>
           </div>
         </div>
+
+        <DriveQueueMonitor store={store} />
 
         <section
           className="rounded-lg border border-nb-border bg-white p-4"
@@ -861,7 +867,7 @@ export function DriveSyncStatusTab() {
             </Text>
           </div>
         ) : (
-          <div className="min-h-0 flex-1 overflow-auto rounded-lg border border-nb-border bg-white">
+          <div className="max-h-[60vh] min-h-[300px] shrink-0 overflow-auto rounded-lg border border-nb-border bg-white">
             <table className="w-max min-w-full border-collapse text-left text-sm">
               <thead>
                 <tr className="sticky top-0 z-10 border-b border-nb-border bg-nb-surface-2 text-xs uppercase tracking-wide">

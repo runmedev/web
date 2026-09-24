@@ -49,11 +49,15 @@ export class StorageOwnerClient {
           this.pending.delete(id)
           reject(
             new Error(
-              'Storage worker did not acknowledge the request. Its outcome is uncertain; do not repeat creation blindly.'
+              method === 'getDriveQueueMetrics'
+                ? 'Storage worker did not respond to queue diagnostics.'
+                : 'Storage worker did not acknowledge the request. Its outcome is uncertain; do not repeat creation blindly.'
             )
           )
         },
-        method === 'hello' ? 10_000 : 300_000
+        method === 'hello' || method === 'getDriveQueueMetrics'
+          ? 10_000
+          : 300_000
       )
       this.pending.set(id, { resolve, reject, timer })
       try {
@@ -128,7 +132,10 @@ export class StorageOwnerClient {
       if (error.name === 'DriveCreateNotCommittedError')
         Object.setPrototypeOf(error, DriveCreateNotCommittedError.prototype)
       if (error.name === 'FilesystemEntryAlreadyExistsError')
-        Object.setPrototypeOf(error, FilesystemEntryAlreadyExistsError.prototype)
+        Object.setPrototypeOf(
+          error,
+          FilesystemEntryAlreadyExistsError.prototype
+        )
       pending.reject(error)
     } else pending.resolve(message.value)
   }
