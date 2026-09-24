@@ -47,13 +47,14 @@ describe('notebook-centric training API', () => {
     vi.clearAllMocks()
     const store = {
       files: {
-        toArray: async () => [
-          {
-            id: job.localUri,
-            remoteId: 'https://drive.google.com/file/d/drive-source/view',
-            operationLogRef: { path: job.sourcePath },
-          },
-        ],
+        toCollection: () => ({
+          limit: () => ({ primaryKeys: async () => [job.localUri] }),
+        }),
+        get: async () => ({
+          id: job.localUri,
+          remoteId: 'https://drive.google.com/file/d/drive-source/view',
+          operationLogRef: { path: job.sourcePath },
+        }),
       },
       trainingExampleJob: vi.fn(async () => job),
     } as unknown as LocalNotebooks

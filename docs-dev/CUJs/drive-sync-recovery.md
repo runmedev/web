@@ -171,3 +171,65 @@ status table. “Sync Required” must exclude them, even when another row needs
 Explicit opening still downloads them. If the worker stops responding, diagnostics
 show an unavailable message after ten seconds; the charts identify the time of
 the last received snapshot instead of implying current health.
+
+## Status refresh backpressure
+
+Storage notifications must not start overlapping status scans. Each mounted
+status view coalesces notifications for 100 ms and retains only one pending
+refresh during an active request. Closing the document cancels scheduled work
+and ignores the active result. The owner shares an in-flight status scan across
+ports, releasing it on either success or failure; subsequent reads remain fresh.
+Each page reads at most 50 records, enumerating at most 51 keys for lookahead,
+and processes one file or creation request at a time. Previous/Next navigation
+uses primary-key cursors. Filters, sorting and Sync Required apply to the current
+page, as stated in the UI. It must not retain arrays of all cached notebook or pending-create payloads,
+or re-read a file just to compute its status. This bounds retained payloads by
+individual record size, not by the sum of the database's notebook contents.
+
+Automated coverage: `DriveSyncStatusTab.test.tsx` holds a read open while sending
+100 triplets of update events, checks one active request and one follow-up, and
+checks close-during-refresh. `storageOwner.test.ts` uses two MessagePorts to check
+one underlying scan, shared failure, and a successful subsequent read.
+`local.test.ts` rejects bulk payload reads and checks a single read per file,
+including deletion between key enumeration and retrieval.
+
+Manual acceptance: open the status document in two same-origin tabs while Drive
+sync is producing updates. Profile the storage SharedWorker in Chrome DevTools.
+Compare worker allocation sampling and heap snapshots with the status document
+closed, open, and closed again. Close the document itself: switching to another
+notebook leaves tab content mounted. Check that status scans do not overlap,
+rows converge after updates stop, and pending reads do not accumulate. Repeat
+with a large cached legacy notebook and pending creation payloads. This verifies
+memory behavior in addition to the deterministic concurrency tests; those tests
+alone do not prove that a particular native out-of-memory crash is resolved.
+
+## Metadata-only IndexedDB and OPFS payload migration
+
+Schema 9 stores notebook content references in IndexedDB. JSON/IPYNB cached
+models, pending creation bodies, pending `.runme` initialization, and legacy
+inline conflict bodies move into immutable OPFS files. Existing `.runme` logs,
+IPYNB preservation shadows, conflicts, revisions, and linked media retain their
+existing OPFS storage. Read the [storage design](../design/20260924_bounded_storage_payloads.md)
+for migration ordering, cleanup, and the bulk-read audit.
+
+`storage-payloads-smoke.ts` creates a disposable schema-8 database in an isolated
+browser profile with 67 records, including a 50 MiB cached notebook. It verifies
+50 + 17 status pages, background migration, exact-byte preservation, JSON/IPYNB
+edit/save, transactional `.runme` initialization, browser restart, and cleanup of
+obsolete generations. No production credentials or Drive requests are used.
+Artifacts are written to `app/test/browser/test-output/storage-payloads.json`.
+
+From `app/`, compile and run with an installed test browser and Vite:
+
+```sh
+pnpm exec tsc --target es2022 --module nodenext --moduleResolution nodenext --esModuleInterop --skipLibCheck --outDir test/browser/.generated test/browser/storage-payloads-smoke.ts
+CHROMIUM_PATH='/path/to/test/chrome' RUNME_TEST_URL=http://127.0.0.1:5193 node test/browser/.generated/storage-payloads-smoke.js
+```
+
+`filePayloads.test.ts` covers failed durable close, Unicode integrity, corruption,
+and cleanup while reads/writes are in flight. `local.test.ts` covers migration
+write/commit failures, concurrent edits, retry, and missing payload preservation.
+After rollout, close all Runme tabs and worker inspectors before reopening so the
+new owner and schema are used. Do not clear site data. Repeat the heap comparison
+on the affected profile; isolated fixtures cannot establish that every source of
+memory growth in a deployed session has been fixed.

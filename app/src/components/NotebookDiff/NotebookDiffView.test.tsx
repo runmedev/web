@@ -207,9 +207,7 @@ describe('NotebookDiffContent', () => {
       },
     }
     const localStore = {
-      files: {
-        get: vi.fn(async () => record),
-      },
+      getFileRecord: vi.fn(async () => record),
       getConflictUpstreamDoc: vi.fn(async () => serialize(upstreamNotebook)),
       getDriveRevisionDoc: vi.fn(async () => serialize(olderNotebook)),
       listDriveRevisions: vi.fn(async () => [
@@ -342,9 +340,7 @@ describe('NotebookDiffContent', () => {
       },
     }
     const localStore = {
-      files: {
-        get: vi.fn(async () => record),
-      },
+      getFileRecord: vi.fn(async () => record),
       getConflictUpstreamDoc: vi.fn(async () => serialize(upstreamNotebook)),
       save: vi.fn(async (_localUri: string, saved: parser_pb.Notebook) => {
         record = {
@@ -423,9 +419,7 @@ describe('NotebookDiffContent', () => {
       },
     }
     const localStore = {
-      files: {
-        get: vi.fn(async () => record),
-      },
+      getFileRecord: vi.fn(async () => record),
       getConflictUpstreamDoc: vi.fn(async () => serialize(upstreamNotebook)),
       save: vi.fn(async (_localUri: string, saved: parser_pb.Notebook) => {
         record = {
@@ -490,9 +484,7 @@ describe('NotebookDiffContent', () => {
       },
     }
     const localStore = {
-      files: {
-        get: vi.fn(async () => record),
-      },
+      getFileRecord: vi.fn(async () => record),
       getConflictUpstreamDoc: vi.fn(async () => serialize(upstreamNotebook)),
       save: vi.fn(async (_localUri: string, saved: parser_pb.Notebook) => {
         record = {
@@ -598,9 +590,7 @@ describe('NotebookDiffContent', () => {
       allowSave = resolve
     })
     const localStore = {
-      files: {
-        get: vi.fn(async () => record),
-      },
+      getFileRecord: vi.fn(async () => record),
       getConflictUpstreamDoc: vi.fn(async () => serialize(upstreamNotebook)),
       save: vi.fn(async (_localUri: string, saved: parser_pb.Notebook) => {
         await saveAllowed

@@ -47,6 +47,76 @@ function setup() {
 }
 
 describe('SharedWorker message boundary', () => {
+  it('shares only identical in-flight status pages across tabs', async () => {
+    const { host, store } = setup()
+    let resolvePage!: (value: unknown) => void
+    const listFileSyncStatusPage = vi
+      .fn()
+      .mockImplementationOnce(
+        () =>
+          new Promise((resolve) => {
+            resolvePage = resolve
+          })
+      )
+      .mockResolvedValue({ rows: [] })
+    Object.assign(store, { listFileSyncStatusPage })
+    const first = connect(host),
+      second = connect(host)
+    const options = { limit: 50 }
+    const reads = [
+      first.request('listFileSyncStatusPage', [options]),
+      second.request('listFileSyncStatusPage', [options]),
+    ]
+    await Promise.all([first.request('heartbeat'), second.request('heartbeat')])
+    expect(listFileSyncStatusPage).toHaveBeenCalledTimes(1)
+    await second.request('listFileSyncStatusPage', [
+      { limit: 50, cursor: { table: 'files', after: 'a' } },
+    ])
+    expect(listFileSyncStatusPage).toHaveBeenCalledTimes(2)
+    resolvePage({ rows: [{ title: 'First page' }] })
+    expect(await Promise.all(reads)).toEqual([
+      { rows: [{ title: 'First page' }] },
+      { rows: [{ title: 'First page' }] },
+    ])
+    await first.request('listFileSyncStatusPage', [options])
+    expect(listFileSyncStatusPage).toHaveBeenCalledTimes(3)
+  })
+
+  it('shares an in-flight status scan across tabs and releases it after failure', async () => {
+    const { host, store } = setup()
+    let rejectScan!: (error: Error) => void
+    const listFileSyncStatuses = vi
+      .fn()
+      .mockImplementationOnce(
+        () =>
+          new Promise((_resolve, reject) => {
+            rejectScan = reject
+          })
+      )
+      .mockResolvedValue([{ title: 'Recovered' }])
+    Object.assign(store, { listFileSyncStatuses })
+    const first = connect(host),
+      second = connect(host)
+    const requests = [
+      first.request('listFileSyncStatuses'),
+      second.request('listFileSyncStatuses'),
+    ]
+    const outcomes = Promise.allSettled(requests)
+    // Per-port barriers ensure both reads have reached the host.
+    await Promise.all([first.request('heartbeat'), second.request('heartbeat')])
+    await vi.waitFor(() => expect(listFileSyncStatuses).toHaveBeenCalled())
+    expect(listFileSyncStatuses).toHaveBeenCalledTimes(1)
+    rejectScan(new Error('Read failed'))
+    expect((await outcomes).map((result) => result.status)).toEqual([
+      'rejected',
+      'rejected',
+    ])
+    await expect(first.request('listFileSyncStatuses')).resolves.toEqual([
+      { title: 'Recovered' },
+    ])
+    expect(listFileSyncStatuses).toHaveBeenCalledTimes(2)
+  })
+
   it('times out diagnostics promptly without a mutation-outcome warning', async () => {
     vi.useFakeTimers()
     const channel = new MessageChannel()

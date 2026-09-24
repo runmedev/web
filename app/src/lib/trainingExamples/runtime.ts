@@ -1,13 +1,14 @@
 import { driveFileUrl, parseDriveItem } from '../../storage/drive'
 import type { DriveNotebookStore } from '../../storage/drive'
 import type LocalNotebooks from '../../storage/local'
+import { scanTable } from '../../storage/tableScan'
 import { getNotebookDataController } from '../notebookDataController'
-import { normalizeNotebookReferenceUri } from '../shareLinks'
 import {
   getTrainingJob,
   submitTrainingJob,
   uploadOpenAIJsonl,
 } from '../openaiTraining'
+import { normalizeNotebookReferenceUri } from '../shareLinks'
 import { showWorkspaceDocument } from '../workspaceDocuments/workspaceDocumentController'
 import { getOperationLogSuggestionDocumentUri } from '../workspaceDocuments/workspaceDocumentTypes'
 import {
@@ -41,14 +42,17 @@ export function createTrainingExamplesApi(deps: {
     ) {
       const remoteUri = driveFileUrl(source.driveFileId)
       // Match canonical Drive IDs without exposing a local URI as portable identity.
-      const records = await store.files.toArray()
-      const record = records.find((record) => {
+      let record
+      for await (const candidate of scanTable(store.files)) {
         try {
-          return parseDriveItem(record.remoteId).id === source.driveFileId
+          if (parseDriveItem(candidate.remoteId).id === source.driveFileId) {
+            record = candidate
+            break
+          }
         } catch {
-          return false
+          /* Local-only records have no Drive ID. */
         }
-      })
+      }
       if (record?.operationLogRef) uri = record.id
       else {
         const remote = deps.driveStore()
