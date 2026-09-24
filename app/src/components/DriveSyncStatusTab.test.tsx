@@ -11,6 +11,7 @@ import type { ButtonHTMLAttributes, ElementType, HTMLAttributes } from 'react'
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 
 import type { NotebookSyncStatusRow } from '../storage/local'
+import { SyncWorkQueue } from '../storage/syncWorkQueue'
 import type { GoogleDriveCredentialStatus } from '../contexts/GoogleAuthContext'
 
 let isDriveSyncing = false
@@ -33,7 +34,9 @@ const openNotebookMock = vi.fn(async (uri: string) => ({
 const setCurrentDocMock = vi.fn()
 const showDocumentMock = vi.fn()
 const clearLinkedResourceCacheMock = vi.fn(async () => 1536)
+const queueMetrics = new SyncWorkQueue().getMetrics()
 const storeMock = {
+  getDriveQueueMetrics: vi.fn(async () => queueMetrics),
   listFileSyncStatuses: listFileSyncStatusesMock,
   sync: syncMock,
 }
@@ -130,6 +133,13 @@ async function waitForStatusLoad(): Promise<void> {
 }
 
 describe('DriveSyncStatusTab', () => {
+  it('includes owner queue monitoring above the file status table', async () => {
+    render(<DriveSyncStatusTab />)
+    await waitForStatusLoad()
+    expect(await screen.findByRole('img', { name: 'Waiting queue depth, peak per ten seconds' })).toBeTruthy()
+    expect(screen.getByRole('img', { name: 'Eligible-to-dequeue wait histogram, 0 attempts' })).toBeTruthy()
+  })
+
   beforeEach(() => {
     window.localStorage.clear()
     isDriveSyncing = true

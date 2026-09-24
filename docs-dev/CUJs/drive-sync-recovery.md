@@ -134,3 +134,34 @@ The `createView` worker response now carries that snapshot, so the storage owner
 protocol is version 2. Mixed-version clients must fail with the existing reload
 message. After deployment, close/reopen all Runme tabs on that origin if an old
 worker remains alive; do not clear browser storage.
+
+## Lazy Drive discovery and queue monitoring
+
+Mirroring a large Drive folder must not enqueue metadata-only files that have
+never been downloaded. In worker mode, an empty local checksum indicates source
+work only with an OPFS operation-log reference or a cached legacy model. Pending
+creation and failed first-download recovery still retry. A missing referenced log
+must report its read error rather than being skipped or replaced.
+
+The Drive status page shows owner-side queue depth (peak waiting keys per ten
+seconds, up to one hour) and eligible-to-dequeue wait (histogram of attempts since
+owner startup). Waiting includes delayed work but excludes the active attempt;
+wait excludes debounce, retry delay and post-dequeue processing/locks. Retries count
+separately. Current eligible/delayed/active counts, oldest eligible wait and active
+attempt duration distinguish stalled processing from slow throughput. Metrics are
+shared across tabs, collected with the view closed, and reset on owner restart.
+The diagnostics RPC uses storage owner protocol version 3.
+
+Automated coverage: `local.test.ts` mirrors 1,000 placeholders without enqueueing
+or OPFS reads and preserves legitimate pending cases; `syncWorkQueue.test.ts`
+checks depth, eligible wait/backoff, deduplication, bounded history and reset;
+`storageOwner.test.ts` reads metrics from two MessagePorts;
+`DriveQueueMonitor.test.tsx` covers both charts, polling and unavailable state.
+
+Manual acceptance: mount a large disposable folder without opening its notebooks;
+confirm no source backlog from untouched entries. Edit a few cached notebooks and
+create one offline. Open Drive status, then close/reopen only that view: the charts
+retain owner history. Restore connectivity and observe the waiting count drain.
+Check that the histogram excludes scheduled delays and the current oldest-wait
+summary grows behind a deliberately stalled attempt. Close all same-origin tabs
+and reopen: history restarts without deleting pending notebook work.

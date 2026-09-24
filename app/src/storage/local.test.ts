@@ -8823,6 +8823,99 @@ it('serializes source, export, and creation across controllers sharing an origin
 })
 
 describe('SharedWorker metadata discovery', () => {
+  it('does not enqueue a large folder of untouched Drive placeholders', async () => {
+    const logs = new MemoryOperationLogStorage()
+    const read = vi.spyOn(logs, 'read')
+    const store = createTestStore({}, { operationLogStorage: logs })
+    ;(store as any).runtime = { owner: true }
+    for (let i = 0; i < 1_000; i++) {
+      await store.addFile(
+        `https://drive.google.com/file/d/listed-${i}/view`,
+        `listed-${i}.runme`
+      )
+    }
+    expect(await store.reconcileDriveBackedFiles()).toEqual([])
+    expect(await store.reconcileDriveBackedFiles()).toEqual([])
+    expect((await store.getDriveQueueMetrics()).depth).toBe(0)
+    expect(read).not.toHaveBeenCalled()
+    store.stopSyncQueue()
+  })
+
+  it('retains materialized, dirty, failed and pending-create records without scanning OPFS', async () => {
+    const logs = new MemoryOperationLogStorage()
+    const read = vi.spyOn(logs, 'read')
+    const store = createTestStore({}, { operationLogStorage: logs })
+    ;(store as any).runtime = { owner: true }
+    const base = {
+      name: 'notebook.runme',
+      remoteId: 'https://drive.google.com/file/d/a/view',
+      doc: '',
+      md5Checksum: '',
+      lastRemoteChecksum: '',
+      lastSynced: '',
+    }
+    const records: LocalFileRecord[] = [
+      {
+        ...base,
+        id: 'local://file/opfs',
+        operationLogRef: {
+          storage: 'opfs',
+          path: 'missing-must-report-on-processing',
+        },
+      },
+      {
+        ...base,
+        id: 'local://file/json',
+        name: 'legacy.json',
+        doc: '{"cells":[]}',
+      },
+      {
+        ...base,
+        id: 'local://file/ipynb',
+        name: 'legacy.ipynb',
+        doc: '{"cells":[]}',
+      },
+      {
+        ...base,
+        id: 'local://file/error',
+        lastSyncError: 'Failed first download',
+      },
+      {
+        ...base,
+        id: 'local://file/create',
+        remoteId: '',
+        parentRemoteIdWhenCreated:
+          'https://drive.google.com/drive/folders/parent',
+      },
+      {
+        ...base,
+        id: 'local://file/dirty',
+        md5Checksum: 'new',
+        lastRemoteChecksum: 'old',
+      },
+    ]
+    for (const record of records) await store.files.put(record)
+    await store.files.put({
+      ...base,
+      id: 'local://file/clean',
+      md5Checksum: 'same',
+      lastRemoteChecksum: 'same',
+    })
+    await store.files.put({
+      ...records[0],
+      id: 'local://file/conflict',
+      conflict: {
+        detectedAt: '2026-09-23T00:00:00Z',
+        upstreamChecksum: 'remote',
+        localChecksumAtDetection: 'local',
+      },
+    })
+    expect(await store.listDriveBackedFilesNeedingSync()).toEqual(
+      records.map((record) => record.id)
+    )
+    expect(read).not.toHaveBeenCalled()
+  })
+
   it('selects unknown checksums without reading OPFS or marking the mirror clean', async () => {
     const logs = new MemoryOperationLogStorage()
     const read = vi.spyOn(logs, 'read')

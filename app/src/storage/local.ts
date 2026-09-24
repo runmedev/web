@@ -584,6 +584,11 @@ export class LocalNotebooks extends Dexie {
     this.workQueue = undefined
   }
 
+  /** Read bounded owner-side diagnostics without scanning files or touching OPFS. */
+  async getDriveQueueMetrics() {
+    return this.getWorkQueue().getMetrics()
+  }
+
   private getWorkQueue(): SyncWorkQueue {
     return (this.workQueue ??= new SyncWorkQueue({
       onChange: (key) => this.notifySync(key.slice(key.indexOf(':') + 1)),
@@ -4517,7 +4522,12 @@ export class LocalNotebooks extends Dexie {
     if (!isDriveUri(record.remoteId)) return false
     if (record.lastSyncError) return true
     try {
-      if (this.runtime?.owner && !record.md5Checksum) return true
+      if (this.runtime?.owner && !record.md5Checksum) {
+        // A folder listing creates metadata-only placeholders with empty hashes.
+        // Only materialized content can have an invalidated local checksum.
+        // Do not read OPFS here: the owner verifies it when processing the item.
+        return Boolean(record.operationLogRef || record.doc)
+      }
       const local = this.runtime?.owner
         ? record.md5Checksum
         : await this.getOrBackfillLocalChecksum(record.id, record)

@@ -7,6 +7,7 @@ import { FilesystemEntryAlreadyExistsError } from './fs'
 import type LocalNotebooks from './local'
 import { StorageOwnerClient } from './storageOwnerClient'
 import { StorageOwnerHost } from './storageOwnerHost'
+import { SyncWorkQueue } from './syncWorkQueue'
 
 const clients: StorageOwnerClient[] = []
 const ports: MessagePort[] = []
@@ -45,6 +46,26 @@ function setup() {
 }
 
 describe('SharedWorker message boundary', () => {
+  it('serves the same queue diagnostics to both tabs through the RPC allowlist', async () => {
+    const { host, store } = setup()
+    const queue = new SyncWorkQueue()
+    Object.assign(store, {
+      getDriveQueueMetrics: async () => queue.getMetrics(),
+    })
+    const first = connect(host),
+      second = connect(host)
+    queue.add('source:pending', async () => {}, 60_000)
+    try {
+      const a = (await first.request('getDriveQueueMetrics')) as any
+      const b = (await second.request('getDriveQueueMetrics')) as any
+      expect(a).toMatchObject({ depth: 1, delayed: 1, active: 0 })
+      expect(b.startedAt).toBe(a.startedAt)
+      expect(b.waitHistogram).toEqual(a.waitHistogram)
+    } finally {
+      queue.close()
+    }
+  })
+
   it('two tabs use the same owner while local edits continue during a blocked sync', async () => {
     const { host, store } = setup()
     const first = connect(host),
@@ -116,7 +137,9 @@ describe('SharedWorker message boundary', () => {
     const { host, store } = setup()
     const client = connect(host)
     store.save.mockRejectedValueOnce(original)
-    const error = await client.request('save', ['a', {}]).catch(error => error)
+    const error = await client
+      .request('save', ['a', {}])
+      .catch((error) => error)
     expect(error).toBeInstanceOf(original.constructor)
     expect(error.message).toBe(original.message)
     if (original instanceof FilesystemEntryAlreadyExistsError)

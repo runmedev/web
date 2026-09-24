@@ -22,6 +22,8 @@ import type {
   NotebookSyncStatusRow,
 } from '../storage/local'
 
+import { DriveQueueMonitor } from './DriveQueueMonitor'
+
 type SortDirection = 'asc' | 'desc'
 
 type SortKey = keyof Pick<
@@ -631,10 +633,10 @@ export function DriveSyncStatusTab() {
 
   return (
     <div
-      className="flex h-full min-h-0 flex-1 overflow-hidden p-4"
+      className="flex h-full min-h-0 flex-1 overflow-auto p-4"
       data-testid="drive-sync-status-scroll"
     >
-      <div className="flex h-full min-h-0 w-full flex-1 flex-col gap-5 text-sm">
+      <div className="flex min-h-0 w-full flex-1 flex-col gap-5 text-sm">
         <div className="flex flex-wrap items-start justify-between gap-3">
           <div className="space-y-2">
             <Text size="5" weight="bold" as="p" className="text-nb-text">
@@ -688,6 +690,8 @@ export function DriveSyncStatusTab() {
             </Button>
           </div>
         </div>
+
+        <DriveQueueMonitor store={store} />
 
         <section
           className="rounded-lg border border-nb-border bg-white p-4"
@@ -861,7 +865,7 @@ export function DriveSyncStatusTab() {
             </Text>
           </div>
         ) : (
-          <div className="min-h-0 flex-1 overflow-auto rounded-lg border border-nb-border bg-white">
+          <div className="min-h-[300px] shrink-0 overflow-auto rounded-lg border border-nb-border bg-white">
             <table className="w-max min-w-full border-collapse text-left text-sm">
               <thead>
                 <tr className="sticky top-0 z-10 border-b border-nb-border bg-nb-surface-2 text-xs uppercase tracking-wide">

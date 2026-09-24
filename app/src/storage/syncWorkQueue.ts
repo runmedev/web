@@ -1,3 +1,5 @@
+import { SyncQueueMetrics } from './syncQueueMetrics'
+
 /** A retry can request a delay without counting an unavailable dependency as failure. */
 export class SyncDeferred extends Error {
   constructor(readonly delayMs: number) {
@@ -27,6 +29,7 @@ export class SyncWorkQueue {
   private processing?: string
   private timer?: ReturnType<typeof setTimeout>
   private stopped = false
+  private readonly metrics = new SyncQueueMetrics()
 
   constructor(
     private readonly options: {
@@ -57,7 +60,8 @@ export class SyncWorkQueue {
 
   /** Wake delayed items after a credential/connectivity change. */
   wake(): void {
-    for (const item of this.items.values()) item.readyAt = Date.now()
+    for (const item of this.items.values())
+      item.readyAt = Math.min(item.readyAt, Date.now())
     this.schedule()
   }
 
@@ -78,6 +82,39 @@ export class SyncWorkQueue {
       item.waiters = []
     }
     this.items.clear()
+    this.recordDepth()
+  }
+
+  /** Waiting keys exclude the active attempt, including while it awaits a lock. */
+  private recordDepth(): void {
+    this.metrics.depthChanged(
+      this.items.size -
+        (this.processing && this.items.has(this.processing) ? 1 : 0)
+    )
+  }
+
+  /** Snapshot data belongs to the queue owner, so all tabs observe the same history. */
+  getMetrics() {
+    const now = Date.now()
+    const waiting = [...this.items].filter(([key]) => key !== this.processing)
+    const eligible = waiting.filter(([, item]) => item.readyAt <= now)
+    return {
+      ...this.metrics.snapshot(),
+      depth: waiting.length,
+      eligible: eligible.length,
+      delayed: waiting.length - eligible.length,
+      active: this.processing ? 1 : 0,
+      activeForMs: this.processing
+        ? Math.max(
+            0,
+            now - (this.items.get(this.processing)?.lastStarted ?? now)
+          )
+        : 0,
+      oldestEligibleWaitMs: eligible.reduce(
+        (max, [, item]) => Math.max(max, now - item.readyAt),
+        0
+      ),
+    }
   }
 
   private put(
@@ -103,13 +140,14 @@ export class SyncWorkQueue {
     } else {
       item.run = run
       item.dirty = true
-      if (force) item.readyAt = Date.now()
+      if (force) item.readyAt = Math.min(item.readyAt, Date.now())
     }
     this.schedule()
     return item
   }
 
   private schedule(): void {
+    this.recordDepth()
     clearTimeout(this.timer)
     if (this.stopped || this.processing || !this.items.size) return
     let next = Infinity
@@ -134,6 +172,8 @@ export class SyncWorkQueue {
     this.processing = key
     item.dirty = false
     item.lastStarted = Date.now()
+    this.metrics.dequeued(Math.max(0, item.lastStarted - item.readyAt))
+    this.recordDepth()
     this.lastStarts.set(key, item.lastStarted)
     for (const [oldKey, started] of this.lastStarts) {
       if (started + (this.options.minimumIntervalMs ?? 120_000) < Date.now())
