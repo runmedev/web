@@ -48,6 +48,7 @@ import {
   EXCALIDRAW_MIME_TYPE,
   createInitialExcalidrawDocumentJson,
 } from './excalidraw'
+import { MemoryFilePayloadStorage } from './filePayloads'
 import { MemoryIpynbShadowStorage } from './ipynbShadows'
 import LocalNotebooks, {
   DriveSnapshotChangedError,
@@ -61,12 +62,39 @@ import { NotebookStoreItemType } from './notebook'
 import { MemoryOperationLogStorage } from './operationLogs'
 import { MemoryRevisionDocStorage } from './revisionDocs'
 
+/** Collect small fixture pages for assertions; production APIs always expose a cursor. */
+async function listStatuses(store: LocalNotebooks) {
+  const rows = []
+  let cursor: import('./local').NotebookSyncStatusPage['nextCursor']
+  do {
+    const page = await store.listFileSyncStatusPage({ cursor })
+    rows.push(...page.rows)
+    cursor = page.nextCursor
+  } while (cursor)
+  return rows
+}
+
 const NOTEBOOK_JSON_WRITE_OPTIONS = {
   emitDefaultValues: true,
 } as unknown as Parameters<typeof toJsonString>[2]
 
 function createMockTable<T extends { id: string }>() {
   const store = new Map<string, T>()
+  const collection = (after?: string) => ({
+    limit: (limit: number) => ({
+      primaryKeys: vi.fn(async () =>
+        [...store.keys()]
+          .sort()
+          .filter((key) => after === undefined || key > after)
+          .slice(0, limit)
+      ),
+    }),
+    primaryKeys: vi.fn(async () =>
+      [...store.keys()]
+        .sort()
+        .filter((key) => after === undefined || key > after)
+    ),
+  })
   return {
     _store: store,
     get: vi.fn(async (id: string) => store.get(id) ?? undefined),
@@ -85,10 +113,13 @@ function createMockTable<T extends { id: string }>() {
     delete: vi.fn(async (id: string) => {
       store.delete(id)
     }),
-    where: vi.fn((field: keyof T) => ({
+    where: vi.fn((field: keyof T | ':id') => ({
+      above: (after: string) => collection(after),
       equals: vi.fn((value: unknown) => ({
         first: vi.fn(async () =>
-          [...store.values()].find((record) => record[field] === value)
+          [...store.values()].find(
+            (record) => record[field as keyof T] === value
+          )
         ),
       })),
     })),
@@ -97,6 +128,7 @@ function createMockTable<T extends { id: string }>() {
       first: vi.fn(async () => [...store.values()].find(predicate)),
     })),
     toArray: vi.fn(async () => [...store.values()]),
+    toCollection: () => collection(),
   }
 }
 
@@ -130,6 +162,8 @@ function createTestDriveSyncCoordinator(): DriveSyncCoordinator {
 
 type MockTable<T extends { id: string }> = ReturnType<typeof createMockTable<T>>
 
+const fixturePayloads = new WeakMap<object, MemoryFilePayloadStorage>()
+
 function createTestStore(
   driveStore: unknown,
   options: {
@@ -142,6 +176,10 @@ function createTestStore(
 ) {
   const localStore = Object.create(LocalNotebooks.prototype) as any
   localStore.files = options.files ?? createMockTable<LocalFileRecord>()
+  const payloads =
+    fixturePayloads.get(localStore.files) ?? new MemoryFilePayloadStorage()
+  fixturePayloads.set(localStore.files, payloads)
+  localStore.defaultPayloadStorage = payloads
   localStore.driveCreates = createMockTable<any>()
   localStore.folders = options.folders ?? createMockTable<LocalFolderRecord>()
   if (
@@ -599,7 +637,7 @@ describe('LocalNotebooks operation-log storage', () => {
       }
       expect(drive.waitForCreateOperation).toHaveBeenCalled()
       expect(
-        (await store.files.get(created.uri))?.ipynbExportPendingClaim
+        (await store.getFileRecord(created.uri))?.ipynbExportPendingClaim
       ).toBeUndefined()
       expect((await store.getIpynbExportState(created.uri)).uri).toBe(
         target.uri
@@ -750,7 +788,7 @@ describe('LocalNotebooks operation-log storage', () => {
       const notebook = await first.load(created.uri)
       notebook.metadata[AUTO_IPYNB_KEY] = 'true'
       await firstJournal.save(created.uri, notebook)
-      const record = (await first.files.get(created.uri))!
+      const record = (await first.getFileRecord(created.uri))!
       const initial = await firstStorage.read(record.operationLogRef!)
       const storage = new MemoryOperationLogStorage()
       const snapshot = await storage.initialize(created.uri, initial.document)
@@ -770,7 +808,7 @@ describe('LocalNotebooks operation-log storage', () => {
       await secondJournal.save(created.uri, newer)
       upstream = (
         await storage.read(
-          (await second.files.get(created.uri))!.operationLogRef!
+          (await second.getFileRecord(created.uri))!.operationLogRef!
         )
       ).document
       await second.syncIpynbFile(created.uri)
@@ -824,7 +862,7 @@ describe('LocalNotebooks operation-log storage', () => {
     ).resolves.toBe(true)
 
     expect(await store.loadContent(uri)).toBe(document)
-    expect(await store.files.get(uri)).toMatchObject({
+    expect(await store.getFileRecord(uri)).toMatchObject({
       doc: '',
       md5Checksum: md5(document),
       operationLogRef: { storage: 'opfs' },
@@ -890,7 +928,7 @@ describe('LocalNotebooks operation-log storage', () => {
 
     expect(driveStore.loadContent).toHaveBeenCalledTimes(3)
     expect(await store.loadContent(uri)).toBe(latestDocument)
-    expect(await store.files.get(uri)).toMatchObject({
+    expect(await store.getFileRecord(uri)).toMatchObject({
       md5Checksum: md5(latestDocument),
       lastRemoteChecksum: md5(latestDocument),
       lastUpstreamVersion: {
@@ -913,7 +951,7 @@ describe('LocalNotebooks operation-log storage', () => {
     })
 
     const created = await store.create(LOCAL_FOLDER_URI, 'shared.runme')
-    const record = await store.files.get(created.uri)
+    const record = await store.getFileRecord(created.uri)
 
     expect(record).toMatchObject({
       name: 'shared.runme',
@@ -1010,7 +1048,7 @@ describe('LocalNotebooks operation-log storage', () => {
     expect(log.operations.map((operation) => operation.kind)).toEqual([
       'cell.create',
     ])
-    expect((await store.files.get(created.uri))?.doc).toBe('')
+    expect((await store.getFileRecord(created.uri))?.doc).toBe('')
   })
 
   it('uses the supplied journal revision as the save adapter baseline', async () => {
@@ -1148,7 +1186,9 @@ describe('LocalNotebooks operation-log storage', () => {
     // A no-op save still persists and advertises the new header.
     await first.save(uri, notebook)
     expect(await store.loadContent(uri)).toBe(upgradeOperationLogToV2(document))
-    expect((await store.files.get(uri))?.md5Checksum).not.toBe(stored.checksum)
+    expect((await store.getFileRecord(uri))?.md5Checksum).not.toBe(
+      stored.checksum
+    )
     const version = await store.checkpointNotebookRevision(uri)
     await Promise.all([
       second.save(uri, notebook),
@@ -2443,8 +2483,8 @@ describe('LocalNotebooks operation-log storage', () => {
       )
     ).toEqual(new Set([root.op_id, alice.op_id, bob.op_id]))
     expect(driveStore.saveContentAfterVersionCheck).toHaveBeenCalledTimes(1)
-    expect((await store.files.get('local://file/shared'))?.doc).toBe('')
-    expect(await store.files.get('local://file/shared')).toMatchObject({
+    expect((await store.getFileRecord('local://file/shared'))?.doc).toBe('')
+    expect(await store.getFileRecord('local://file/shared')).toMatchObject({
       md5Checksum: md5(localAfter),
       lastRemoteChecksum: md5(localAfter),
     })
@@ -2519,14 +2559,16 @@ describe('LocalNotebooks operation-log storage', () => {
 
     expect(remoteDocument).toBe(localDocument)
     expect(driveStore.saveContentAfterVersionCheck).toHaveBeenCalledOnce()
-    expect(await store.files.get('local://file/empty-drive')).toMatchObject({
-      lastRemoteChecksum: md5(localDocument),
-      lastUpstreamVersion: {
-        checksum: md5(localDocument),
-        revisionId: 'revision-2',
-      },
-      lastSyncError: undefined,
-    })
+    expect(await store.getFileRecord('local://file/empty-drive')).toMatchObject(
+      {
+        lastRemoteChecksum: md5(localDocument),
+        lastUpstreamVersion: {
+          checksum: md5(localDocument),
+          revisionId: 'revision-2',
+        },
+        lastSyncError: undefined,
+      }
+    )
   })
 
   it('creates an operation-log identity when a new Drive mirror is empty', async () => {
@@ -2583,7 +2625,7 @@ describe('LocalNotebooks operation-log storage', () => {
     expect(parseOperationLog(remoteDocument).operations).toEqual([])
     expect(remoteDocument.endsWith('\n')).toBe(true)
     expect(await store.loadContent(uri)).toBe(remoteDocument)
-    expect(await store.files.get(uri)).toMatchObject({
+    expect(await store.getFileRecord(uri)).toMatchObject({
       lastRemoteChecksum: md5(remoteDocument),
       lastUpstreamVersion: {
         checksum: md5(remoteDocument),
@@ -2776,7 +2818,7 @@ describe('LocalNotebooks operation-log storage', () => {
         )
       )
     ).toEqual(expectedOperationIds)
-    expect(await store.files.get('local://file/drive-race')).toMatchObject({
+    expect(await store.getFileRecord('local://file/drive-race')).toMatchObject({
       md5Checksum: md5(localAfter),
       lastRemoteChecksum: md5(localAfter),
       lastSyncError: undefined,
@@ -3091,7 +3133,7 @@ describe('LocalNotebooks trusted Drive snapshot import', () => {
       }
     )
 
-    const record = await store.files.get(localUri)
+    const record = await store.getFileRecord(localUri)
     expect(driveStore.loadContent).toHaveBeenCalledTimes(1)
     expect(driveStore.getVersionMetadata).toHaveBeenCalledTimes(2)
     expect(record).toMatchObject({
@@ -3196,7 +3238,7 @@ describe('LocalNotebooks trusted Drive snapshot import', () => {
 
     expect(parseOperationLog(remoteDocument).operations).toEqual([])
     expect(await store.loadContent(localUri)).toBe(remoteDocument)
-    expect(await store.files.get(localUri)).toMatchObject({
+    expect(await store.getFileRecord(localUri)).toMatchObject({
       remoteId: remoteUri,
       lastRemoteChecksum: md5(remoteDocument),
       lastSyncError: undefined,
@@ -3488,7 +3530,7 @@ describe('Drive v3 operation-log revision recovery', () => {
         .sort()
     ).toEqual(['a-hidden', 'z-hidden'])
     expect(f.drive.saveContentAfterVersionCheck).toHaveBeenCalledTimes(2)
-    expect((await f.store.files.get(f.uri))?.lastSyncError).toBeUndefined()
+    expect((await f.store.getFileRecord(f.uri))?.lastSyncError).toBeUndefined()
   })
 
   it('merges a write after our upload without treating its metadata as our receipt', async () => {
@@ -3514,7 +3556,7 @@ describe('Drive v3 operation-log revision recovery', () => {
     await expect(f.store.reconcileDriveNotebook(f.uri)).rejects.toThrow(
       '200 retained-revision limit'
     )
-    expect(await f.store.files.get(f.uri)).toMatchObject({
+    expect(await f.store.getFileRecord(f.uri)).toMatchObject({
       lastSynced: '',
       driveRecoveryCheckpoint: { pendingRevisionIds: ['hidden'] },
     })
@@ -3526,7 +3568,7 @@ describe('Drive v3 operation-log revision recovery', () => {
     expect(f.ids(f.history.get(f.head())!)).toEqual(
       [f.a.op_id, f.b.op_id].sort()
     )
-    expect((await reloaded.files.get(f.uri))?.lastSyncError).toBeUndefined()
+    expect((await reloaded.getFileRecord(f.uri))?.lastSyncError).toBeUndefined()
   })
 
   it('reconciles an upload with an unknown outcome before retrying the write', async () => {
@@ -3566,7 +3608,7 @@ describe('Drive v3 operation-log revision recovery', () => {
     await expect(f.store.reconcileDriveNotebook(f.uri)).rejects.toThrow(
       'hidden is no longer available'
     )
-    expect((await f.store.files.get(f.uri))?.lastSynced).toBe('')
+    expect((await f.store.getFileRecord(f.uri))?.lastSynced).toBe('')
     expect(f.drive.saveContentAfterVersionCheck).toHaveBeenCalledTimes(1)
     expect(f.ids(await f.store.loadContent(f.uri))).toContain(f.a.op_id)
   })
@@ -3667,7 +3709,7 @@ describe('LocalNotebooks pending Drive create', () => {
         }),
       ],
     })
-    await expect(store.files.get(localUri)).resolves.toMatchObject({
+    await expect(store.getFileRecord(localUri)).resolves.toMatchObject({
       conflict: undefined,
       lastRemoteChecksum: 'drive-checksum-1',
       ipynbPreservation: {
@@ -3724,7 +3766,7 @@ describe('LocalNotebooks pending Drive create', () => {
       )
     ).resolves.toBe(false)
 
-    await expect(store.files.get(localUri)).resolves.toMatchObject({
+    await expect(store.getFileRecord(localUri)).resolves.toMatchObject({
       doc: editedDoc,
       md5Checksum: md5(editedDoc),
       lastRemoteChecksum: 'initial-remote-checksum',
@@ -3762,7 +3804,7 @@ describe('LocalNotebooks pending Drive create', () => {
       )
     ).resolves.toBe(false)
 
-    await expect(store.files.get(localUri)).resolves.toMatchObject({
+    await expect(store.getFileRecord(localUri)).resolves.toMatchObject({
       doc: editedDoc,
       md5Checksum: md5(editedDoc),
       lastRemoteChecksum: '',
@@ -4245,7 +4287,9 @@ describe('LocalNotebooks pending Drive create', () => {
       [itemRemoteUri, sourceRemoteUri, destinationRemoteUri],
       [markdownUri, sourceRemoteUri, destinationRemoteUri],
     ])
-    await expect(store.files.get('local://file/item')).resolves.toMatchObject({
+    await expect(
+      store.getFileRecord('local://file/item')
+    ).resolves.toMatchObject({
       markdownUri,
     })
   })
@@ -4302,7 +4346,9 @@ describe('LocalNotebooks pending Drive create', () => {
     await store.move('local://file/item', 'local://folder/destination')
 
     expect(driveStore.move).toHaveBeenCalledTimes(2)
-    await expect(store.files.get('local://file/item')).resolves.toMatchObject({
+    await expect(
+      store.getFileRecord('local://file/item')
+    ).resolves.toMatchObject({
       markdownUri: replacementMarkdownUri,
     })
     expect(driveStore.create).toHaveBeenCalledWith(
@@ -4386,7 +4432,7 @@ describe('LocalNotebooks pending Drive create', () => {
     const item = await store.create('local://folder/drive', 'draft.json')
 
     expect(item.type).toBe(NotebookStoreItemType.File)
-    const record = await store.files.get(item.uri)
+    const record = await store.getFileRecord(item.uri)
     expect(record?.remoteId).toBe('')
     expect(record?.parentRemoteIdWhenCreated).toBe(parentRemoteUri)
     expect(
@@ -4435,7 +4481,7 @@ describe('LocalNotebooks pending Drive create', () => {
       md5Checksum: checksum,
     })
 
-    await expect(store.listFileSyncStatuses()).resolves.toEqual([
+    await expect(listStatuses(store)).resolves.toEqual([
       {
         localUri: 'local://file/synced',
         title: 'synced.json',
@@ -4446,6 +4492,108 @@ describe('LocalNotebooks pending Drive create', () => {
         syncStatus: 'synced',
         lastError: undefined,
       },
+    ])
+  })
+
+  it('caps status pages at 50 records and traverses by key without bulk values', async () => {
+    const files = createMockTable<LocalFileRecord>()
+    const store = createTestStore({}, { files })
+    ;(store as any).runtime = { owner: true }
+    for (let n = 0; n < 123; n++) {
+      const id = `local://file/${String(n).padStart(3, '0')}`
+      await files.put({
+        id,
+        name: id,
+        remoteId: id,
+        doc: 'payload',
+        md5Checksum: 'hash',
+        lastRemoteChecksum: '',
+        lastSynced: '',
+      })
+    }
+    files.toArray.mockRejectedValue(new Error('Bulk payload read'))
+    const first = await store.listFileSyncStatusPage({ limit: 5000 })
+    expect(first.rows).toHaveLength(50)
+    expect(files.get).toHaveBeenCalledTimes(50)
+    const second = await store.listFileSyncStatusPage({
+      cursor: first.nextCursor,
+    })
+    expect(second.rows).toHaveLength(50)
+    const third = await store.listFileSyncStatusPage({
+      cursor: second.nextCursor,
+    })
+    expect(third.rows).toHaveLength(23)
+    expect(
+      new Set(
+        [...first.rows, ...second.rows, ...third.rows].map(
+          (row) => row.localUri
+        )
+      ).size
+    ).toBe(123)
+    expect(files.get).toHaveBeenCalledTimes(123)
+    // The same bounded iterator serves background reconciliation with the UI closed.
+    expect(await store.listDriveBackedFilesNeedingSync()).toEqual([])
+  })
+
+  it('scans status records one at a time without bulk-loading notebook payloads', async () => {
+    const files = createMockTable<LocalFileRecord>()
+    const store = createTestStore({}, { files })
+    ;(store as any).runtime = { owner: true }
+    for (const id of ['first', 'removed', 'last']) {
+      await files.put({
+        id: `local://file/${id}`,
+        name: `${id}.json`,
+        remoteId: `https://drive.google.com/file/d/${id}/view`,
+        doc: 'cached notebook payload',
+        md5Checksum: 'same',
+        lastRemoteChecksum: 'same',
+        lastSynced: '',
+      })
+    }
+    await store.driveCreates.put({
+      id: 'pending',
+      folder: 'folder',
+      name: 'Pending',
+      notebookJson: 'creation payload',
+      fingerprint: md5('creation payload'),
+    })
+    await store.driveCreates.put({
+      id: 'complete',
+      folder: 'folder',
+      name: 'Complete',
+      notebookJson: '',
+      fingerprint: '',
+      result: {
+        remoteUri: 'done',
+        fileId: 'done',
+        fileName: 'Complete',
+        localUri: 'local://file/complete',
+      },
+    })
+    // A status page must not materialize an array of every notebook payload.
+    files.toArray.mockRejectedValue(new Error('Bulk payload read'))
+    vi.spyOn(store.driveCreates, 'toArray').mockRejectedValue(
+      new Error('Bulk creation payload read')
+    )
+    const get = files.get.getMockImplementation()!
+    files.get.mockImplementation(async (id) => {
+      if (id === 'local://file/first') {
+        // Another tab may remove a record after the key enumeration.
+        await files.delete('local://file/removed')
+      }
+      return get(id)
+    })
+
+    const statuses = await listStatuses(store)
+    expect(statuses.map((row) => [row.title, row.syncStatus])).toEqual([
+      ['first.json', 'synced'],
+      ['last.json', 'synced'],
+      ['Pending', 'pending-upstream-create'],
+    ])
+    expect(files.get.mock.calls.map(([id]) => id)).toEqual([
+      'local://file/first',
+      'local://file/last',
+      'local://file/removed',
     ])
   })
 
@@ -4487,7 +4635,7 @@ describe('LocalNotebooks pending Drive create', () => {
 
     await store.sync('local://file/pending')
 
-    const record = await store.files.get('local://file/pending')
+    const record = await store.getFileRecord('local://file/pending')
     expect(record?.remoteId).toBe(remoteUri)
     expect(record?.parentRemoteIdWhenCreated).toBeUndefined()
     expect(record?.lastRemoteChecksum).toBe('checksum-1')
@@ -4548,7 +4696,7 @@ describe('LocalNotebooks pending Drive create', () => {
 
     await store.sync('local://file/pending')
 
-    const record = await store.files.get('local://file/pending')
+    const record = await store.getFileRecord('local://file/pending')
     expect(record?.remoteId).toBe(remoteUri)
     expect(record?.parentRemoteIdWhenCreated).toBeUndefined()
     expect(record?.lastRemoteChecksum).toBe('local-saved')
@@ -4607,7 +4755,7 @@ describe('LocalNotebooks pending Drive create', () => {
       EXCALIDRAW_MIME_TYPE,
       { createOperationId: expect.any(String) }
     )
-    await expect(store.files.get(item.uri)).resolves.toMatchObject({
+    await expect(store.getFileRecord(item.uri)).resolves.toMatchObject({
       remoteId: remoteUri,
       mimeType: EXCALIDRAW_MIME_TYPE,
       doc: content,
@@ -4667,7 +4815,7 @@ describe('LocalNotebooks pending Drive create', () => {
       EXCALIDRAW_MIME_TYPE
     )
     await expect(
-      store.files.get('local://file/excalidraw')
+      store.getFileRecord('local://file/excalidraw')
     ).resolves.toMatchObject({
       doc: content,
       mimeType: EXCALIDRAW_MIME_TYPE,
@@ -4759,7 +4907,7 @@ describe('LocalNotebooks pending Drive create', () => {
 
       expect(fetchMock).toHaveBeenCalledTimes(5)
       await expect(
-        store.files.get('local://file/protected-excalidraw')
+        store.getFileRecord('local://file/protected-excalidraw')
       ).resolves.toMatchObject({
         remoteId: remoteUri,
         lastRemoteChecksum: 'remote-after-save',
@@ -4797,7 +4945,7 @@ describe('LocalNotebooks pending Drive create', () => {
     )
     expect(driveStore.loadContent).toHaveBeenCalledWith(remoteUri)
     await expect(
-      store.files.get('local://file/excalidraw')
+      store.getFileRecord('local://file/excalidraw')
     ).resolves.toMatchObject({
       doc: content,
       lastRemoteChecksum: 'remote-content',
@@ -4858,7 +5006,7 @@ describe('LocalNotebooks pending Drive create', () => {
     releaseCreate()
     await Promise.all([firstSync, secondSync])
 
-    const record = await store.files.get('local://file/pending')
+    const record = await store.getFileRecord('local://file/pending')
     expect(record?.remoteId).toBe(remoteUri)
     expect(record?.parentRemoteIdWhenCreated).toBeUndefined()
     expect(driveStore.create).toHaveBeenCalledTimes(1)
@@ -5071,7 +5219,8 @@ describe('LocalNotebooks ipynb conversion', () => {
       kind: parser_pb.CellKind.MARKUP,
       value: '# Still here',
     })
-    const preservation = (await store.files.get(localUri))?.ipynbPreservation
+    const preservation = (await store.getFileRecord(localUri))
+      ?.ipynbPreservation
     expect(preservation).toBeDefined()
     const repaired = JSON.parse(
       await shadowStorage.read(preservation!.shadowRef)
@@ -5252,7 +5401,7 @@ describe('LocalNotebooks ipynb conversion', () => {
     const notebook = await store.load(localUri)
     expect(notebook.cells[0]?.value).toBe('print("before")\n')
     expect(
-      (await store.files.get(localUri))?.ipynbPreservation?.shadowRef
+      (await store.getFileRecord(localUri))?.ipynbPreservation?.shadowRef
     ).toEqual(expect.objectContaining({ storage: 'opfs' }))
 
     notebook.cells[0]!.value = 'print("after")\n'
@@ -5269,7 +5418,7 @@ describe('LocalNotebooks ipynb conversion', () => {
     expect(saved.cells[0].metadata).toMatchObject(source.cells[0].metadata)
     expect(saved.cells[0].attachments).toEqual(source.cells[0].attachments)
     expect(saved.metadata).toMatchObject(source.metadata)
-    await expect(store.files.get(localUri)).resolves.toMatchObject({
+    await expect(store.getFileRecord(localUri)).resolves.toMatchObject({
       lastRemoteChecksum: 'remote-2',
       lastUpstreamVersion: {
         checksum: 'remote-2',
@@ -5330,8 +5479,8 @@ describe('LocalNotebooks ipynb conversion', () => {
     })
 
     await store.sync(localUri)
-    const firstShadow = (await store.files.get(localUri))!.ipynbPreservation!
-      .shadowRef
+    const firstShadow = (await store.getFileRecord(localUri))!
+      .ipynbPreservation!.shadowRef
 
     remoteText = makeSource('print("after")\n')
     remoteChecksum = 'remote-2'
@@ -5340,7 +5489,7 @@ describe('LocalNotebooks ipynb conversion', () => {
     await expect(store.load(localUri)).resolves.toMatchObject({
       cells: [expect.objectContaining({ value: 'print("after")\n' })],
     })
-    const record = await store.files.get(localUri)
+    const record = await store.getFileRecord(localUri)
     expect(record?.conflict).toBeUndefined()
     expect(record).toMatchObject({
       lastRemoteChecksum: 'remote-2',
@@ -5397,7 +5546,7 @@ describe('LocalNotebooks ipynb conversion', () => {
     await expect(store.load(localUri)).resolves.toMatchObject({
       cells: [expect.objectContaining({ value: '# From Drive' })],
     })
-    await expect(store.files.get(localUri)).resolves.toMatchObject({
+    await expect(store.getFileRecord(localUri)).resolves.toMatchObject({
       lastRemoteChecksum: 'remote-checksum',
       lastUpstreamVersion: {
         checksum: 'remote-checksum',
@@ -5506,7 +5655,7 @@ describe('LocalNotebooks legacy notebook conversion', () => {
     )
 
     expect(result.name).toBe('migration.plan.runme')
-    expect((await store.files.get(sourceUri))?.doc).toBe(sourceDoc)
+    expect((await store.getFileRecord(sourceUri))?.doc).toBe(sourceDoc)
     const converted = await store.load(result.uri)
     expect(converted.cells[0]?.value).toBe('echo source')
     expect(
@@ -5852,7 +6001,7 @@ describe('LocalNotebooks legacy notebook conversion', () => {
     expect((await store.load(conversionUri)).cells[0]?.value).toBe(
       'echo target-only edit'
     )
-    await expect(store.files.get(conversionUri)).resolves.toMatchObject({
+    await expect(store.getFileRecord(conversionUri)).resolves.toMatchObject({
       legacyConversionAttempt: {
         originalGoogleDriveId: 'fresh-profile-source-id',
         sourceChecksum: md5(sourceDoc),
@@ -5916,7 +6065,7 @@ describe('LocalNotebooks legacy notebook conversion', () => {
     ).rejects.toThrow('temporary Drive read failure')
 
     expect(
-      (await store.files.get(conversionUri))?.legacyConversionAttempt
+      (await store.getFileRecord(conversionUri))?.legacyConversionAttempt
     ).toBeUndefined()
     await expect(store.files.toArray()).resolves.toHaveLength(2)
   })
@@ -5988,7 +6137,7 @@ describe('LocalNotebooks legacy notebook conversion', () => {
     await expect(
       store.convertLegacyNotebookToRunme(sourceUri, parentUri)
     ).rejects.toThrow('temporary target sync failure')
-    await expect(store.files.get(conversionUri)).resolves.toMatchObject({
+    await expect(store.getFileRecord(conversionUri)).resolves.toMatchObject({
       legacyConversionAttempt: {
         originalGoogleDriveId: 'recovered-retry-source-id',
         sourceChecksum: md5(sourceDoc),
@@ -6003,7 +6152,7 @@ describe('LocalNotebooks legacy notebook conversion', () => {
 
     expect(result.uri).toBe(conversionUri)
     expect(targetSyncCalls).toBe(2)
-    await expect(store.files.get(conversionUri)).resolves.toMatchObject({
+    await expect(store.getFileRecord(conversionUri)).resolves.toMatchObject({
       legacyConversionAttempt: {
         originalGoogleDriveId: 'recovered-retry-source-id',
         sourceChecksum: md5(sourceDoc),
@@ -6646,7 +6795,8 @@ describe('LocalNotebooks legacy notebook conversion', () => {
       store.convertLegacyNotebookToRunme(sourceUri, parentUri)
     ).rejects.toThrow('transient folder attachment failure')
     expect(
-      (await store.files.get(pendingUri))?.legacyConversionAttempt?.completedAt
+      (await store.getFileRecord(pendingUri))?.legacyConversionAttempt
+        ?.completedAt
     ).toBeUndefined()
 
     const result = await store.convertLegacyNotebookToRunme(
@@ -6662,7 +6812,7 @@ describe('LocalNotebooks legacy notebook conversion', () => {
     expect(syncFile).toHaveBeenCalledWith(pendingUri)
     expect((await store.load(pendingUri)).cells[0]?.value).toBe('echo retry')
     expect(
-      (await store.files.get(pendingUri))?.legacyConversionAttempt
+      (await store.getFileRecord(pendingUri))?.legacyConversionAttempt
     ).toMatchObject({
       originalGoogleDriveId: 'original-drive-retry',
       sourceChecksum: md5(sourceDoc),
@@ -6803,7 +6953,7 @@ describe('LocalNotebooks legacy notebook conversion', () => {
       'echo after post create failure'
     )
     expect(
-      (await store.files.get(conversionUri))?.legacyConversionAttempt
+      (await store.getFileRecord(conversionUri))?.legacyConversionAttempt
     ).toMatchObject({
       originalGoogleDriveId: 'original-drive-post-create',
       sourceChecksum: md5(sourceDoc),
@@ -7019,7 +7169,7 @@ describe('LocalNotebooks legacy notebook conversion', () => {
       oldParentRemoteUri,
       newParentRemoteUri
     )
-    await expect(store.files.get(conversionUri)).resolves.toMatchObject({
+    await expect(store.getFileRecord(conversionUri)).resolves.toMatchObject({
       remoteId: conversionRemoteUri,
       parentRemoteIdWhenCreated: undefined,
       legacyConversionAttempt: { completedAt: expect.any(String) },
@@ -7275,7 +7425,9 @@ describe('LocalNotebooks legacy notebook conversion', () => {
     expect(result.name).toBe('source.runme')
     expect(result.remoteUri).toBe(newConversionRemoteUri)
     expect(driveStore.rename).not.toHaveBeenCalled()
-    await expect(store.files.get(customConversionUri)).resolves.toMatchObject({
+    await expect(
+      store.getFileRecord(customConversionUri)
+    ).resolves.toMatchObject({
       name: 'custom.runme',
       remoteId: customConversionRemoteUri,
     })
@@ -7299,7 +7451,7 @@ describe('LocalNotebooks rename', () => {
     const result = await store.rename('local://file/runme', 'renamed')
 
     expect(result.name).toBe('renamed.runme')
-    expect((await store.files.get('local://file/runme'))?.name).toBe(
+    expect((await store.getFileRecord('local://file/runme'))?.name).toBe(
       'renamed.runme'
     )
   })
@@ -7343,7 +7495,7 @@ describe('LocalNotebooks rename', () => {
       remoteUri,
       parents: ['local://folder/drive'],
     })
-    expect((await store.files.get('local://file/drive'))?.name).toBe(
+    expect((await store.getFileRecord('local://file/drive'))?.name).toBe(
       'renamed.json'
     )
   })
@@ -7383,7 +7535,7 @@ describe('LocalNotebooks rename', () => {
       name: 'renamed.json',
       remoteUri,
     })
-    expect((await store.files.get('local://file/drive'))?.remoteId).toBe(
+    expect((await store.getFileRecord('local://file/drive'))?.remoteId).toBe(
       remoteUri
     )
   })
@@ -7454,7 +7606,7 @@ describe('LocalNotebooks rename', () => {
       store.rename('local://file/drive', 'renamed.json')
     ).rejects.toThrow('permission denied')
 
-    expect((await store.files.get('local://file/drive'))?.name).toBe(
+    expect((await store.getFileRecord('local://file/drive'))?.name).toBe(
       'original.json'
     )
   })
@@ -7514,7 +7666,9 @@ describe('LocalNotebooks moveToTrash', () => {
     await store.moveToTrash('local://file/drive')
 
     expect(driveStore.moveToTrash).toHaveBeenCalledWith(remoteUri)
-    await expect(store.files.get('local://file/drive')).resolves.toBeUndefined()
+    await expect(
+      store.getFileRecord('local://file/drive')
+    ).resolves.toBeUndefined()
     expect(
       (await store.folders.get('local://folder/drive'))?.children
     ).not.toContain('local://file/drive')
@@ -7605,7 +7759,7 @@ describe('LocalNotebooks Drive conflict resolution', () => {
         revisionId: 'upstream-revision',
       },
     })
-    const record = await store.files.get('local://file/drive')
+    const record = await store.getFileRecord('local://file/drive')
     expect(record?.conflict).toBeUndefined()
     expect(driveStore.load).toHaveBeenCalledWith(remoteUri)
     expect(driveStore.getVersionMetadata).toHaveBeenCalledWith(remoteUri)
@@ -7738,7 +7892,7 @@ describe('LocalNotebooks Drive conflict resolution', () => {
 
     await store.sync('local://file/conflict')
 
-    const record = await store.files.get('local://file/conflict')
+    const record = await store.getFileRecord('local://file/conflict')
     expect(record?.remoteId).toBe(remoteUri)
     expect(record?.name).toBe('notebook.json')
     expect(record?.lastRemoteChecksum).toBe('base-checksum')
@@ -7810,7 +7964,7 @@ describe('LocalNotebooks Drive conflict resolution', () => {
 
     await store.save('local://file/conflict', nextNotebook)
 
-    const record = await store.files.get('local://file/conflict')
+    const record = await store.getFileRecord('local://file/conflict')
     expect(record?.doc).toBe(
       toJsonString(
         parser_pb.NotebookSchema,
@@ -7875,7 +8029,7 @@ describe('LocalNotebooks Drive conflict resolution', () => {
       store.getConflictUpstreamDoc('local://file/conflict')
     ).resolves.toBe(legacyUpstreamDoc)
 
-    const record = await store.files.get('local://file/conflict')
+    const record = await store.getFileRecord('local://file/conflict')
     expect(record?.conflict?.upstreamDoc).toBeUndefined()
     expect(record?.conflict?.upstreamDocRef).toMatchObject({
       storage: 'opfs',
@@ -7923,7 +8077,7 @@ describe('LocalNotebooks Drive conflict resolution', () => {
 
     await store.resolveConflictWithLocal('local://file/conflict')
 
-    const record = await store.files.get('local://file/conflict')
+    const record = await store.getFileRecord('local://file/conflict')
     expect(driveStore.saveContent).toHaveBeenCalledWith(
       remoteUri,
       localDoc,
@@ -8089,7 +8243,7 @@ describe('LocalNotebooks Drive conflict resolution', () => {
       'local://file/conflict'
     )
 
-    const record = await store.files.get('local://file/conflict')
+    const record = await store.getFileRecord('local://file/conflict')
     expect(driveStore.load).toHaveBeenCalledWith(remoteUri)
     expect(conflict.upstreamChecksum).toBe(md5(upstreamHeadDoc))
     expect(conflict.upstreamVersion).toEqual({
@@ -8308,7 +8462,7 @@ it('opens, edits, saves and reruns a .runme notebook with conflicting execution 
       ],
     },
   })
-  const record = (await store.files.get(file.uri))!
+  const record = (await store.getFileRecord(file.uri))!
   await operationLogStorage.appendTransaction(
     record.operationLogRef!,
     async () => `${JSON.stringify(conflict)}\n`
@@ -8425,10 +8579,10 @@ describe('LocalNotebooks level-based Drive recovery', () => {
       operationLogRef: snapshot.ref,
     })
     expect(await store.listDriveBackedFilesNeedingSync()).toEqual([base.id])
-    expect((await store.files.get(base.id))?.md5Checksum).toBe(
+    expect((await store.getFileRecord(base.id))?.md5Checksum).toBe(
       snapshot.checksum
     )
-    expect((await store.files.get(base.id))?.doc).toBe('')
+    expect((await store.getFileRecord(base.id))?.doc).toBe('')
     await store.listDriveBackedFilesNeedingSync()
     expect(read).toHaveBeenCalledTimes(1)
   })
@@ -8446,7 +8600,7 @@ describe('LocalNotebooks level-based Drive recovery', () => {
       corrupt.id,
       'local://file/dirty',
     ])
-    const statuses = await store.listFileSyncStatuses()
+    const statuses = await listStatuses(store)
     expect(
       statuses.find(
         (row: { localUri: string; syncStatus: string }) =>
@@ -8483,7 +8637,9 @@ describe('LocalNotebooks level-based Drive recovery', () => {
     })
     expect(await reloaded.reconcileDriveBackedFiles()).toEqual([base.id])
     await vi.waitFor(() => expect(sync).toHaveBeenCalledTimes(1))
-    expect((await files.get(base.id))?.lastSyncError).toBeUndefined()
+    await vi.waitFor(async () =>
+      expect((await files.get(base.id))?.lastSyncError).toBeUndefined()
+    )
     expect(await reloaded.listDriveBackedFilesNeedingSync()).toEqual([])
     reloaded.stopSyncQueue()
   })
@@ -8581,7 +8737,9 @@ describe('LocalNotebooks level-based Drive recovery', () => {
     expect((await restored.load(base.id)).cells[0].value).toBe(
       'recovered remote content'
     )
-    expect((await files.get(base.id))?.lastSyncError).toBeUndefined()
+    await vi.waitFor(async () =>
+      expect((await files.get(base.id))?.lastSyncError).toBeUndefined()
+    )
     expect((await files.get(base.id))?.lastSynced).toBeTruthy()
     expect(drive.saveContent).not.toHaveBeenCalled()
     expect(await restored.listDriveBackedFilesNeedingSync()).toEqual([])
@@ -8650,7 +8808,9 @@ describe('LocalNotebooks level-based Drive recovery', () => {
       return snapshot
     })
     await store.listDriveBackedFilesNeedingSync()
-    expect((await store.files.get(base.id))?.md5Checksum).toBe('newer-append')
+    expect((await store.getFileRecord(base.id))?.md5Checksum).toBe(
+      'newer-append'
+    )
   })
 })
 
@@ -8678,11 +8838,17 @@ describe('durable direct Drive creation', () => {
         )
       ).rejects.toThrow('lost response')
       const pending = await first.driveCreates.get('key')
-      expect(JSON.parse(pending!.notebookJson)).toEqual({})
+      expect(pending!.notebookJson).toBe('')
+      expect(
+        JSON.parse(
+          await (first as any).payloadStorage.read(pending!.payloadRef)
+        )
+      ).toEqual({})
       expect(pending?.lastError).toContain('lost response')
       first.stopSyncQueue()
       const second = createTestStore({})
       second.driveCreates = first.driveCreates
+      ;(second as any).defaultPayloadStorage = (first as any).payloadStorage
       await second.reconcileDriveBackedFiles()
       await vi.waitFor(async () =>
         expect((await second.driveCreates.get('key'))?.result).toEqual(result)
@@ -8742,7 +8908,7 @@ describe('creation recovery safety', () => {
       expect((await store.driveCreates.get('corrupt'))?.notebookJson).toBe(
         'damaged'
       )
-      expect(await store.listFileSyncStatuses()).toContainEqual(
+      expect(await listStatuses(store)).toContainEqual(
         expect.objectContaining({
           localUri: 'drive-create:corrupt',
           syncStatus: 'error',
@@ -8837,9 +9003,11 @@ describe('SharedWorker metadata discovery', () => {
     expect(await store.reconcileDriveBackedFiles()).toEqual([])
     expect(await store.reconcileDriveBackedFiles()).toEqual([])
     expect((await store.getDriveQueueMetrics()).depth).toBe(0)
-    const statuses = await store.listFileSyncStatuses()
+    const statuses = await listStatuses(store)
     expect(statuses).toHaveLength(1_000)
-    expect(statuses.every((row) => row.syncStatus === 'not-downloaded')).toBe(true)
+    expect(statuses.every((row) => row.syncStatus === 'not-downloaded')).toBe(
+      true
+    )
     expect(read).not.toHaveBeenCalled()
     store.stopSyncQueue()
   })
@@ -8914,7 +9082,7 @@ describe('SharedWorker metadata discovery', () => {
       },
     })
     expect(await store.listDriveBackedFilesNeedingSync()).toEqual(
-      records.map((record) => record.id)
+      records.map((record) => record.id).sort()
     )
     expect(read).not.toHaveBeenCalled()
   })
@@ -8937,7 +9105,7 @@ describe('SharedWorker metadata discovery', () => {
     })
     expect((await store.getSyncState(uri)).status).toBe('pending')
     expect(await store.listDriveBackedFilesNeedingSync()).toContain(uri)
-    await store.listFileSyncStatuses()
+    await listStatuses(store)
     expect(read).not.toHaveBeenCalled()
   })
 })
@@ -9024,9 +9192,9 @@ describe('LocalNotebooks local-first open', () => {
         children: [],
         lastSynced: '',
       })
-      const sync = vi.spyOn(store as any, 'syncFile').mockImplementation(
-        () => new Promise(() => {})
-      )
+      const sync = vi
+        .spyOn(store as any, 'syncFile')
+        .mockImplementation(() => new Promise(() => {}))
       try {
         const file = await store.create(parent, `empty.${format}`)
         sync.mockClear() // Creation itself schedules an asynchronous sync.
@@ -9123,7 +9291,7 @@ describe('LocalNotebooks local-first open', () => {
       )
       expect(drive.create).not.toHaveBeenCalled()
       expect(
-        (await store.files.get(file.uri))?.driveCreateOperationId
+        (await store.getFileRecord(file.uri))?.driveCreateOperationId
       ).toBeTruthy()
     } finally {
       store.stopSyncQueue()
@@ -9175,4 +9343,319 @@ describe('LocalNotebooks local-first open', () => {
       await expect(store.load(uri)).rejects.toThrow('offline first download')
     }
   )
+})
+
+describe('OPFS notebook payload migration', () => {
+  const uri = 'local://file/payload'
+  const baseline = (name = 'payload.json'): LocalFileRecord => ({
+    id: uri,
+    name,
+    remoteId: uri,
+    doc: notebookJson('original'),
+    md5Checksum: 'local',
+    lastRemoteChecksum: '',
+    lastSynced: '',
+  })
+
+  it.each(['payload.json', 'payload.ipynb'])(
+    'migrates %s without changing bytes and reopens/edits it',
+    async (name) => {
+      const store = createTestStore({})
+      const record = baseline(name)
+      await store.files.put(record)
+      await (store as any).migrateFilePayloads()
+      const raw = await store.files.get(uri)
+      expect(raw?.doc).toBe('')
+      expect(raw?.contentRef?.storage).toBe('opfs')
+      expect((await store.getFileRecord(uri))?.doc).toBe(record.doc)
+      const next = createTestStore({}, { files: store.files as any })
+      expect((await next.getFileRecord(uri))?.doc).toBe(record.doc)
+      const notebook = create(parser_pb.NotebookSchema, {
+        cells: [
+          create(parser_pb.CellSchema, {
+            refId: 'edited',
+            kind: parser_pb.CellKind.CODE,
+            languageId: 'python',
+            value: 'print("edited")',
+          }),
+        ],
+      })
+      await next.save(uri, notebook)
+      expect((await next.getFileRecord(uri))?.doc).toContain('edited')
+      expect((await next.files.get(uri))?.doc).toBe('')
+      // The previous immutable generation stays readable after a new save.
+      expect(await (next as any).payloadStorage.read(raw!.contentRef)).toBe(
+        record.doc
+      )
+      next.stopSyncQueue()
+    }
+  )
+
+  it('serializes a slow save before a newer full-content save', async () => {
+    const store = createTestStore({})
+    await store.files.put(baseline())
+    const payloads = (store as any).payloadStorage as MemoryFilePayloadStorage
+    const write = payloads.write.bind(payloads)
+    let release!: () => void
+    const gate = new Promise<void>((resolve) => {
+      release = resolve
+    })
+    const writes = vi
+      .spyOn(payloads, 'write')
+      .mockImplementationOnce(async (content) => {
+        await gate
+        return write(content)
+      })
+    const first = store.save(
+      uri,
+      create(parser_pb.NotebookSchema, {
+        cells: [
+          create(parser_pb.CellSchema, {
+            value: 'older',
+            kind: parser_pb.CellKind.CODE,
+          }),
+        ],
+      })
+    )
+    await vi.waitFor(() => expect(writes).toHaveBeenCalledTimes(1))
+    const second = store.saveContent(
+      uri,
+      notebookJson('newer'),
+      'application/json'
+    )
+    try {
+      // A later invocation must not publish while the earlier write is suspended.
+      await new Promise((resolve) => setTimeout(resolve, 20))
+      expect(writes).toHaveBeenCalledTimes(1)
+    } finally {
+      release()
+      await Promise.all([first, second])
+      store.stopSyncQueue()
+    }
+    expect((await store.getFileRecord(uri))?.doc).toContain('newer')
+  })
+
+  it('continues queued saves after a failed write and captures the submitted notebook', async () => {
+    const store = createTestStore({})
+    await store.files.put(baseline())
+    vi.spyOn((store as any).payloadStorage, 'write').mockRejectedValueOnce(
+      new Error('interrupted')
+    )
+    const notebook = create(parser_pb.NotebookSchema, {
+      cells: [
+        create(parser_pb.CellSchema, {
+          value: 'submitted',
+          kind: parser_pb.CellKind.CODE,
+        }),
+      ],
+    })
+    const first = store.saveContent(
+      uri,
+      notebookJson('failed'),
+      'application/json'
+    )
+    const second = store.save(uri, notebook)
+    notebook.cells[0].value = 'not yet saved'
+    try {
+      await expect(first).rejects.toThrow('interrupted')
+      await second
+      expect((await store.load(uri)).cells[0].value).toBe('submitted')
+    } finally {
+      store.stopSyncQueue()
+    }
+  })
+
+  it('saves recovered content without reading the damaged previous payload', async () => {
+    const store = createTestStore({})
+    await store.files.put(baseline())
+    await (store as any).migrateFilePayloads()
+    const payloads = (store as any).payloadStorage as MemoryFilePayloadStorage
+    payloads.values.clear()
+    const read = vi.spyOn(payloads, 'read')
+    try {
+      await store.saveContent(
+        uri,
+        notebookJson('recovered'),
+        'application/json'
+      )
+      expect(read).not.toHaveBeenCalled()
+      expect((await store.load(uri)).cells[0].value).toBe('recovered')
+      await store.save(
+        uri,
+        create(parser_pb.NotebookSchema, {
+          cells: [
+            create(parser_pb.CellSchema, {
+              value: 'rerun',
+              kind: parser_pb.CellKind.CODE,
+            }),
+          ],
+        })
+      )
+      expect((await store.load(uri)).cells[0].value).toBe('rerun')
+    } finally {
+      store.stopSyncQueue()
+    }
+  })
+
+  it('opens, edits, and reopens a healthy log despite a missing pending initialization payload', async () => {
+    const logs = new MemoryOperationLogStorage()
+    const store = createTestStore({}, { operationLogStorage: logs })
+    const notebook = create(parser_pb.NotebookSchema, {
+      cells: [
+        create(parser_pb.CellSchema, {
+          value: 'healthy',
+          kind: parser_pb.CellKind.CODE,
+        }),
+      ],
+    })
+    const conversion = await convertLegacyNotebookFileToRunme(
+      encodeRunmeNotebook(notebook),
+      'source.json'
+    )
+    const stored = await logs.initialize(uri, conversion.content)
+    const payloads = (store as any).payloadStorage as MemoryFilePayloadStorage
+    const pendingInitializationRef = await payloads.write(
+      'unreadable pending bytes'
+    )
+    payloads.values.clear()
+    await store.files.put({
+      ...baseline('payload.runme'),
+      doc: '',
+      operationLogRef: stored.ref,
+      pendingInitializationRef,
+    })
+    try {
+      expect((await store.load(uri)).cells[0].value).toBe('healthy')
+      const editor = await store.createOperationLogSaveStore(uri, {
+        actorId: 'recovery-test',
+      })
+      editor.initialNotebook.cells[0].value = 'edited and rerun'
+      await editor.save(uri, editor.initialNotebook)
+      expect((await store.load(uri)).cells[0].value).toBe('edited and rerun')
+      expect((await store.files.get(uri))?.pendingInitializationRef).toEqual(
+        pendingInitializationRef
+      )
+    } finally {
+      store.stopSyncQueue()
+    }
+  })
+
+  it('returns a completed creation receipt without writing another payload', async () => {
+    const store = createTestStore({})
+    const notebook = create(parser_pb.NotebookSchema, {})
+    const result = {
+      fileId: 'done',
+      fileName: 'a.runme',
+      remoteUri: 'remote',
+      localUri: uri,
+    }
+    await store.driveCreates.put({
+      id: 'done',
+      folder: 'folder',
+      name: 'a.runme',
+      notebookJson: '',
+      fingerprint: md5('{}'),
+      result,
+    })
+    vi.spyOn((store as any).payloadStorage, 'write').mockRejectedValue(
+      new Error('quota')
+    )
+    await expect(
+      store.createDriveNotebookRequest(notebook, 'folder', 'a.runme', 'done')
+    ).resolves.toEqual(result)
+  })
+
+  it('moves pending initialization, conflict, and creation payloads out of metadata', async () => {
+    const store = createTestStore({})
+    await store.files.put({
+      ...baseline(),
+      pendingOperationLogInitialization: 'initial bytes',
+      conflict: {
+        detectedAt: 'now',
+        upstreamChecksum: 'upstream',
+        localChecksumAtDetection: 'local',
+        upstreamDoc: 'conflict bytes',
+      },
+    })
+    await store.driveCreates.put({
+      id: 'create',
+      folder: 'folder',
+      name: 'new.json',
+      notebookJson: '{}',
+      fingerprint: md5('{}'),
+    })
+    await (store as any).migrateFilePayloads()
+    const raw = await store.files.get(uri)
+    expect(raw?.doc).toBe('')
+    expect(raw?.pendingOperationLogInitialization).toBeUndefined()
+    expect(raw?.conflict?.upstreamDoc).toBeUndefined()
+    expect(
+      await (store as any).payloadStorage.read(raw!.pendingInitializationRef)
+    ).toBe('initial bytes')
+    expect(await store.getConflictUpstreamDoc(uri)).toBe('conflict bytes')
+    const request = await store.driveCreates.get('create')
+    expect(request?.notebookJson).toBe('')
+    expect(await (store as any).payloadStorage.read(request!.payloadRef)).toBe(
+      '{}'
+    )
+  })
+
+  it('preserves inline data when OPFS fails and retries without changing identity', async () => {
+    const store = createTestStore({})
+    const original = baseline()
+    await store.files.put(original)
+    const write = vi
+      .spyOn((store as any).payloadStorage, 'write')
+      .mockRejectedValueOnce(new Error('quota'))
+    await (store as any).migrateFilePayloads()
+    expect(await store.files.get(uri)).toEqual(original)
+    await (store as any).migrateFilePayloads()
+    expect((await store.files.get(uri))?.doc).toBe('')
+    expect((await store.getFileRecord(uri))?.doc).toBe(original.doc)
+    expect(write).toHaveBeenCalledTimes(2)
+  })
+
+  it('preserves inline data after a failed metadata commit and resumes on retry', async () => {
+    const store = createTestStore({})
+    const original = baseline()
+    await store.files.put(original)
+    vi.spyOn(store.files, 'put').mockRejectedValueOnce(
+      new Error('commit failed')
+    )
+    await (store as any).migrateFilePayloads()
+    expect(await store.files.get(uri)).toEqual(original)
+    await (store as any).migrateFilePayloads()
+    expect((await store.getFileRecord(uri))?.doc).toBe(original.doc)
+    expect((await store.files.get(uri))?.doc).toBe('')
+  })
+
+  it('never overwrites an edit made during migration', async () => {
+    const store = createTestStore({})
+    await store.files.put(baseline())
+    const payloads = (store as any).payloadStorage as MemoryFilePayloadStorage
+    const write = payloads.write.bind(payloads)
+    vi.spyOn(payloads, 'write').mockImplementationOnce(async (content) => {
+      await store.files.update(uri, { doc: notebookJson('concurrent edit') })
+      return write(content)
+    })
+    await (store as any).migrateFilePayloads()
+    expect((await store.getFileRecord(uri))?.doc).toContain('concurrent edit')
+  })
+
+  it('keeps a missing payload reference and reports corruption instead of an empty notebook', async () => {
+    const store = createTestStore({})
+    await store.files.put(baseline())
+    await (store as any).migrateFilePayloads()
+    const raw = await store.files.get(uri)
+    ;((store as any).payloadStorage as MemoryFilePayloadStorage).values.clear()
+    await expect(store.getFileRecord(uri)).rejects.toThrow('missing or corrupt')
+    expect(await store.files.get(uri)).toEqual(raw)
+    ;(store as any).runtime = { owner: true }
+    // Status/reconciliation can still use metadata with an unreadable payload.
+    expect((await store.listFileSyncStatusPage()).rows).toHaveLength(1)
+    // Metadata operations remain available without loading the broken body.
+    await store.rename(uri, 'renamed.json')
+    expect((await store.files.get(uri))?.contentRef).toEqual(raw?.contentRef)
+    expect((await store.files.get(uri))?.name).toBe('renamed.json')
+  })
 })

@@ -43,9 +43,7 @@ function diffDocumentIdForResolution(
   resolutionKind: DriveDiffResolutionKind
 ): string {
   const prefix =
-    resolutionKind === 'notebook-sync-conflict'
-      ? 'conflict'
-      : resolutionKind
+    resolutionKind === 'notebook-sync-conflict' ? 'conflict' : resolutionKind
   return `${prefix}-${encodeURIComponent(localUri)}`
 }
 
@@ -97,7 +95,7 @@ export async function loadNotebookConflictDiffDocument(
   store: LocalNotebooks,
   localUri: string
 ): Promise<NotebookDiffDocument> {
-  const record = await store.files.get(localUri)
+  const record = await store.getFileRecord(localUri)
   if (!record) {
     throw new Error(`Local notebook record not found for ${localUri}`)
   }
@@ -153,7 +151,7 @@ async function registerDriveRevisionDiffDocument(
     throw new Error('Drive revision diff requires a revision id')
   }
 
-  const record = await store.files.get(localUri)
+  const record = await store.getFileRecord(localUri)
   if (!record) {
     throw new Error(`Local notebook record not found for ${localUri}`)
   }
@@ -175,7 +173,12 @@ async function registerDriveRevisionDiffDocument(
   }
 
   if (record.conflict?.upstreamVersion?.revisionId === normalizedRevisionId) {
-    return registerConflictDiffDocument(store, localUri, record, record.conflict)
+    return registerConflictDiffDocument(
+      store,
+      localUri,
+      record,
+      record.conflict
+    )
   }
 
   const revisionDoc = await store.getDriveRevisionDoc(
@@ -266,7 +269,7 @@ export async function restoreDeletedConflictCell(
     throw new Error('Only deleted upstream cells can be restored.')
   }
 
-  const record = await store.files.get(localUri)
+  const record = await store.getFileRecord(localUri)
   if (!record) {
     throw new Error(`Local notebook record not found for ${localUri}`)
   }
@@ -284,7 +287,7 @@ export async function restoreDeletedConflictCell(
   if (refId && localCells.some((cell) => cell.refId === refId)) {
     if (options.localNotebook) {
       await store.save(localUri, localNotebook)
-      const updatedRecord = await store.files.get(localUri)
+      const updatedRecord = await store.getFileRecord(localUri)
       if (!updatedRecord) {
         throw new Error(`Local notebook record not found for ${localUri}`)
       }
@@ -325,7 +328,7 @@ export async function restoreDeletedConflictCell(
 
   await store.save(localUri, localNotebook)
 
-  const updatedRecord = await store.files.get(localUri)
+  const updatedRecord = await store.getFileRecord(localUri)
   if (!updatedRecord) {
     throw new Error(`Local notebook record not found for ${localUri}`)
   }
@@ -476,7 +479,7 @@ export async function applyConflictSourceHunk(
   }
   const hunkLines = diffLines.slice(hunk.startLine, endLine)
 
-  const record = await store.files.get(localUri)
+  const record = await store.getFileRecord(localUri)
   if (!record) {
     throw new Error(`Local notebook record not found for ${localUri}`)
   }
@@ -536,7 +539,7 @@ export async function applyConflictSourceHunk(
 
   await store.save(localUri, localNotebook)
 
-  const updatedRecord = await store.files.get(localUri)
+  const updatedRecord = await store.getFileRecord(localUri)
   if (!updatedRecord) {
     throw new Error(`Local notebook record not found for ${localUri}`)
   }
@@ -563,7 +566,7 @@ export async function removeInsertedConflictCell(
     )
   }
 
-  const record = await store.files.get(localUri)
+  const record = await store.getFileRecord(localUri)
   if (!record) {
     throw new Error(`Local notebook record not found for ${localUri}`)
   }
@@ -579,7 +582,7 @@ export async function removeInsertedConflictCell(
 
   await store.save(localUri, localNotebook)
 
-  const updatedRecord = await store.files.get(localUri)
+  const updatedRecord = await store.getFileRecord(localUri)
   if (!updatedRecord) {
     throw new Error(`Local notebook record not found for ${localUri}`)
   }
@@ -606,7 +609,7 @@ export async function openNotebookUpstreamDiff(
   store: LocalNotebooks,
   localUri: string
 ): Promise<void> {
-  const record = await store.files.get(localUri)
+  const record = await store.getFileRecord(localUri)
   if (!record) {
     throw new Error(`Local notebook record not found for ${localUri}`)
   }
@@ -657,7 +660,7 @@ export async function refreshNotebookConflictDiff(
   localUri: string
 ): Promise<void> {
   const conflict = await store.refreshConflictWithLatestUpstream(localUri)
-  const record = await store.files.get(localUri)
+  const record = await store.getFileRecord(localUri)
   if (!record) {
     throw new Error(`Local notebook record not found for ${localUri}`)
   }

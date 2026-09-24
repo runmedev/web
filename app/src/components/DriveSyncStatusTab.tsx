@@ -20,6 +20,7 @@ import { getLinkedResourceCache } from '../lib/linkedResourceCache'
 import type {
   NotebookSyncStatus,
   NotebookSyncStatusRow,
+  NotebookSyncStatusPage,
 } from '../storage/local'
 
 import { DriveQueueMonitor } from './DriveQueueMonitor'
@@ -96,7 +97,7 @@ const columnDescriptions: Record<SortKey, string> = {
 }
 
 const refreshDescription =
-  'Reloads the status table from local notebook sync metadata. It does not sync files.'
+  'Reloads this page from local notebook sync metadata. It does not sync files.'
 
 function formatFreedBytes(value: number): string {
   if (value < 1024) {
@@ -437,6 +438,13 @@ export function DriveSyncStatusTab() {
   const { openNotebook } = useNotebookContext()
   const { showDocument } = useWorkspaceDocumentContext()
   const [rows, setRows] = useState<NotebookSyncStatusRow[]>([])
+  // Keep page cursors rather than prior page records; navigating releases old rows.
+  const [pageCursors, setPageCursors] = useState<
+    Array<NotebookSyncStatusPage['nextCursor']>
+  >([undefined])
+  const cursor = pageCursors[pageCursors.length - 1]
+  const [nextCursor, setNextCursor] =
+    useState<NotebookSyncStatusPage['nextCursor']>()
   const [loading, setLoading] = useState(false)
   const [syncingAll, setSyncingAll] = useState(false)
   const [clearingMedia, setClearingMedia] = useState(false)
@@ -474,52 +482,67 @@ export function DriveSyncStatusTab() {
     }
   }, [])
 
-  const refresh = useCallback(() => {
-    if (!store) {
-      setRows([])
-      setError(null)
-      return
-    }
+  // The effect owns request lifetime. Buttons and storage events only mark the
+  // view dirty; they cannot create another database scan while one is pending.
+  const requestRefresh = useRef<() => void>(() => {})
+  const refresh = useCallback(() => requestRefresh.current(), [])
+
+  useEffect(() => {
     let cancelled = false
-    setLoading(true)
-    void (async () => {
+    let running = false
+    let dirty = false
+    let timer: ReturnType<typeof setTimeout> | undefined
+    setRows([])
+    setNextCursor(undefined)
+    setError(null)
+    setLoading(false)
+    if (!store) return
+
+    const schedule = () => {
+      dirty = true
+      if (!running && timer === undefined) {
+        // Worker notifications arrive as separate MessagePort tasks. Coalesce
+        // the burst, including updates that arrive just after a fast scan.
+        timer = setTimeout(() => void scan(), 100)
+      }
+    }
+    const scan = async () => {
+      timer = undefined
+      if (cancelled) return
+      running = true
+      dirty = false
+      setLoading(true)
       try {
-        const nextRows = await store.listFileSyncStatuses()
+        const page = await store.listFileSyncStatusPage({ cursor, limit: 50 })
         if (!cancelled) {
-          setRows(nextRows)
+          setRows(page.rows)
+          setNextCursor(page.nextCursor)
           setError(null)
         }
       } catch (refreshError) {
-        if (!cancelled) {
-          setError(String(refreshError))
-        }
+        if (!cancelled) setError(String(refreshError))
       } finally {
+        running = false
         if (!cancelled) {
           setLoading(false)
+          // An update during the scan needs one more snapshot, regardless of
+          // how many notifications arrived. Closing the view cancels that work.
+          if (dirty) schedule()
         }
       }
-    })()
+    }
+    requestRefresh.current = schedule
+    window.addEventListener('local-notebook-sync-updated', schedule)
+    window.addEventListener('local-notebook-updated', schedule)
+    void scan()
     return () => {
       cancelled = true
+      clearTimeout(timer)
+      requestRefresh.current = () => {}
+      window.removeEventListener('local-notebook-sync-updated', schedule)
+      window.removeEventListener('local-notebook-updated', schedule)
     }
-  }, [store])
-
-  useEffect(() => refresh(), [refresh])
-
-  useEffect(() => {
-    if (typeof window === 'undefined') {
-      return
-    }
-    const onStoreUpdated = () => {
-      refresh()
-    }
-    window.addEventListener('local-notebook-sync-updated', onStoreUpdated)
-    window.addEventListener('local-notebook-updated', onStoreUpdated)
-    return () => {
-      window.removeEventListener('local-notebook-sync-updated', onStoreUpdated)
-      window.removeEventListener('local-notebook-updated', onStoreUpdated)
-    }
-  }, [refresh])
+  }, [store, cursor])
 
   const rowsRequiringSync = useMemo(
     () => rows.filter((row) => isAutoSyncable(row.syncStatus)),
@@ -646,8 +669,8 @@ export function DriveSyncStatusTab() {
             </Text>
             <Text size="2" as="p" className="text-nb-text-muted">
               {rows.length === 0
-                ? 'No local files are currently tracked.'
-                : `${filteredRows.length} of ${rows.length} local files shown.`}
+                ? 'No files on this page.'
+                : `${filteredRows.length} of ${rows.length} files shown on page ${pageCursors.length}.`}
             </Text>
           </div>
           <div className="flex flex-wrap items-center gap-2">
@@ -688,11 +711,29 @@ export function DriveSyncStatusTab() {
             >
               {syncingAll
                 ? 'Syncing...'
-                : `Sync Required (${rowsRequiringSync.length})`}
+                : `Sync Required on Page (${rowsRequiringSync.length})`}
             </Button>
           </div>
         </div>
 
+        <div id="drive-status-pagination" className="flex items-center gap-3">
+          <Button
+            disabled={loading || pageCursors.length === 1}
+            onClick={() => setPageCursors((pages) => pages.slice(0, -1))}
+          >
+            Previous page
+          </Button>
+          <span>
+            Page {pageCursors.length} · up to 50 entries. Filters and sorting
+            apply to this page.
+          </span>
+          <Button
+            disabled={loading || !nextCursor}
+            onClick={() => setPageCursors((pages) => [...pages, nextCursor])}
+          >
+            Next page
+          </Button>
+        </div>
         <DriveQueueMonitor store={store} />
 
         <section

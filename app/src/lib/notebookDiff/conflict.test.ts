@@ -76,9 +76,7 @@ describe('restoreDeletedConflictCell', () => {
       },
     }
     const store = {
-      files: {
-        get: vi.fn(async () => record),
-      },
+      getFileRecord: vi.fn(async () => record),
       getConflictUpstreamDoc: vi.fn(async () => serialize(upstreamNotebook)),
       save: vi.fn(async (_localUri: string, saved: parser_pb.Notebook) => {
         record = {
@@ -138,9 +136,7 @@ describe('restoreDeletedConflictCell', () => {
       },
     }
     const store = {
-      files: {
-        get: vi.fn(async () => record),
-      },
+      getFileRecord: vi.fn(async () => record),
       getConflictUpstreamDoc: vi.fn(async () => serialize(upstreamNotebook)),
       save: vi.fn(async (_localUri: string, saved: parser_pb.Notebook) => {
         record = {
@@ -204,9 +200,7 @@ describe('removeInsertedConflictCell', () => {
       },
     }
     const store = {
-      files: {
-        get: vi.fn(async () => record),
-      },
+      getFileRecord: vi.fn(async () => record),
       getConflictUpstreamDoc: vi.fn(async () => serialize(upstreamNotebook)),
       save: vi.fn(async (_localUri: string, saved: parser_pb.Notebook) => {
         record = {
@@ -254,9 +248,7 @@ describe('removeInsertedConflictCell', () => {
       },
     }
     const store = {
-      files: {
-        get: vi.fn(async () => record),
-      },
+      getFileRecord: vi.fn(async () => record),
       getConflictUpstreamDoc: vi.fn(async () => serialize(upstreamNotebook)),
       save: vi.fn(async (_localUri: string, saved: parser_pb.Notebook) => {
         record = {
@@ -313,9 +305,7 @@ describe('applyConflictSourceHunk', () => {
       },
     }
     const store = {
-      files: {
-        get: vi.fn(async () => record),
-      },
+      getFileRecord: vi.fn(async () => record),
       getConflictUpstreamDoc: vi.fn(async () => serialize(upstreamNotebook)),
       save: vi.fn(async (_localUri: string, saved: parser_pb.Notebook) => {
         record = {
@@ -371,9 +361,7 @@ describe('applyConflictSourceHunk', () => {
       },
     }
     const store = {
-      files: {
-        get: vi.fn(async () => record),
-      },
+      getFileRecord: vi.fn(async () => record),
       getConflictUpstreamDoc: vi.fn(async () => serialize(upstreamNotebook)),
       save: vi.fn(async (_localUri: string, saved: parser_pb.Notebook) => {
         record = {
@@ -411,18 +399,16 @@ describe('applyConflictSourceHunk', () => {
     const modifiedRow = computeNotebookDiff(upstreamNotebook, localNotebook)
       .cells[0]
     const store = {
-      files: {
-        get: vi.fn(async () => ({
-          id: 'local://file/conflict',
-          name: 'conflict.json',
-          doc: serialize(localNotebook),
-          conflict: {
-            detectedAt: '2026-06-01T00:00:00.000Z',
-            upstreamChecksum: 'upstream',
-            localChecksumAtDetection: 'local',
-          },
-        })),
-      },
+      getFileRecord: vi.fn(async () => ({
+        id: 'local://file/conflict',
+        name: 'conflict.json',
+        doc: serialize(localNotebook),
+        conflict: {
+          detectedAt: '2026-06-01T00:00:00.000Z',
+          upstreamChecksum: 'upstream',
+          localChecksumAtDetection: 'local',
+        },
+      })),
       save: vi.fn(),
     } as unknown as LocalNotebooks
 
@@ -458,9 +444,7 @@ describe('Drive upstream diff documents', () => {
       md5Checksum: 'local',
     }
     const store = {
-      files: {
-        get: vi.fn(async () => record),
-      },
+      getFileRecord: vi.fn(async () => record),
       getDriveUpstreamDoc: vi.fn(async () => ({
         doc: serialize(notebook([cell({ refId: 'a', value: 'upstream' })])),
         version: { revisionId: 'revision-5' },
@@ -496,9 +480,7 @@ describe('Drive upstream diff documents', () => {
       md5Checksum: 'local',
     }
     const store = {
-      files: {
-        get: vi.fn(async () => record),
-      },
+      getFileRecord: vi.fn(async () => record),
       getDriveUpstreamDoc: vi.fn(async () => ({
         doc: serialize(notebook([cell({ refId: 'a', value: 'upstream' })])),
         version: { revisionId: 'revision-5' },
@@ -532,9 +514,7 @@ describe('Drive upstream diff documents', () => {
       md5Checksum: 'local',
     }
     const store = {
-      files: {
-        get: vi.fn(async () => record),
-      },
+      getFileRecord: vi.fn(async () => record),
       getDriveUpstreamDoc: vi.fn(async () => {
         throw new Error('current upstream should not be fetched')
       }),
@@ -576,9 +556,7 @@ describe('Drive upstream diff documents', () => {
       md5Checksum: 'local',
     }
     const store = {
-      files: {
-        get: vi.fn(async () => record),
-      },
+      getFileRecord: vi.fn(async () => record),
       getDriveUpstreamDoc: vi.fn(async () => ({
         doc: serialize(
           notebook([cell({ refId: 'a', value: 'new upstream head' })])
@@ -628,9 +606,7 @@ describe('Drive upstream diff documents', () => {
       },
     }
     const store = {
-      files: {
-        get: vi.fn(async () => record),
-      },
+      getFileRecord: vi.fn(async () => record),
       getConflictUpstreamDoc: vi.fn(async () =>
         serialize(notebook([cell({ refId: 'a', value: 'upstream' })]))
       ),

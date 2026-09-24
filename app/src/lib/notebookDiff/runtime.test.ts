@@ -226,18 +226,16 @@ describe('createNotebookDiffRuntimeApi', () => {
       }),
     } as unknown as NotebooksApi
     const localNotebooks = {
-      files: {
-        get: vi.fn().mockResolvedValue({
-          id: 'local://file/conflict',
-          name: 'conflict.json',
-          doc: serialize(localNotebook),
-          conflict: {
-            detectedAt: '2026-06-01T00:00:00.000Z',
-            upstreamChecksum: 'upstream',
-            localChecksumAtDetection: 'local',
-          },
-        }),
-      },
+      getFileRecord: vi.fn().mockResolvedValue({
+        id: 'local://file/conflict',
+        name: 'conflict.json',
+        doc: serialize(localNotebook),
+        conflict: {
+          detectedAt: '2026-06-01T00:00:00.000Z',
+          upstreamChecksum: 'upstream',
+          localChecksumAtDetection: 'local',
+        },
+      }),
       getConflictUpstreamDoc: vi.fn(async () => serialize(upstreamNotebook)),
     } as unknown as LocalNotebooks
 
@@ -291,9 +289,7 @@ describe('createNotebookDiffRuntimeApi', () => {
       }),
     } as unknown as NotebooksApi
     const localNotebooks = {
-      files: {
-        get: vi.fn(async () => record),
-      },
+      getFileRecord: vi.fn(async () => record),
       getConflictUpstreamDoc: vi.fn(async () => serialize(upstreamNotebook)),
       save: vi.fn(async (_localUri: string, saved: parser_pb.Notebook) => {
         record = {

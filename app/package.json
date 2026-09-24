@@ -75,6 +75,7 @@
     "@types/uuid": "^10.0.0",
     "@types/vscode-notebook-renderer": "^1.72.3",
     "@vitejs/plugin-react": "^4.3.4",
+    "eslint": "9.37.0",
     "eslint-plugin-react-hooks": "^5.0.0",
     "eslint-plugin-react-refresh": "^0.4.18",
     "globals": "^16.0.0",

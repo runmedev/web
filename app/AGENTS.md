@@ -31,6 +31,15 @@
 
 ## Avoid Common Mistakes
 
+- Enumerate notebook `files` and pending `driveCreates` only through
+  `readTablePage()` (bounded projected metadata pages) or `scanTable()` (streaming
+  one record at a time) from `storage/tableScan.ts`. Do not call `toArray()`,
+  `bulkGet()`, or other bulk enumeration methods directly on those tables, even
+  with a row limit: legacy records may still contain very large inline bodies.
+  Load an individual payload explicitly through `getFileRecord()` when needed.
+  The storage lint rule and app tests enforce the common direct/chained/alias
+  access patterns; keep new storage readers within this boundary.
+
 In the the tree element use children property not render to set the render for each node.
 Here is an example of correct code.
 

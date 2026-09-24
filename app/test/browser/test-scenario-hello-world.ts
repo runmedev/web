@@ -474,7 +474,7 @@ const outputProbeRaw = run(
     if (!ln) {
       return JSON.stringify({ status: 'missing-local-notebooks' });
     }
-    const rec = await ln.files.get('local://file/${SCENARIO_NOTEBOOK_NAME}');
+    const rec = await ln.getFileRecord('local://file/${SCENARIO_NOTEBOOK_NAME}');
     if (!rec) {
       return JSON.stringify({ status: 'missing-notebook-record' });
     }

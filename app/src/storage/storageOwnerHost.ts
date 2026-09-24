@@ -34,6 +34,10 @@ export class StorageOwnerHost {
       Awaited<ReturnType<LocalNotebooks['createOperationLogSaveStore']>>
     >
   >()
+  private statusPages = new Map<
+    string,
+    ReturnType<LocalNotebooks['listFileSyncStatusPage']>
+  >()
   private configuredBaseUrl: string | undefined
   private available = false
   private scanning: Promise<unknown> | undefined
@@ -242,6 +246,21 @@ export class StorageOwnerHost {
             )
           await view.save(uri, notebook)
           value = { heads: view.getObservedOperationHeads() }
+          break
+        }
+        case 'listFileSyncStatusPage': {
+          const options = request.args[0] as Parameters<
+            LocalNotebooks['listFileSyncStatusPage']
+          >[0]
+          const key = JSON.stringify(options ?? {})
+          let page = this.statusPages.get(key)
+          if (!page) {
+            page = this.store
+              .listFileSyncStatusPage(options)
+              .finally(() => this.statusPages.delete(key))
+            this.statusPages.set(key, page)
+          }
+          value = await page
           break
         }
         case 'reconcileDriveBackedFiles':

@@ -37,7 +37,10 @@ const clearLinkedResourceCacheMock = vi.fn(async () => 1536)
 const queueMetrics = new SyncWorkQueue().getMetrics()
 const storeMock = {
   getDriveQueueMetrics: vi.fn(async () => queueMetrics),
-  listFileSyncStatuses: listFileSyncStatusesMock,
+  listFileSyncStatusPage: vi.fn(async (_options?: unknown) => ({
+    rows: await listFileSyncStatusesMock(),
+    nextCursor: undefined as any,
+  })),
   sync: syncMock,
 }
 
@@ -133,18 +136,100 @@ async function waitForStatusLoad(): Promise<void> {
 }
 
 describe('DriveSyncStatusTab', () => {
+  it('loads only the requested page and supports back navigation', async () => {
+    const cursor = { table: 'files' as const, after: 'last-first-page' }
+    storeMock.listFileSyncStatusPage.mockImplementationOnce(async () => ({
+      rows: [rows[1]],
+      nextCursor: cursor,
+    }))
+    storeMock.listFileSyncStatusPage.mockImplementationOnce(async () => ({
+      rows: [rows[0]],
+      nextCursor: undefined,
+    }))
+    render(<DriveSyncStatusTab />)
+    await waitForStatusLoad()
+    expect(screen.queryByText('Beta Notebook')).toBeNull()
+    fireEvent.click(screen.getByRole('button', { name: 'Next page' }))
+    expect(await screen.findByText('Beta Notebook')).toBeTruthy()
+    expect(screen.queryByText('Alpha Notebook')).toBeNull()
+    expect(storeMock.listFileSyncStatusPage).toHaveBeenLastCalledWith({
+      cursor,
+      limit: 50,
+    })
+    fireEvent.click(screen.getByRole('button', { name: 'Previous page' }))
+    await waitForStatusLoad()
+    expect(storeMock.listFileSyncStatusPage).toHaveBeenLastCalledWith({
+      cursor: undefined,
+      limit: 50,
+    })
+  })
+
+  it('coalesces update bursts during a slow status scan and refreshes once afterward', async () => {
+    let finish!: (value: NotebookSyncStatusRow[]) => void
+    listFileSyncStatusesMock.mockImplementationOnce(
+      () =>
+        new Promise((resolve) => {
+          finish = resolve
+        })
+    )
+    render(<DriveSyncStatusTab />)
+    act(() => {
+      for (let i = 0; i < 100; i++) {
+        window.dispatchEvent(new CustomEvent('local-notebook-sync-updated'))
+        window.dispatchEvent(new CustomEvent('local-notebook-updated'))
+        window.dispatchEvent(new CustomEvent('local-notebook-sync-updated'))
+      }
+    })
+    expect(listFileSyncStatusesMock).toHaveBeenCalledTimes(1)
+    await act(async () => finish(rows))
+    await waitForStatusLoad()
+    await waitFor(() =>
+      expect(listFileSyncStatusesMock).toHaveBeenCalledTimes(2)
+    )
+  })
+
+  it('does not start a queued refresh after the status page closes', async () => {
+    let finish!: (value: NotebookSyncStatusRow[]) => void
+    listFileSyncStatusesMock.mockImplementationOnce(
+      () =>
+        new Promise((resolve) => {
+          finish = resolve
+        })
+    )
+    const view = render(<DriveSyncStatusTab />)
+    act(() => window.dispatchEvent(new CustomEvent('local-notebook-updated')))
+    view.unmount()
+    await act(async () => finish(rows))
+    expect(listFileSyncStatusesMock).toHaveBeenCalledTimes(1)
+  })
+
   it('excludes untouched Drive placeholders from bulk sync and allows filtering them', async () => {
     listFileSyncStatusesMock.mockResolvedValue([
       ...rows,
-      { ...rows[0], localUri: 'local://file/unopened', title: 'Unopened', syncStatus: 'not-downloaded' },
+      {
+        ...rows[0],
+        localUri: 'local://file/unopened',
+        title: 'Unopened',
+        syncStatus: 'not-downloaded',
+      },
     ])
     render(<DriveSyncStatusTab />)
     await waitForStatusLoad()
-    fireEvent.click(screen.getByRole('button', { name: 'Sync Required (1)' }))
-    await waitFor(() => expect(syncMock).toHaveBeenCalledWith('local://file/beta'))
+    fireEvent.click(
+      screen.getByRole('button', { name: 'Sync Required on Page (1)' })
+    )
+    await waitFor(() =>
+      expect(syncMock).toHaveBeenCalledWith('local://file/beta')
+    )
     expect(syncMock).not.toHaveBeenCalledWith('local://file/unopened')
-    fireEvent.click(screen.getByRole('button', { name: 'Filter Sync Status: All statuses' }))
-    fireEvent.click(screen.getByRole('checkbox', { name: 'Filter Sync Status: not-downloaded' }))
+    fireEvent.click(
+      screen.getByRole('button', { name: 'Filter Sync Status: All statuses' })
+    )
+    fireEvent.click(
+      screen.getByRole('checkbox', {
+        name: 'Filter Sync Status: not-downloaded',
+      })
+    )
     expect(screen.getByText('Unopened')).toBeTruthy()
     expect(screen.queryByText('Beta Notebook')).toBeNull()
   })
@@ -152,8 +237,16 @@ describe('DriveSyncStatusTab', () => {
   it('includes owner queue monitoring above the file status table', async () => {
     render(<DriveSyncStatusTab />)
     await waitForStatusLoad()
-    expect(await screen.findByRole('img', { name: 'Waiting queue depth, peak per ten seconds' })).toBeTruthy()
-    expect(screen.getByRole('img', { name: 'Eligible-to-dequeue wait histogram, 0 attempts' })).toBeTruthy()
+    expect(
+      await screen.findByRole('img', {
+        name: 'Waiting queue depth, peak per ten seconds',
+      })
+    ).toBeTruthy()
+    expect(
+      screen.getByRole('img', {
+        name: 'Eligible-to-dequeue wait histogram, 0 attempts',
+      })
+    ).toBeTruthy()
   })
 
   beforeEach(() => {
@@ -212,7 +305,9 @@ describe('DriveSyncStatusTab', () => {
     expect(
       screen.queryByRole('link', { name: 'drive-create:pending' })
     ).toBeNull()
-    fireEvent.click(screen.getByRole('button', { name: 'Sync Required (1)' }))
+    fireEvent.click(
+      screen.getByRole('button', { name: 'Sync Required on Page (1)' })
+    )
     await waitFor(() =>
       expect(syncMock).toHaveBeenCalledWith('drive-create:pending')
     )
@@ -239,7 +334,7 @@ describe('DriveSyncStatusTab', () => {
 
     await waitForStatusLoad()
     const description =
-      'Reloads the status table from local notebook sync metadata. It does not sync files.'
+      'Reloads this page from local notebook sync metadata. It does not sync files.'
 
     expect(
       screen.getByRole('button', { name: 'Refresh' }).getAttribute('title')
@@ -497,7 +592,9 @@ describe('DriveSyncStatusTab', () => {
 
     await waitForStatusLoad()
     act(() => {
-      fireEvent.click(screen.getByRole('button', { name: 'Sync Required (1)' }))
+      fireEvent.click(
+        screen.getByRole('button', { name: 'Sync Required on Page (1)' })
+      )
     })
 
     await waitFor(() => {
@@ -542,7 +639,9 @@ describe('DriveSyncStatusTab', () => {
       ).toBe(false)
     })
     act(() => {
-      fireEvent.click(screen.getByRole('button', { name: 'Sync Required (2)' }))
+      fireEvent.click(
+        screen.getByRole('button', { name: 'Sync Required on Page (2)' })
+      )
     })
 
     await waitFor(() => {

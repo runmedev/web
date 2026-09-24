@@ -25,7 +25,11 @@ export class OwnedOperationLogs implements OperationLogStorage {
   constructor(
     private readonly storage: OperationLogStorage,
     private readonly files: Table<LocalFileRecord, string>,
-    private readonly generations: Table<ContentGeneration, string>
+    private readonly generations: Table<ContentGeneration, string>,
+    private readonly updateFile: (
+      uri: string,
+      changes: Partial<LocalFileRecord>
+    ) => Promise<number> = (uri, changes) => files.update(uri, changes)
   ) {}
 
   supportsConcurrentWriters(): boolean {
@@ -51,7 +55,7 @@ export class OwnedOperationLogs implements OperationLogStorage {
           generation = (await this.current(path)) + 1
           await this.generations.put({ path, generation })
           const uri = decodeURIComponent(path.split('/')[2] ?? '')
-          await this.files.update(uri, {
+          await this.updateFile(uri, {
             md5Checksum: '',
             operationLogRef: { storage: 'opfs', path },
             ...(initializingDocument === undefined
@@ -63,7 +67,7 @@ export class OwnedOperationLogs implements OperationLogStorage {
       const result = await operation()
       if (initializingDocument !== undefined) {
         const uri = decodeURIComponent(path.split('/')[2] ?? '')
-        await this.files.update(uri, {
+        await this.updateFile(uri, {
           pendingOperationLogInitialization: undefined,
         })
       }
@@ -137,7 +141,7 @@ export class OwnedOperationLogs implements OperationLogStorage {
             return false
           const current =
             (await this.current(snapshot.ref.path)) === snapshot.generation
-          await this.files.update(uri, {
+          await this.updateFile(uri, {
             ...changes,
             lastRemoteChecksum: snapshot.checksum,
             md5Checksum: current ? snapshot.checksum : '',
