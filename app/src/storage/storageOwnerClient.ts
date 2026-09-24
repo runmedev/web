@@ -264,8 +264,12 @@ export function createSharedNotebookStore(
           const view = (await call('createView', [uri, options])) as {
             id: string
             heads: string[]
+            initialNotebook: Awaited<
+              ReturnType<LocalNotebooks['createOperationLogSaveStore']>
+            >['initialNotebook']
           }
           return {
+            initialNotebook: view.initialNotebook,
             dispose: () => {
               void call('releaseView', [view.id]).catch(() => {})
             },

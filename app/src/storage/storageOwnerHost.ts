@@ -222,7 +222,11 @@ export class StorageOwnerHost {
           )
           const id = crypto.randomUUID()
           this.views.get(port)!.set(id, view)
-          value = { id, heads: view.getObservedOperationHeads() }
+          value = {
+            id,
+            heads: view.getObservedOperationHeads(),
+            initialNotebook: view.initialNotebook,
+          }
           break
         }
         case 'saveView': {

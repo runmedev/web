@@ -59,7 +59,7 @@ async function main() {
         page.evaluate(async (uri) => {
           const store = (window as any).store
           ;(window as any).view = await store.createOperationLogSaveStore(uri)
-          ;(window as any).notebook = await store.loadOperationLogSnapshot(uri)
+          ;(window as any).notebook = (window as any).view.initialNotebook
         }, uri)
       )
     )

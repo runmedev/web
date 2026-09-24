@@ -225,10 +225,12 @@ export class NotebookDataController {
         return { localUri, entry }
       }
       try {
-        const notebook = await this.localNotebooks.load(localUri)
+        await this.localNotebooks.load(localUri)
         const store =
           await this.localNotebooks.createOperationLogSaveStore(localUri)
-        handle.data.loadNotebook(notebook, { persist: false })
+        // Sync may append between load and view creation. Render exactly the
+        // history captured by this adapter so a save cannot delete unseen cells.
+        handle.data.loadNotebook(store.initialNotebook, { persist: false })
         handle.data.setNotebookStore(store)
         handle.data.setReadOnly(false)
         handle.loaded = true
@@ -512,11 +514,9 @@ export class NotebookDataController {
         // Refresh only materializes the shared OPFS journal. Upstream Drive
         // synchronization is an independent action exposed by the tab status
         // control.
-        const notebook =
-          await this.localNotebooks.loadOperationLogSnapshot(localUri)
         const store =
           await this.localNotebooks.createOperationLogSaveStore(localUri)
-        handle.data.loadNotebook(notebook, { persist: false })
+        handle.data.loadNotebook(store.initialNotebook, { persist: false })
         handle.data.setNotebookStore(store)
         // Recover an undo whose append committed but whose editor reload failed.
         handle.data.setReviewReloadRequired(false)

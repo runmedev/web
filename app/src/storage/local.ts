@@ -1714,6 +1714,7 @@ export class LocalNotebooks extends Dexie {
   ): Promise<{
     save(saveUri: string, notebook: parser_pb.Notebook): Promise<void>
     getObservedOperationHeads(): string[]
+    initialNotebook: parser_pb.Notebook
   }> {
     const record = await this.files.get(uri)
     if (!record || !record.operationLogRef) {
@@ -1738,6 +1739,9 @@ export class LocalNotebooks extends Dexie {
     let queue = Promise.resolve()
 
     return {
+      // Render the same captured history used as the first save baseline. Keep
+      // it detached because editors mutate their notebook model in place.
+      initialNotebook: cloneNotebook(previous),
       getObservedOperationHeads: () =>
         snapshotHeads(view.operations, captureReviewRevision(view.operations)),
       save: async (saveUri: string, notebook: parser_pb.Notebook) => {
@@ -3288,7 +3292,9 @@ export class LocalNotebooks extends Dexie {
     // placeholder. Pending Drive creation does not make that local log a miss.
     const hasLocalContent = operationLog
       ? Boolean(existing.operationLogRef)
-      : Boolean(existing.doc) || isLocalFileUpstream(existing.remoteId, uri)
+      : Boolean(existing.doc) ||
+        isLocalFileUpstream(existing.remoteId, uri) ||
+        (existing.remoteId === '' && Boolean(existing.parentRemoteIdWhenCreated))
 
     let record = existing
     if (hasLocalContent) {

@@ -1,7 +1,7 @@
 import type LocalNotebooks from './local'
 
 /** Bump whenever the wire contract or storage ownership assumptions change. */
-export const STORAGE_OWNER_VERSION = 1
+export const STORAGE_OWNER_VERSION = 2
 export const STORAGE_OWNER_NAME = 'runme-storage-owner'
 
 /** Explicit RPC boundary: never expose arbitrary Dexie/prototype methods. */

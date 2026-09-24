@@ -8882,6 +8882,74 @@ describe('LocalNotebooks local-first open', () => {
     return { store, uri: file.uri }
   }
 
+  it('keeps edits made through a captured view without deleting later unseen cells', async () => {
+    const { store, uri } = await cachedNotebook()
+    store.setDriveSyncAvailable(false)
+    try {
+      const view = await store.createOperationLogSaveStore(uri, {
+        actorId: 'view',
+      })
+      const other = await store.createOperationLogSaveStore(uri, {
+        actorId: 'other',
+      })
+      other.initialNotebook.cells.push(
+        create(parser_pb.CellSchema, {
+          refId: 'unseen-cell',
+          kind: parser_pb.CellKind.MARKUP,
+          value: 'appended after the view was captured',
+        })
+      )
+      await other.save(uri, other.initialNotebook)
+      // Mutating the returned snapshot must not mutate the adapter baseline.
+      view.initialNotebook.cells[0].value = 'edited captured cell'
+      await view.save(uri, view.initialNotebook)
+
+      const reopened = await store.load(uri)
+      expect(reopened.cells.map((cell) => cell.value)).toEqual([
+        'edited captured cell',
+        'appended after the view was captured',
+      ])
+    } finally {
+      store.stopSyncQueue()
+    }
+  })
+
+  it.each(['json', 'ipynb'])(
+    'opens a newly created empty %s notebook while offline',
+    async (format) => {
+      const drive = { create: vi.fn() }
+      const store = createTestStore(drive)
+      store.setDriveSyncAvailable(false)
+      const parent = 'local://folder/drive'
+      await store.folders.put({
+        id: parent,
+        name: 'Drive',
+        remoteId: 'https://drive.google.com/drive/folders/parent',
+        children: [],
+        lastSynced: '',
+      })
+      const sync = vi.spyOn(store as any, 'syncFile').mockImplementation(
+        () => new Promise(() => {})
+      )
+      try {
+        const file = await store.create(parent, `empty.${format}`)
+        sync.mockClear() // Creation itself schedules an asynchronous sync.
+        const opened = vi.fn()
+        const load = store.load(file.uri).then(opened)
+        await vi.waitFor(() => expect(opened).toHaveBeenCalled())
+        await load
+        expect(opened.mock.calls[0][0].cells).toEqual([])
+        expect(sync).not.toHaveBeenCalled()
+        expect(drive.create).not.toHaveBeenCalled()
+        expect((await store.getSyncState(file.uri)).status).toBe(
+          'pending-upstream-create'
+        )
+      } finally {
+        store.stopSyncQueue()
+      }
+    }
+  )
+
   it('opens cached OPFS content while an unrelated Drive queue item is blocked', async () => {
     const { store, uri } = await cachedNotebook()
     let release!: () => void

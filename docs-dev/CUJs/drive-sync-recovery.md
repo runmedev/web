@@ -91,8 +91,8 @@ Different origins/profiles are outside the same-origin coordination guarantee.
 
 Opening a cached notebook must not wait for Drive, including an already running
 sync for a different notebook. A `.runme` operation-log reference identifies local
-content even though its IndexedDB `doc` is empty. Cached JSON/IPYNB models also
-open locally. An old or missing successful-sync timestamp schedules background
+content even though its IndexedDB `doc` is empty. Cached JSON/IPYNB models and
+new empty notebooks awaiting upstream creation also open locally. An old or missing successful-sync timestamp schedules background
 reconciliation; it does not make available content an initial-download miss.
 Only an uncached notebook waits for upstream content, and a failed first download
 must surface the error instead of showing an empty notebook.
@@ -122,3 +122,15 @@ and verify eventual convergence and a single upstream identity. A notebook never
 downloaded locally must still report the unavailable dependency. Background
 reconciliation does not replace an editor's mounted causal view; explicit refresh
 continues to read the local log without upstream I/O.
+
+The editor and its save adapter must start from the same captured log. A sync or
+another tab can append between the initial load and adapter creation. Open and
+local refresh therefore render the adapter's `initialNotebook`, captured with its
+causal heads, instead of combining separately read snapshots. Test an append in
+that interval, then edit/save/reopen and verify that the unseen cells survive.
+Mutating the returned model must not mutate the adapter's baseline.
+
+The `createView` worker response now carries that snapshot, so the storage owner
+protocol is version 2. Mixed-version clients must fail with the existing reload
+message. After deployment, close/reopen all Runme tabs on that origin if an old
+worker remains alive; do not clear browser storage.
