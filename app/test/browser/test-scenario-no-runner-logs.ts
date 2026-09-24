@@ -457,7 +457,7 @@ const executionStateProbe = run(
   `agent-browser eval "(async () => {
     const ln = window.app?.localNotebooks;
     if (!ln) return 'missing-local-notebooks';
-    const record = await ln.files.get('local://file/${SCENARIO_NOTEBOOK_NAME}');
+    const record = await ln.getFileRecord('local://file/${SCENARIO_NOTEBOOK_NAME}');
     if (!record) return 'missing-notebook-record';
     const notebook = JSON.parse(record.doc || '{}');
     const cell = Array.isArray(notebook.cells)

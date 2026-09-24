@@ -135,7 +135,7 @@ function probeNotebook(): NotebookProbe {
     `agent-browser eval "(async () => {
       const ln = window.app?.localNotebooks;
       if (!ln) return JSON.stringify({ status: 'missing-local-notebooks' });
-      const rec = await ln.files.get('local://file/${SCENARIO_NOTEBOOK_NAME}');
+      const rec = await ln.getFileRecord('local://file/${SCENARIO_NOTEBOOK_NAME}');
       if (!rec) return JSON.stringify({ status: 'missing-notebook-record' });
       const doc = JSON.parse(rec.doc || '{}');
       const cells = Array.isArray(doc.cells) ? doc.cells : [];
