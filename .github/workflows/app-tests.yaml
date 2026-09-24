@@ -131,6 +131,11 @@ jobs:
           pnpm run build:renderers
           pnpm run build:console
 
+      # The browser orchestrator does not run Vitest. Keep the bounded-read
+      # source guard and payload/recovery regressions in the required CI path.
+      - name: Run storage regression tests
+        run: pnpm -C app exec vitest run src/storage src/components/DriveSyncStatusTab.test.tsx --maxWorkers=2 --minWorkers=1
+
       - name: Install agent-browser
         shell: bash
         run: |
