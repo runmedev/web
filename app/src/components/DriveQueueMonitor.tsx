@@ -44,11 +44,13 @@ export function DriveQueueCharts({ metrics }: { metrics: DriveQueueMetrics }) {
       <h2 className="font-semibold text-nb-text">Sync queue</h2>
       <p className="mt-1 text-xs text-nb-text-muted">
         {metrics.depth} waiting · {metrics.eligible} eligible ·{' '}
-        {metrics.delayed} delayed · {metrics.active} active
+        {metrics.delayed} delayed · {metrics.active} /{' '}
+        {metrics.concurrency ?? 1} active · {metrics.blockedByFile ?? 0} waiting
+        for the same file
       </p>
       <p className="mt-1 text-xs text-nb-text-muted">
-        Oldest eligible wait: {duration(metrics.oldestEligibleWaitMs)}. Active
-        attempt: {duration(metrics.activeForMs)}.
+        Oldest eligible wait: {duration(metrics.oldestEligibleWaitMs)}. Oldest
+        active attempt: {duration(metrics.activeForMs)}.
       </p>
       <div id="drive-queue-plots" className="mt-3 grid gap-4 xl:grid-cols-2">
         <figure className="min-w-0">

@@ -271,8 +271,8 @@ coalesce; source, Markdown export and IPYNB export are intentionally distinct wo
 An edit during processing marks the key dirty for one later pass. A discovery
 scan only ensures the key exists: it must not replace an explicit callback,
 shorten retry backoff, or mark an active attempt dirty. Dirty follow-ups go behind
-already waiting files. The global network lock remains serial; this change does
-not introduce concurrent Drive writes or remove per-file throttling.
+already waiting files. The parallel queue now permits ten independent files while retaining per-file
+exclusion and throttling; see the parallel scheduling checks below.
 
 Regression checks (`syncWorkQueue.test.ts`, `driveSyncPolicy.test.ts`,
 `local.test.ts`, `DriveSyncStatusTab.test.tsx`):
@@ -289,3 +289,28 @@ Regression checks (`syncWorkQueue.test.ts`, `driveSyncPolicy.test.ts`,
    through legacy metadata lookup. Reject before uploading; retain local bytes.
 6. Keep the actionable error visible on Drive status while excluding it from
    bulk retry. A transient authorization error remains eligible.
+
+
+## Parallel scheduling
+
+See [parallel Drive queue design](../design/20260924_parallel_drive_queue.md).
+Block a source save for file A. From two tabs request A again, request its IPYNB
+export, and open uncached file B. B must progress while A remains blocked; A's
+export waits for its claim. Release A and verify exactly one same-file source
+attempt for duplicate callers. Add edits while A is running and verify one later
+pass. Run more than K independent jobs with K = 10 and 20; peak active files must
+never exceed K and each completion must refill a slot. Delayed retries and busy
+siblings must not occupy free slots. Close while jobs are active: queued callers
+reject, active operations settle, and no follow-up starts in the closed queue.
+
+`syncWorkQueue.test.ts` checks pool limits, claim exclusion, dirty follow-up,
+terminal/transient failure, foreground fairness and shutdown. `local.test.ts`
+checks source/export grouping, independent controllers, configurable K and
+same-creation exclusion. `storageOwner.test.ts` verifies two MessagePorts share
+same-file work while another file completes. Queue status shows N / K active,
+ready items blocked by a file claim and the oldest active attempt.
+
+`storage-owner-smoke.ts` additionally checks that a second uncached file starts
+through the other real Chromium tab while the first is stalled on credentials.
+Its output includes active count and configured capacity. It then disables both
+tabs' credential availability and verifies offline editing and restart persistence.

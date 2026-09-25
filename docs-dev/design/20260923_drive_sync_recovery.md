@@ -204,7 +204,8 @@ clients. Worker startup errors, timeouts and uncertain mutation outcomes are sur
 never retried blindly or replaced by a second tab writer. SharedWorker support is a
 requirement. Reload all tabs when upgrading from the pre-worker application; old
 clients do not implement this protocol. Low-level compatibility locks are retained,
-but the new network scheduler uses owner-local serialization. Those locks alone do
+and the network scheduler now uses [bounded parallel file claims](20260924_parallel_drive_queue.md)
+inside the owner. Unrelated files can run concurrently. Those locks alone do
 not make mixed legacy/new clients safe across the OPFS/IndexedDB boundary.
 
 Drive uses the fetch adapter inside the worker. The worker requests noninteractive

@@ -47,6 +47,34 @@ function setup() {
 }
 
 describe('SharedWorker message boundary', () => {
+  it('coalesces same-file sync from two tabs while another file progresses', async () => {
+    const { host, store } = setup()
+    const q = new SyncWorkQueue({ concurrency: 10 })
+    const started: string[] = []
+    let release!: () => void
+    const blocked = new Promise<void>((resolve) => {
+      release = resolve
+    })
+    store.sync.mockImplementation((...args: unknown[]) => {
+      const uri = String(args[0])
+      return q.run(uri, async () => {
+        started.push(uri)
+        if (uri === 'a') await blocked
+      })
+    })
+    const a = connect(host),
+      b = connect(host)
+    const first = a.request('sync', ['a'])
+    await vi.waitFor(() => expect(started).toEqual(['a']))
+    const same = b.request('sync', ['a'])
+    await b.request('sync', ['b'])
+    expect(started).toEqual(['a', 'b'])
+    release()
+    await Promise.all([first, same])
+    expect(started).toEqual(['a', 'b'])
+    q.close()
+  })
+
   it('shares only identical in-flight status pages across tabs', async () => {
     const { host, store } = setup()
     let resolvePage!: (value: unknown) => void

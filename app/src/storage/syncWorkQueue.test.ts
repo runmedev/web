@@ -272,3 +272,209 @@ describe('reconciliation and terminal failures', () => {
     expect(fixed).toHaveBeenCalledOnce()
   })
 })
+
+describe('parallel file claims', () => {
+  it.each([10, 20])(
+    'keeps at most %i distinct files in flight and refills free slots',
+    async (concurrency) => {
+      vi.useFakeTimers()
+      const q = queue({ concurrency, minimumIntervalMs: 0 })
+      const releases: Array<() => void> = []
+      let active = 0,
+        peak = 0,
+        started = 0
+      for (let i = 0; i < concurrency + 5; i++) {
+        q.add(`file-${i}`, async () => {
+          started++
+          active++
+          peak = Math.max(peak, active)
+          await new Promise<void>((resolve) => releases.push(resolve))
+          active--
+        })
+      }
+      await vi.advanceTimersByTimeAsync(0)
+      expect(started).toBe(concurrency)
+      expect(q.getMetrics()).toMatchObject({
+        active: concurrency,
+        depth: 5,
+        concurrency,
+      })
+      releases.shift()!()
+      await vi.advanceTimersByTimeAsync(0)
+      expect(started).toBe(concurrency + 1)
+      expect(active).toBe(concurrency)
+      while (releases.length) {
+        releases.splice(0).forEach((release) => release())
+        await vi.advanceTimersByTimeAsync(0)
+      }
+      expect(started).toBe(concurrency + 5)
+      expect(peak).toBe(concurrency)
+      expect(q.getMetrics()).toMatchObject({ active: 0, depth: 0 })
+    }
+  )
+
+  it('holds one claim across source/export keys without consuming slots for blocked siblings', async () => {
+    vi.useFakeTimers()
+    const q = queue({
+      concurrency: 10,
+      groupKey: (key: string) => key.split(':')[1],
+    })
+    let release!: () => void
+    const exportRun = vi.fn().mockResolvedValue(undefined)
+    const otherRun = vi.fn().mockResolvedValue(undefined)
+    q.add(
+      'source:a',
+      () =>
+        new Promise<void>((resolve) => {
+          release = resolve
+        })
+    )
+    await vi.advanceTimersByTimeAsync(0)
+    for (let i = 0; i < 100; i++) q.ensure('source:a', async () => {})
+    q.add('ipynb:a', exportRun)
+    q.add('markdown:a', exportRun)
+    q.add('source:b', otherRun)
+    await vi.advanceTimersByTimeAsync(25_000)
+    expect(otherRun).toHaveBeenCalledOnce()
+    expect(exportRun).not.toHaveBeenCalled()
+    expect(q.getMetrics()).toMatchObject({
+      active: 1,
+      depth: 2,
+      blockedByFile: 2,
+      activeForMs: 25_000,
+    })
+    release()
+    await vi.advanceTimersByTimeAsync(0)
+    expect(exportRun).toHaveBeenCalledTimes(2)
+    expect(q.getMetrics()).toMatchObject({ depth: 0, active: 0 })
+  })
+
+  it('retains an edit during processing and lets explicit sync wait for that follow-up', async () => {
+    vi.useFakeTimers()
+    const q = queue({ concurrency: 10 })
+    let release!: () => void
+    const active = q.run(
+      'a',
+      () =>
+        new Promise<void>((resolve) => {
+          release = resolve
+        })
+    )
+    await vi.advanceTimersByTimeAsync(0)
+    await vi.advanceTimersByTimeAsync(100_000)
+    const latest = vi.fn().mockResolvedValue(undefined)
+    for (let i = 0; i < 100; i++) q.add('a', latest)
+    let finished = false
+    const followup = q.run('a', latest).then(() => {
+      finished = true
+    })
+    expect(finished).toBe(false)
+    await vi.advanceTimersByTimeAsync(1_500)
+    release()
+    await vi.advanceTimersByTimeAsync(0)
+    await Promise.all([active, followup])
+    expect(latest).toHaveBeenCalledOnce()
+    expect(q.getMetrics().waitHistogram.map((bucket) => bucket.count)).toEqual([
+      1, 0, 1, 0, 0, 0, 0,
+    ])
+  })
+
+  it('releases failed claims while retries back off and rejects terminal follow-up waiters', async () => {
+    vi.useFakeTimers()
+    const q = queue({
+      concurrency: 2,
+      groupKey: (key: string) => key.split(':')[1],
+      shouldRetry: (e: unknown) => String(e) !== 'Error: terminal',
+    })
+    let fail!: (error: Error) => void
+    q.add(
+      'source:a',
+      () =>
+        new Promise<void>((_, reject) => {
+          fail = reject
+        })
+    )
+    await vi.advanceTimersByTimeAsync(0)
+    q.add('source:a', async () => {})
+    const followup = expect(q.run('source:a', async () => {})).rejects.toThrow(
+      'terminal'
+    )
+    const sibling = vi.fn().mockResolvedValue(undefined)
+    q.add('ipynb:a', sibling)
+    fail(new Error('terminal'))
+    await vi.advanceTimersByTimeAsync(0)
+    await followup
+    expect(sibling).toHaveBeenCalledOnce()
+    expect(q.getMetrics()).toMatchObject({ active: 0, depth: 0 })
+    q.add('source:b', async () => {
+      throw new Error('offline')
+    })
+    await vi.advanceTimersByTimeAsync(0)
+    expect(q.getMetrics()).toMatchObject({ active: 0, delayed: 1 })
+    const independent = vi.fn().mockResolvedValue(undefined)
+    q.add('source:c', independent)
+    await vi.advanceTimersByTimeAsync(0)
+    expect(independent).toHaveBeenCalledOnce()
+  })
+
+  it('prioritizes explicit opens while admitting background work after three interactive jobs', async () => {
+    vi.useFakeTimers()
+    const q = queue({ concurrency: 1 })
+    let release!: () => void
+    q.add(
+      'block',
+      () =>
+        new Promise<void>((resolve) => {
+          release = resolve
+        })
+    )
+    await vi.advanceTimersByTimeAsync(0)
+    const order: string[] = []
+    q.add('background', async () => {
+      order.push('background')
+    })
+    const commands = Array.from({ length: 4 }, (_, i) =>
+      q.run(`open-${i}`, async () => {
+        order.push(`open-${i}`)
+      })
+    )
+    release()
+    await vi.advanceTimersByTimeAsync(0)
+    await Promise.all(commands)
+    expect(order).toEqual([
+      'open-0',
+      'open-1',
+      'open-2',
+      'background',
+      'open-3',
+    ])
+  })
+
+  it('does not abandon in-flight claims or start queued work on shutdown', async () => {
+    vi.useFakeTimers()
+    const q = queue({ concurrency: 2 })
+    const releases: Array<() => void> = []
+    const active = ['a', 'b'].map((key) =>
+      q.run(key, () => new Promise<void>((r) => releases.push(r)))
+    )
+    await vi.advanceTimersByTimeAsync(0)
+    const skipped = vi.fn()
+    const pending = expect(q.run('c', skipped)).rejects.toThrow('closed')
+    q.add('a', skipped)
+    q.close()
+    await pending
+    expect(q.getMetrics()).toMatchObject({ active: 2, depth: 0 })
+    releases.forEach((r) => r())
+    await Promise.all(active)
+    await vi.advanceTimersByTimeAsync(0)
+    expect(skipped).not.toHaveBeenCalled()
+    expect(q.getMetrics()).toMatchObject({ active: 0, depth: 0 })
+  })
+
+  it.each([0, -1, 1.5, Infinity, NaN])(
+    'rejects invalid concurrency %s',
+    (concurrency) => {
+      expect(() => queue({ concurrency })).toThrow('positive integer')
+    }
+  )
+})
