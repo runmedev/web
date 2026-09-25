@@ -8989,6 +8989,210 @@ it('serializes source, export, and creation across controllers sharing an origin
 })
 
 describe('SharedWorker metadata discovery', () => {
+  it('deduplicates edits and scans while preserving an explicit source sync', async () => {
+    const store = createTestStore({})
+    const makeRecord = (id: string) => ({
+      id: `local://file/${id}`,
+      name: `${id}.json`,
+      remoteId: `https://drive.google.com/file/d/${id}/view`,
+      doc: '{}',
+      md5Checksum: 'new',
+      lastRemoteChecksum: 'old',
+      lastSynced: new Date().toISOString(),
+    })
+    const first = makeRecord('blocker'),
+      target = makeRecord('target')
+    await store.files.put(first)
+    await store.files.put(target)
+    let release!: () => void
+    const blocked = new Promise<void>((resolve) => {
+      release = resolve
+    })
+    const inner = vi.fn(async (uri: string) => {
+      if (uri === first.id) await blocked
+      await store.files.update(uri, { lastRemoteChecksum: 'new' })
+    })
+    Object.assign(store, {
+      syncFileInner: inner,
+      enqueueIpynbSync: vi.fn(),
+      enqueueMarkdownSync: vi.fn(),
+    })
+    const active = store.sync(first.id)
+    try {
+      await vi.waitFor(() => expect(inner).toHaveBeenCalledWith(first.id))
+      const manual = store.sync(target.id)
+      for (let i = 0; i < 3; i++) {
+        await store.reconcileDriveBackedFiles()
+        ;(store as any).enqueueSync(target.id)
+      }
+      expect(await store.getDriveQueueMetrics()).toMatchObject({
+        depth: 1,
+        active: 1,
+      })
+      release()
+      await vi.waitFor(() => expect(inner).toHaveBeenCalledWith(target.id))
+      await Promise.all([active, manual])
+      expect(inner).toHaveBeenCalledTimes(2)
+      expect((await store.getDriveQueueMetrics()).depth).toBe(0)
+    } finally {
+      release()
+      store.stopSyncQueue()
+      await active
+    }
+  })
+
+  it('preserves terminal failures and local bytes without reconstructing their retries', async () => {
+    const files = createMockTable<LocalFileRecord>()
+    const store = createTestStore({}, { files })
+    const uri = 'local://file/conversion'
+    const error = new Error(
+      'Drive request failed (400 ): ' +
+        JSON.stringify({
+          error: {
+            errors: [{ reason: 'conversionUnsupportedConversionPath' }],
+          },
+        })
+    )
+    const base = {
+      id: uri,
+      name: 'example.json',
+      remoteId: 'https://drive.google.com/file/d/conversion/view',
+      doc: '{"cells":[]}',
+      md5Checksum: 'new',
+      lastRemoteChecksum: 'old',
+      lastSynced: '',
+    }
+    await files.put(base)
+    const sync = vi.fn().mockRejectedValue(error)
+    Object.assign(store, {
+      syncFileInner: sync,
+      enqueueIpynbSync: vi.fn(),
+      enqueueMarkdownSync: vi.fn(),
+    })
+    try {
+      await expect(store.sync(uri)).rejects.toThrow(
+        'conversionUnsupportedConversionPath'
+      )
+      expect((await store.getDriveQueueMetrics()).depth).toBe(0)
+      expect(
+        await store.reconcileDriveBackedFiles({ retryErrors: true })
+      ).toEqual([])
+      expect(await files.get(uri)).toMatchObject({
+        doc: base.doc,
+        lastSyncError: String(error),
+      })
+      expect((await store.getSyncState(uri)).status).toBe('error')
+    } finally {
+      store.stopSyncQueue()
+    }
+    const restarted = createTestStore({}, { files })
+    try {
+      expect(await restarted.reconcileDriveBackedFiles()).toEqual([])
+      expect((await restarted.getDriveQueueMetrics()).depth).toBe(0)
+      const repaired = vi.fn().mockResolvedValue(undefined)
+      Object.assign(restarted, {
+        syncFileInner: repaired,
+        enqueueIpynbSync: vi.fn(),
+      })
+      await restarted.sync(uri)
+      expect(repaired).toHaveBeenCalledOnce()
+      expect((await files.get(uri))?.lastSyncError).toBeUndefined()
+    } finally {
+      restarted.stopSyncQueue()
+    }
+  })
+
+  it('stops a legacy upload when fresh metadata identifies a native destination', async () => {
+    const getMetadata = vi.fn().mockResolvedValue({
+      name: 'Native Doc',
+      mimeType: 'application/vnd.google-apps.document',
+    })
+    const upload = vi.fn()
+    const store = createTestStore({ getMetadata, saveContent: upload })
+    const uri = 'local://file/unknown-type'
+    await store.files.put({
+      id: uri,
+      name: 'legacy.json',
+      remoteId: 'https://drive.google.com/file/d/native/view',
+      doc: '{}',
+      md5Checksum: 'dirty',
+      lastRemoteChecksum: '',
+      lastSynced: '',
+    })
+    try {
+      await expect(store.sync(uri)).rejects.toThrow(
+        'RUNME_UNSUPPORTED_DRIVE_FILE'
+      )
+      expect(getMetadata).toHaveBeenCalledOnce()
+      expect(upload).not.toHaveBeenCalled()
+      expect((await store.files.get(uri))?.mimeType).toBe(
+        'application/vnd.google-apps.document'
+      )
+      expect(await store.reconcileDriveBackedFiles()).toEqual([])
+    } finally {
+      store.stopSyncQueue()
+    }
+  })
+
+  it('does not resurrect rejected creation requests on reconciliation', async () => {
+    const store = createTestStore({})
+    const lastError =
+      'Error: Drive request failed (400 ): {"error":{"errors":[{"reason":"conversionUnsupportedConversionPath"}]}}'
+    await store.driveCreates.put({
+      id: 'rejected',
+      folder: 'folder',
+      name: 'a.runme',
+      notebookJson: 'preserved payload',
+      fingerprint: 'hash',
+      lastError,
+    })
+    try {
+      await store.reconcileDriveBackedFiles({ retryErrors: true })
+      expect((await store.getDriveQueueMetrics()).depth).toBe(0)
+      expect(await store.driveCreates.get('rejected')).toMatchObject({
+        notebookJson: 'preserved payload',
+        lastError,
+      })
+      expect(await listStatuses(store)).toContainEqual(
+        expect.objectContaining({
+          localUri: 'drive-create:rejected',
+          syncStatus: 'error',
+          lastError,
+        })
+      )
+    } finally {
+      store.stopSyncQueue()
+    }
+  })
+
+  it('never uploads native Workspace files, even with notebook extensions or an old retry error', async () => {
+    const upload = vi.fn()
+    const store = createTestStore({ saveContent: upload })
+    const uri = 'local://file/native'
+    await store.files.put({
+      id: uri,
+      name: 'looks-like-a-notebook.runme',
+      mimeType: 'application/vnd.google-apps.document',
+      remoteId: 'https://drive.google.com/file/d/native/view',
+      doc: 'keep these local bytes',
+      md5Checksum: 'dirty',
+      lastRemoteChecksum: '',
+      lastSynced: '',
+      lastSyncError: 'old error',
+    })
+    try {
+      expect(await store.reconcileDriveBackedFiles()).toEqual([])
+      await expect(store.sync(uri)).rejects.toThrow(
+        'RUNME_UNSUPPORTED_DRIVE_FILE'
+      )
+      expect(upload).not.toHaveBeenCalled()
+      expect((await store.files.get(uri))?.doc).toBe('keep these local bytes')
+      expect((await store.getDriveQueueMetrics()).depth).toBe(0)
+    } finally {
+      store.stopSyncQueue()
+    }
+  })
+
   it('does not enqueue a large folder of untouched Drive placeholders', async () => {
     const logs = new MemoryOperationLogStorage()
     const read = vi.spyOn(logs, 'read')

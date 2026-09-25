@@ -1,6 +1,8 @@
 import { Button, Text } from '@radix-ui/themes'
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 
+import { isPermanentDriveSyncError } from '../storage/driveSyncPolicy'
+
 import {
   APP_LOGIN_CONFIGURATION_CHANGED_EVENT,
   APP_LOGIN_CONFIGURATION_STORAGE_KEY,
@@ -545,7 +547,12 @@ export function DriveSyncStatusTab() {
   }, [store, cursor])
 
   const rowsRequiringSync = useMemo(
-    () => rows.filter((row) => isAutoSyncable(row.syncStatus)),
+    () =>
+      rows.filter(
+        (row) =>
+          isAutoSyncable(row.syncStatus) &&
+          !isPermanentDriveSyncError(row.lastError)
+      ),
     [rows]
   )
 
@@ -1032,6 +1039,13 @@ export function DriveSyncStatusTab() {
                         {row.lastError && (
                           <p className="mt-2 max-w-sm break-words text-xs text-nb-text-muted">
                             {row.lastError}
+                          </p>
+                        )}
+                        {isPermanentDriveSyncError(row.lastError) && (
+                          <p className="mt-1 text-xs text-nb-text-muted">
+                            Automatic retries stopped. Check the destination
+                            file type or save a separate .runme copy. Local data
+                            is preserved.
                           </p>
                         )}
                         {row.lastSyncAttemptedAt && (

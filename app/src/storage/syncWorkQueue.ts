@@ -10,6 +10,7 @@ export class SyncDeferred extends Error {
 type Item = {
   run: () => Promise<void>
   readyAt: number
+  forced: boolean
   dirty: boolean
   failures: number
   lastStarted?: number
@@ -37,12 +38,19 @@ export class SyncWorkQueue {
       retryBaseMs?: number
       retryMaxMs?: number
       onChange?: (key: string) => void
+      shouldRetry?: (error: unknown) => boolean
     } = {}
   ) {}
 
   /** Add background work without extending an existing deadline on each edit. */
   add(key: string, run: () => Promise<void>, delayMs = 0): void {
     if (!this.stopped) this.put(key, run, delayMs, false)
+  }
+
+  /** Scans discover missing work without dirtying or replacing an existing attempt. */
+  ensure(key: string, run: () => Promise<void>, delayMs = 0): void {
+    if (!this.stopped && !this.items.has(key))
+      this.put(key, run, delayMs, false)
   }
 
   /** Explicit commands wait for one attempt; failures remain queued for recovery. */
@@ -132,13 +140,16 @@ export class SyncWorkQueue {
       item = {
         run,
         readyAt: Math.max(Date.now() + delayMs, earliest),
+        forced: force,
         dirty: true,
         failures: 0,
         waiters: [],
       }
       this.items.set(key, item)
     } else {
-      item.run = run
+      // A scan/edit must not replace an explicit operation with a throttled one.
+      if (force || !item.forced) item.run = run
+      item.forced ||= force
       item.dirty = true
       if (force) item.readyAt = Math.min(item.readyAt, Date.now())
     }
@@ -171,6 +182,7 @@ export class SyncWorkQueue {
     const [key, item] = entry
     this.processing = key
     item.dirty = false
+    item.forced = false
     item.lastStarted = Date.now()
     this.metrics.dequeued(Math.max(0, item.lastStarted - item.readyAt))
     this.recordDepth()
@@ -186,11 +198,21 @@ export class SyncWorkQueue {
       item.failures = 0
       for (const waiter of waiters) waiter.resolve()
       if (!item.dirty) this.items.delete(key)
-      else
-        item.readyAt =
-          item.lastStarted + (this.options.minimumIntervalMs ?? 120_000)
+      else {
+        if (!item.forced)
+          item.readyAt =
+            item.lastStarted + (this.options.minimumIntervalMs ?? 120_000)
+        // A hot key goes behind other waiting files on its follow-up pass.
+        this.items.delete(key)
+        if (!this.stopped) this.items.set(key, item)
+      }
     } catch (error) {
       for (const waiter of waiters) waiter.reject(error)
+      if (this.options.shouldRetry?.(error) === false) {
+        // The durable diagnostic remains visible; explicit sync can try again.
+        this.items.delete(key)
+        return
+      }
       const delay =
         error instanceof SyncDeferred
           ? error.delayMs
