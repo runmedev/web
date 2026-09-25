@@ -122,6 +122,40 @@ async function main() {
         (await (window as any).store.getSyncState(uri)).status === 'syncing',
       uri
     )
+    // A second uncached file must claim a different slot while the first waits
+    // for credentials. This would time out under the old global serial queue.
+    const independentUri = await b.evaluate(async () => {
+      const store = (window as any).store
+      const uri = await store.addFile(
+        'https://drive.google.com/file/d/storage-owner-test-independent/view',
+        'independent.runme'
+      )
+      void store.load(uri).catch(() => {})
+      return uri
+    })
+    await b.waitForFunction(
+      async (uri) =>
+        (await (window as any).store.getSyncState(uri)).status === 'syncing',
+      independentUri
+    )
+    const parallel = await b.evaluate(async () =>
+      (window as any).store.getDriveQueueMetrics()
+    )
+    if (
+      parallel.active < 2 ||
+      parallel.active > parallel.concurrency ||
+      parallel.concurrency !== 10
+    )
+      throw new Error(
+        `Independent files did not use separate claims: ${JSON.stringify(parallel)}`
+      )
+    // Availability is per tab: disabling only B leaves A as a credential donor.
+    // Disable A too before asserting that new files remain pending upstream.
+    await a.evaluate(async () => {
+      const store = (window as any).store
+      store.setDriveSyncAvailable(false)
+      await store.getDriveQueueMetrics() // MessagePort ordering barrier.
+    })
     const offline = await b.evaluate(async (uri) => {
       const store = (window as any).store
       // Fail quickly instead of waiting for the five-minute RPC timeout.
@@ -171,7 +205,7 @@ async function main() {
       offline.state !== 'pending-upstream-create'
     )
       throw new Error(
-        'Offline open/create/edit/reopen did not preserve local content'
+        `Offline open/create/edit/reopen did not preserve local content: ${JSON.stringify(offline)}`
       )
     await context.close()
     context = await launch()
@@ -199,9 +233,14 @@ async function main() {
             'concurrent causal edits preserved',
             'checksum remains unset',
             'cached open bypasses stalled worker reconciliation',
+            'independent uncached file starts through another tab while the first is blocked',
             'offline Drive-folder create/edit/reopen before upstream creation',
             'browser restart restores exact OPFS bytes',
           ],
+          parallel: {
+            active: parallel.active,
+            concurrency: parallel.concurrency,
+          },
           cells: recovered.cells,
         },
         null,

@@ -170,11 +170,14 @@ function createTestStore(
     files?: MockTable<LocalFileRecord>
     folders?: MockTable<LocalFolderRecord>
     driveSyncCoordinator?: DriveSyncCoordinator
+    driveSyncConcurrency?: number
     ipynbShadowStorage?: MemoryIpynbShadowStorage
     operationLogStorage?: MemoryOperationLogStorage
   } = {}
 ) {
   const localStore = Object.create(LocalNotebooks.prototype) as any
+  if (options.driveSyncConcurrency !== undefined)
+    localStore.runtime = { driveSyncConcurrency: options.driveSyncConcurrency }
   localStore.files = options.files ?? createMockTable<LocalFileRecord>()
   const payloads =
     fixturePayloads.get(localStore.files) ?? new MemoryFilePayloadStorage()
@@ -8667,8 +8670,8 @@ describe('LocalNotebooks level-based Drive recovery', () => {
     store.stopSyncQueue()
   })
 
-  it('runs one source sync at a time and keeps queued work after auth loss', async () => {
-    const store = createTestStore({})
+  it('honors a one-slot configuration and keeps queued work after auth loss', async () => {
+    const store = createTestStore({}, { driveSyncConcurrency: 1 })
     for (const id of ['one', 'two', 'three'])
       await store.files.put({ ...record(id), md5Checksum: 'new' })
     const releases: Array<() => void> = []
@@ -8948,7 +8951,7 @@ describe('creation recovery safety', () => {
   })
 })
 
-it('serializes source, export, and creation across controllers sharing an origin lock', async () => {
+it('allows unrelated source, export, and creation across controllers sharing an origin lock', async () => {
   const coordinator = createTestDriveSyncCoordinator()
   const a = createTestStore({}, { driveSyncCoordinator: coordinator })
   const b = createTestStore({}, { driveSyncCoordinator: coordinator })
@@ -8975,8 +8978,8 @@ it('serializes source, export, and creation across controllers sharing an origin
       b.sync('drive-create:pending'),
     ]
     await new Promise((resolve) => setTimeout(resolve, 10))
-    expect(exporting).not.toHaveBeenCalled()
-    expect(creating).not.toHaveBeenCalled()
+    expect(exporting).toHaveBeenCalledOnce()
+    expect(creating).toHaveBeenCalledOnce()
     release()
     await Promise.all([first, ...others])
     expect(exporting).toHaveBeenCalledOnce()
@@ -8988,9 +8991,88 @@ it('serializes source, export, and creation across controllers sharing an origin
   }
 })
 
+it('uses the default ten-slot pool but shares a claim across source and exports', async () => {
+  const store = createTestStore({})
+  const starts: string[] = []
+  let releaseA!: () => void, releaseB!: () => void
+  const run = (kind: string, uri: string, operation: () => Promise<void>) =>
+    (store as any).queueDriveWork(kind, uri, operation, {
+      immediate: true,
+    }) as Promise<void>
+  const a = run('source', 'local://file/a', async () => {
+    starts.push('source:a')
+    await new Promise<void>((r) => {
+      releaseA = r
+    })
+  })
+  await vi.waitFor(() => expect(starts).toEqual(['source:a']))
+  const same = run('source', 'local://file/a', async () => {
+    starts.push('duplicate')
+  })
+  const derived = run('ipynb', 'local://file/a', async () => {
+    starts.push('export:a')
+  })
+  const b = run('source', 'local://file/b', async () => {
+    starts.push('source:b')
+    await new Promise<void>((r) => {
+      releaseB = r
+    })
+  })
+  try {
+    await vi.waitFor(() => expect(starts).toContain('source:b'))
+    expect(starts).not.toContain('export:a')
+    expect(await store.getDriveQueueMetrics()).toMatchObject({
+      active: 2,
+      depth: 1,
+      blockedByFile: 1,
+      concurrency: 10,
+    })
+    releaseA()
+    await Promise.all([a, same, derived])
+    expect(starts).toEqual(['source:a', 'source:b', 'export:a'])
+  } finally {
+    releaseA()
+    releaseB()
+    await Promise.all([a, same, derived, b])
+    store.stopSyncQueue()
+  }
+})
+
+it('retains same-creation exclusion across controllers after removing the global lock', async () => {
+  const coordinator = createTestDriveSyncCoordinator()
+  const a = createTestStore({}, { driveSyncCoordinator: coordinator })
+  const b = createTestStore({}, { driveSyncCoordinator: coordinator })
+  let release!: () => void
+  const firstCreate = vi
+    .spyOn(a as any, 'performDriveCreate')
+    .mockImplementation(
+      () =>
+        new Promise((r) => {
+          release = () => r({})
+        })
+    )
+  const secondCreate = vi
+    .spyOn(b as any, 'performDriveCreate')
+    .mockResolvedValue({})
+  const first = a.sync('drive-create:one-id')
+  await vi.waitFor(() => expect(firstCreate).toHaveBeenCalledOnce())
+  const second = b.sync('drive-create:one-id')
+  try {
+    await new Promise((r) => setTimeout(r, 10))
+    expect(secondCreate).not.toHaveBeenCalled()
+    release()
+    await Promise.all([first, second])
+    expect(secondCreate).toHaveBeenCalledOnce()
+  } finally {
+    release()
+    a.stopSyncQueue()
+    b.stopSyncQueue()
+  }
+})
+
 describe('SharedWorker metadata discovery', () => {
   it('deduplicates edits and scans while preserving an explicit source sync', async () => {
-    const store = createTestStore({})
+    const store = createTestStore({}, { driveSyncConcurrency: 1 })
     const makeRecord = (id: string) => ({
       id: `local://file/${id}`,
       name: `${id}.json`,

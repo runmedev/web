@@ -13,7 +13,9 @@ it('shows backlog separately from completed dequeue observations', () => {
   try {
     render(<DriveQueueCharts metrics={queue.getMetrics()} />)
     expect(
-      screen.getByText('1 waiting · 0 eligible · 1 delayed · 0 active')
+      screen.getByText(
+        '1 waiting · 0 eligible · 1 delayed · 0 / 1 active · 0 waiting for the same file'
+      )
     ).toBeInTheDocument()
     expect(
       screen.getByRole('img', {

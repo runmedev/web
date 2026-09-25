@@ -11,6 +11,8 @@ export type DriveQueueMetrics = {
   depth: number
   eligible: number
   delayed: number
+  concurrency?: number
+  blockedByFile?: number
   active: number
   activeForMs: number
   oldestEligibleWaitMs: number

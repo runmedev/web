@@ -8,6 +8,7 @@ export class SyncDeferred extends Error {
 }
 
 type Item = {
+  group: string
   run: () => Promise<void>
   readyAt: number
   forced: boolean
@@ -26,21 +27,35 @@ type Item = {
 export class SyncWorkQueue {
   private readonly items = new Map<string, Item>()
   private readonly lastStarts = new Map<string, number>()
-  private activeWaiters?: Item['waiters']
-  private processing?: string
+  private readonly processing = new Map<
+    string,
+    { item: Item; waiters: Item['waiters'] }
+  >()
+  private readonly claimedGroups = new Set<string>()
+  private readonly concurrency: number
+  private scheduled = false
+  private interactiveBurst = 0
   private timer?: ReturnType<typeof setTimeout>
   private stopped = false
   private readonly metrics = new SyncQueueMetrics()
 
   constructor(
     private readonly options: {
+      /** Number of distinct files that can have in-flight work. */
+      concurrency?: number
+      /** Operations sharing this identity cannot overlap (e.g. source and export). */
+      groupKey?: (key: string) => string
       minimumIntervalMs?: number
       retryBaseMs?: number
       retryMaxMs?: number
       onChange?: (key: string) => void
       shouldRetry?: (error: unknown) => boolean
     } = {}
-  ) {}
+  ) {
+    this.concurrency = options.concurrency ?? 1
+    if (!Number.isInteger(this.concurrency) || this.concurrency < 1)
+      throw new Error('Sync concurrency must be a positive integer')
+  }
 
   /** Add background work without extending an existing deadline on each edit. */
   add(key: string, run: () => Promise<void>, delayMs = 0): void {
@@ -57,8 +72,9 @@ export class SyncWorkQueue {
   run(key: string, run: () => Promise<void>): Promise<void> {
     if (this.stopped) return Promise.reject(new Error('Sync queue is closed'))
     return new Promise((resolve, reject) => {
-      if (this.processing === key && this.activeWaiters) {
-        this.activeWaiters.push({ resolve, reject })
+      const active = this.processing.get(key)
+      if (active && !active.item.dirty) {
+        active.waiters.push({ resolve, reject })
         return
       }
       const item = this.put(key, run, 0, true)
@@ -75,7 +91,7 @@ export class SyncWorkQueue {
 
   nextAttempt(key: string): string | undefined {
     const item = this.items.get(key)
-    return item && key !== this.processing
+    return item && !this.processing.has(key)
       ? new Date(item.readyAt).toISOString()
       : undefined
   }
@@ -89,35 +105,37 @@ export class SyncWorkQueue {
         waiter.reject(new Error('Sync queue is closed'))
       item.waiters = []
     }
-    this.items.clear()
+    // In-flight operations retain their claims until they actually settle. Closing
+    // is not cancellation and must never permit another writer to overlap them.
+    for (const key of this.items.keys())
+      if (!this.processing.has(key)) this.items.delete(key)
     this.recordDepth()
   }
 
   /** Waiting keys exclude the active attempt, including while it awaits a lock. */
   private recordDepth(): void {
-    this.metrics.depthChanged(
-      this.items.size -
-        (this.processing && this.items.has(this.processing) ? 1 : 0)
-    )
+    this.metrics.depthChanged(this.items.size - this.processing.size)
   }
 
   /** Snapshot data belongs to the queue owner, so all tabs observe the same history. */
   getMetrics() {
     const now = Date.now()
-    const waiting = [...this.items].filter(([key]) => key !== this.processing)
+    const waiting = [...this.items].filter(([key]) => !this.processing.has(key))
     const eligible = waiting.filter(([, item]) => item.readyAt <= now)
     return {
       ...this.metrics.snapshot(),
       depth: waiting.length,
       eligible: eligible.length,
       delayed: waiting.length - eligible.length,
-      active: this.processing ? 1 : 0,
-      activeForMs: this.processing
-        ? Math.max(
-            0,
-            now - (this.items.get(this.processing)?.lastStarted ?? now)
-          )
-        : 0,
+      active: this.processing.size,
+      concurrency: this.concurrency,
+      blockedByFile: eligible.filter(([, item]) =>
+        this.claimedGroups.has(item.group)
+      ).length,
+      activeForMs: [...this.processing.values()].reduce(
+        (max, { item }) => Math.max(max, now - (item.lastStarted ?? now)),
+        0
+      ),
       oldestEligibleWaitMs: eligible.reduce(
         (max, [, item]) => Math.max(max, now - item.readyAt),
         0
@@ -138,6 +156,7 @@ export class SyncWorkQueue {
         : (this.lastStarts.get(key) ?? 0) +
           (this.options.minimumIntervalMs ?? 120_000)
       item = {
+        group: this.options.groupKey?.(key) ?? key,
         run,
         readyAt: Math.max(Date.now() + delayMs, earliest),
         forced: force,
@@ -149,38 +168,81 @@ export class SyncWorkQueue {
     } else {
       // A scan/edit must not replace an explicit operation with a throttled one.
       if (force || !item.forced) item.run = run
+      if (force) {
+        // A requested follow-up becomes eligible now, not at the previous
+        // attempt's original deadline. Repeated queued requests keep their age.
+        item.readyAt =
+          this.processing.has(key) && !item.forced
+            ? Date.now()
+            : Math.min(item.readyAt, Date.now())
+      }
       item.forced ||= force
       item.dirty = true
-      if (force) item.readyAt = Math.min(item.readyAt, Date.now())
     }
     this.schedule()
     return item
   }
 
+  /** Schedule only claimable files. A busy file never occupies a worker slot or timer. */
   private schedule(): void {
     this.recordDepth()
     clearTimeout(this.timer)
-    if (this.stopped || this.processing || !this.items.size) return
+    if (this.stopped || this.processing.size >= this.concurrency) return
     let next = Infinity
-    for (const item of this.items.values()) next = Math.min(next, item.readyAt)
+    for (const item of this.items.values()) {
+      if (!this.claimedGroups.has(item.group))
+        next = Math.min(next, item.readyAt)
+    }
+    if (!Number.isFinite(next)) return
     if (next <= Date.now()) {
-      queueMicrotask(() => void this.process())
+      if (!this.scheduled) {
+        this.scheduled = true
+        queueMicrotask(() => {
+          this.scheduled = false
+          this.pump()
+        })
+      }
       return
     }
-    this.timer = setTimeout(() => void this.process(), next - Date.now())
-    // Node callers/tests should not stay alive just for background recovery.
+    this.timer = setTimeout(() => this.pump(), next - Date.now())
     ;(this.timer as unknown as { unref?: () => void }).unref?.()
   }
 
-  private async process(): Promise<void> {
-    if (this.stopped || this.processing) return
-    const entry = [...this.items].find(([, item]) => item.readyAt <= Date.now())
-    if (!entry) {
-      this.schedule()
-      return
+  /** Claim synchronously, then run async I/O. JS tasks cannot interleave the claim step. */
+  private pump(): void {
+    if (this.stopped) return
+    while (this.processing.size < this.concurrency) {
+      const ready = [...this.items].filter(
+        ([, item]) =>
+          item.readyAt <= Date.now() && !this.claimedGroups.has(item.group)
+      )
+      // Interactive opens/syncs get the next free slot, with a bounded burst so
+      // continuous foreground traffic cannot starve background reconciliation.
+      const foreground = ready.find(([, item]) => item.forced)
+      const background = ready.find(([, item]) => !item.forced)
+      const entry =
+        foreground && (!background || this.interactiveBurst < 3)
+          ? foreground
+          : background
+      if (!entry) break
+      this.interactiveBurst = entry[1].forced
+        ? Math.min(3, this.interactiveBurst + 1)
+        : 0
+      const [key, item] = entry
+      const waiters = item.waiters.splice(0)
+      this.processing.set(key, { item, waiters })
+      this.claimedGroups.add(item.group)
+      void this.process(key, item, waiters)
     }
-    const [key, item] = entry
-    this.processing = key
+    this.schedule()
+  }
+
+  /** Completion acknowledges the claim in finally, on success and every failure path. */
+  private async process(
+    key: string,
+    item: Item,
+    waiters: Item['waiters']
+  ): Promise<void> {
     item.dirty = false
     item.forced = false
     item.lastStarted = Date.now()
@@ -191,13 +253,11 @@ export class SyncWorkQueue {
       if (started + (this.options.minimumIntervalMs ?? 120_000) < Date.now())
         this.lastStarts.delete(oldKey)
     }
-    const waiters = item.waiters.splice(0)
-    this.activeWaiters = waiters
     try {
       await item.run()
       item.failures = 0
       for (const waiter of waiters) waiter.resolve()
-      if (!item.dirty) this.items.delete(key)
+      if (!item.dirty || this.stopped) this.items.delete(key)
       else {
         if (!item.forced)
           item.readyAt =
@@ -208,8 +268,10 @@ export class SyncWorkQueue {
       }
     } catch (error) {
       for (const waiter of waiters) waiter.reject(error)
-      if (this.options.shouldRetry?.(error) === false) {
+      if (this.stopped || this.options.shouldRetry?.(error) === false) {
         // The durable diagnostic remains visible; explicit sync can try again.
+        for (const waiter of item.waiters) waiter.reject(error)
+        item.waiters = []
         this.items.delete(key)
         return
       }
@@ -223,10 +285,17 @@ export class SyncWorkQueue {
             )
       item.readyAt = Date.now() + delay
     } finally {
-      this.activeWaiters = undefined
-      this.processing = undefined
-      this.options.onChange?.(key)
-      this.schedule()
+      this.processing.delete(key)
+      this.claimedGroups.delete(item.group)
+      // Notify only after releasing the claim. Observer failures cannot strand
+      // capacity or produce an unhandled rejection from a background attempt.
+      try {
+        this.options.onChange?.(key)
+      } catch {
+        /* Diagnostics cannot stop queue progress. */
+      } finally {
+        this.schedule()
+      }
     }
   }
 }

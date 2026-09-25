@@ -445,6 +445,7 @@ export class LocalNotebooks extends Dexie {
     string
   >
   private readonly runtime: {
+    driveSyncConcurrency?: number
     owner?: boolean
     client?: boolean
     payloadStorage?: FilePayloadStorage
@@ -641,12 +642,16 @@ export class LocalNotebooks extends Dexie {
 
   private getWorkQueue(): SyncWorkQueue {
     return (this.workQueue ??= new SyncWorkQueue({
+      concurrency: this.runtime?.driveSyncConcurrency ?? 10,
+      // A notebook's source and all derived exports share one active claim.
+      groupKey: (key) =>
+        key.startsWith('create:') ? key : key.slice(key.indexOf(':') + 1),
       shouldRetry: (error) => !isPermanentDriveSyncError(error),
       onChange: (key) => this.notifySync(key.slice(key.indexOf(':') + 1)),
     }))
   }
 
-  /** All save/export paths share one queue and one same-origin network lock. */
+  /** Bounded parallelism across files; the queue and inner locks exclude same-file work. */
   private queueDriveWork(
     kind: string,
     uri: string,
@@ -657,44 +662,50 @@ export class LocalNotebooks extends Dexie {
       discovered?: boolean
     } = {}
   ): Promise<void> {
-    const run = () =>
-      this.driveSyncCoordinator.runExclusive('__all_drive_work__', async () => {
-        const record = kind === 'create' ? undefined : await this.files.get(uri)
-        const usesDrive =
-          kind === 'create' ||
-          (record &&
-            (isDriveUri(record.remoteId) || record.parentRemoteIdWhenCreated))
-        if (usesDrive && record) {
-          if (kind !== 'source' && isNativeDriveFile(record.mimeType))
-            throw new UnsupportedDriveSyncError()
-          const previousError =
-            kind === 'source'
-              ? record.lastSyncError
-              : kind === 'ipynb'
-                ? record.ipynbExportError
-                : undefined
-          if (!options.immediate && isPermanentDriveSyncError(previousError))
-            throw new Error(previousError)
-        }
-        if (
-          usesDrive &&
-          (this.driveAvailable === false ||
-            (typeof navigator !== 'undefined' && navigator.onLine === false))
-        ) {
-          throw new SyncDeferred(120_000)
-        }
-        if (!options.immediate && record) {
-          const succeededAt =
-            kind === 'source'
-              ? record.lastSynced
-              : kind === 'ipynb'
-                ? record.ipynbExportedAt
-                : undefined
-          const remaining = Date.parse(succeededAt ?? '') + 120_000 - Date.now()
-          if (remaining > 0) throw new SyncDeferred(remaining)
-        }
-        await operation()
-      })
+    const run = async () => {
+      const record = kind === 'create' ? undefined : await this.files.get(uri)
+      const usesDrive =
+        kind === 'create' ||
+        (record &&
+          (isDriveUri(record.remoteId) || record.parentRemoteIdWhenCreated))
+      if (usesDrive && record) {
+        if (kind !== 'source' && isNativeDriveFile(record.mimeType))
+          throw new UnsupportedDriveSyncError()
+        const previousError =
+          kind === 'source'
+            ? record.lastSyncError
+            : kind === 'ipynb'
+              ? record.ipynbExportError
+              : undefined
+        if (!options.immediate && isPermanentDriveSyncError(previousError))
+          throw new Error(previousError)
+      }
+      if (
+        usesDrive &&
+        (this.driveAvailable === false ||
+          (typeof navigator !== 'undefined' && navigator.onLine === false))
+      ) {
+        throw new SyncDeferred(120_000)
+      }
+      if (!options.immediate && record) {
+        const succeededAt =
+          kind === 'source'
+            ? record.lastSynced
+            : kind === 'ipynb'
+              ? record.ipynbExportedAt
+              : undefined
+        const remaining = Date.parse(succeededAt ?? '') + 120_000 - Date.now()
+        if (remaining > 0) throw new SyncDeferred(remaining)
+      }
+      // Creation has no notebook URI yet. Use its durable operation ID across
+      // controllers; source/export operations retain their existing per-file locks.
+      if (kind === 'create')
+        await this.driveSyncCoordinator.runExclusive(
+          `drive-create:${uri}`,
+          operation
+        )
+      else await operation()
+    }
     const queue = this.getWorkQueue()
     if (options.immediate) return queue.run(`${kind}:${uri}`, run)
     if (options.discovered)
@@ -714,6 +725,7 @@ export class LocalNotebooks extends Dexie {
     ipynbShadowStorage: IpynbShadowStorage = createDefaultIpynbShadowStorage(),
     operationLogStorage: OperationLogStorage = createDefaultOperationLogStorage(),
     runtime: {
+      driveSyncConcurrency?: number
       owner?: boolean
       client?: boolean
       payloadStorage?: FilePayloadStorage
@@ -5536,8 +5548,6 @@ export class LocalNotebooks extends Dexie {
   }
 
   private async syncFile(localUri: string): Promise<void> {
-    const existing = this.inFlightSyncs.get(localUri)
-    if (existing) return existing
     return this.queueDriveWork(
       'source',
       localUri,
