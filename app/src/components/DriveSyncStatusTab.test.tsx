@@ -271,6 +271,28 @@ describe('DriveSyncStatusTab', () => {
     clearLinkedResourceCacheMock.mockClear()
   })
 
+  it('keeps terminal failures visible but excludes them from bulk retry', async () => {
+    listFileSyncStatusesMock.mockResolvedValue([
+      {
+        ...rows[1],
+        syncStatus: 'error',
+        lastError:
+          'Drive request failed (400 ): {"error":{"errors":[{"reason":"conversionUnsupportedConversionPath"}]}}',
+      },
+    ])
+    render(<DriveSyncStatusTab />)
+    await waitForStatusLoad()
+    expect(screen.getByText(/Automatic retries stopped/)).toBeTruthy()
+    expect(
+      (
+        screen.getByRole('button', {
+          name: 'Sync Required on Page (0)',
+        }) as HTMLButtonElement
+      ).disabled
+    ).toBe(true)
+    expect(syncMock).not.toHaveBeenCalled()
+  })
+
   it('distinguishes a failed attempt and retry eligibility from the last successful sync', async () => {
     listFileSyncStatusesMock.mockResolvedValue([
       {

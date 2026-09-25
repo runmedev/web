@@ -170,3 +170,105 @@ describe('owner queue diagnostics', () => {
     expect(queue().getMetrics().waitHistogram[0].count).toBe(0)
   })
 })
+
+describe('reconciliation and terminal failures', () => {
+  it('coalesces repeated discoveries without replacing an explicit queued operation', async () => {
+    vi.useFakeTimers()
+    const q = queue()
+    let release!: () => void
+    q.add(
+      'blocker',
+      () =>
+        new Promise<void>((resolve) => {
+          release = resolve
+        })
+    )
+    await vi.advanceTimersByTimeAsync(0)
+    const manual = vi.fn().mockResolvedValue(undefined)
+    const background = vi.fn().mockResolvedValue(undefined)
+    const done = q.run('source:local://file/1234', manual)
+    for (let i = 0; i < 100; i++) {
+      q.ensure('source:local://file/1234', background)
+      q.add('source:local://file/1234', background)
+    }
+    expect(q.getMetrics().depth).toBe(1)
+    release()
+    await vi.advanceTimersByTimeAsync(0)
+    await done
+    expect(manual).toHaveBeenCalledOnce()
+    expect(background).not.toHaveBeenCalled()
+    expect(q.getMetrics().depth).toBe(0)
+  })
+
+  it('does not requeue an active key on scans, but retains one follow-up for actual edits', async () => {
+    vi.useFakeTimers()
+    const q = queue()
+    let release!: () => void
+    const first = vi.fn(
+      () =>
+        new Promise<void>((resolve) => {
+          release = resolve
+        })
+    )
+    const latest = vi.fn().mockResolvedValue(undefined)
+    q.add('source:local://file/1234', first)
+    await vi.advanceTimersByTimeAsync(0)
+    for (let i = 0; i < 100; i++) q.ensure('source:local://file/1234', first)
+    release()
+    await vi.advanceTimersByTimeAsync(120_000)
+    expect(first).toHaveBeenCalledOnce()
+    expect(q.getMetrics().depth).toBe(0)
+
+    q.add('source:local://file/1234', first)
+    await vi.advanceTimersByTimeAsync(0)
+    for (let i = 0; i < 100; i++) {
+      q.add('source:local://file/1234', latest)
+      q.ensure('source:local://file/1234', first)
+    }
+    release()
+    await vi.advanceTimersByTimeAsync(120_000)
+    expect(latest).toHaveBeenCalledOnce()
+    expect(first).toHaveBeenCalledTimes(2)
+    expect(q.getMetrics().depth).toBe(0)
+  })
+
+  it('puts a dirty follow-up behind already waiting keys', async () => {
+    vi.useFakeTimers()
+    const q = queue({ minimumIntervalMs: 0 })
+    let release!: () => void
+    const order: string[] = []
+    q.add(
+      'hot',
+      () =>
+        new Promise<void>((resolve) => {
+          release = resolve
+        })
+    )
+    await vi.advanceTimersByTimeAsync(0)
+    q.add('cold', async () => {
+      order.push('cold')
+    })
+    q.add('hot', async () => {
+      order.push('hot')
+    })
+    release()
+    await vi.advanceTimersByTimeAsync(0)
+    expect(order).toEqual(['cold', 'hot'])
+  })
+
+  it('removes terminal failures, rejects callers and permits explicit recovery', async () => {
+    vi.useFakeTimers()
+    const q = queue({ shouldRetry: () => false })
+    const failed = vi.fn().mockRejectedValue(new Error('terminal'))
+    const done = expect(q.run('a', failed)).rejects.toThrow('terminal')
+    await vi.advanceTimersByTimeAsync(0)
+    await done
+    q.wake()
+    await vi.advanceTimersByTimeAsync(3_600_000)
+    expect(failed).toHaveBeenCalledOnce()
+    expect(q.getMetrics()).toMatchObject({ depth: 0, active: 0 })
+    const fixed = vi.fn().mockResolvedValue(undefined)
+    await q.run('a', fixed)
+    expect(fixed).toHaveBeenCalledOnce()
+  })
+})

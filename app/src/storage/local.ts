@@ -112,6 +112,12 @@ import {
   type DriveSyncCoordinator,
   browserDriveSyncCoordinator,
 } from './driveSyncCoordinator'
+import {
+  UnsupportedDriveSyncError,
+  driveSyncErrorText,
+  isNativeDriveFile,
+  isPermanentDriveSyncError,
+} from './driveSyncPolicy'
 import { EXCALIDRAW_MIME_TYPE, isExcalidrawFileName } from './excalidraw'
 import {
   type FilePayloadRef,
@@ -608,7 +614,9 @@ export class LocalNotebooks extends Dexie {
       }
       return result
     } catch (error) {
-      await this.driveCreates.update(id, { lastError: String(error) })
+      await this.driveCreates.update(id, {
+        lastError: driveSyncErrorText(error),
+      })
       throw error
     }
   }
@@ -633,6 +641,7 @@ export class LocalNotebooks extends Dexie {
 
   private getWorkQueue(): SyncWorkQueue {
     return (this.workQueue ??= new SyncWorkQueue({
+      shouldRetry: (error) => !isPermanentDriveSyncError(error),
       onChange: (key) => this.notifySync(key.slice(key.indexOf(':') + 1)),
     }))
   }
@@ -642,7 +651,11 @@ export class LocalNotebooks extends Dexie {
     kind: string,
     uri: string,
     operation: () => Promise<void>,
-    options: { immediate?: boolean; delayMs?: number } = {}
+    options: {
+      immediate?: boolean
+      delayMs?: number
+      discovered?: boolean
+    } = {}
   ): Promise<void> {
     const run = () =>
       this.driveSyncCoordinator.runExclusive('__all_drive_work__', async () => {
@@ -651,6 +664,18 @@ export class LocalNotebooks extends Dexie {
           kind === 'create' ||
           (record &&
             (isDriveUri(record.remoteId) || record.parentRemoteIdWhenCreated))
+        if (usesDrive && record) {
+          if (kind !== 'source' && isNativeDriveFile(record.mimeType))
+            throw new UnsupportedDriveSyncError()
+          const previousError =
+            kind === 'source'
+              ? record.lastSyncError
+              : kind === 'ipynb'
+                ? record.ipynbExportError
+                : undefined
+          if (!options.immediate && isPermanentDriveSyncError(previousError))
+            throw new Error(previousError)
+        }
         if (
           usesDrive &&
           (this.driveAvailable === false ||
@@ -672,7 +697,9 @@ export class LocalNotebooks extends Dexie {
       })
     const queue = this.getWorkQueue()
     if (options.immediate) return queue.run(`${kind}:${uri}`, run)
-    queue.add(`${kind}:${uri}`, run, options.delayMs ?? 0)
+    if (options.discovered)
+      queue.ensure(`${kind}:${uri}`, run, options.delayMs ?? 0)
+    else queue.add(`${kind}:${uri}`, run, options.delayMs ?? 0)
     return Promise.resolve()
   }
   private readonly inFlightSyncs = new Map<string, Promise<void>>()
@@ -1849,6 +1876,27 @@ export class LocalNotebooks extends Dexie {
       return syncStateForRecord(record, 'local-only')
     }
 
+    if (isDriveUri(record.remoteId) && isNativeDriveFile(record.mimeType)) {
+      if (
+        !record.lastSyncError &&
+        !record.doc &&
+        !record.contentRef &&
+        !record.operationLogRef
+      )
+        return syncStateForRecord(record, 'not-downloaded')
+      return syncStateForRecord(
+        {
+          ...record,
+          lastSyncError: [
+            String(new UnsupportedDriveSyncError()),
+            record.lastSyncError,
+          ]
+            .filter(Boolean)
+            .join('\n'),
+        },
+        'error'
+      )
+    }
     if (record.lastSyncError) {
       return syncStateForRecord(record, 'error')
     }
@@ -4863,6 +4911,11 @@ export class LocalNotebooks extends Dexie {
     record: LocalFileRecord
   ): Promise<boolean> {
     if (record.conflict) return false
+    if (
+      isNativeDriveFile(record.mimeType) ||
+      isPermanentDriveSyncError(record.lastSyncError)
+    )
+      return false
     if (record.remoteId === '' && record.parentRemoteIdWhenCreated) return true
     if (!isDriveUri(record.remoteId)) return false
     if (record.lastSyncError) return true
@@ -4913,8 +4966,8 @@ export class LocalNotebooks extends Dexie {
           localUri: uri,
         },
       })
-      this.enqueueSync(uri)
-      this.enqueueMarkdownSync(uri)
+      this.enqueueSync(uri, true)
+      this.enqueueMarkdownSync(uri, true)
     }
     const exports = await this.enqueueFailedDriveExports(pending)
     return [...new Set([...pending, ...exports])]
@@ -4930,11 +4983,12 @@ export class LocalNotebooks extends Dexie {
         isDriveUri(record.remoteId) &&
         record.operationLogRef &&
         record.ipynbExportError &&
+        !isPermanentDriveSyncError(record.ipynbExportError) &&
         !record.conflict &&
         !record.ipynbExportPendingClaim
       ) {
         failed.push(record.id)
-        if (!pending.includes(record.id)) this.enqueueIpynbSync(record.id)
+        if (!pending.includes(record.id)) this.enqueueIpynbSync(record.id, true)
       }
     }
     return failed
@@ -4942,9 +4996,16 @@ export class LocalNotebooks extends Dexie {
 
   /** Capture just the durable request ID in long-lived retry closures. */
   private enqueueDriveCreation(id: string): void {
-    void this.queueDriveWork('create', id, async () => {
-      if (await this.driveCreates.get(id)) await this.performDriveCreate(id)
-    })
+    void this.queueDriveWork(
+      'create',
+      id,
+      async () => {
+        const request = await this.driveCreates.get(id)
+        if (request && !isPermanentDriveSyncError(request.lastError))
+          await this.performDriveCreate(id)
+      },
+      { discovered: true }
+    )
   }
 
   /**
@@ -4973,27 +5034,34 @@ export class LocalNotebooks extends Dexie {
         continue
       }
       if (!(options.shouldContinue?.() ?? true)) break
-      this.enqueueDriveCreation(request.id)
+      if (!isPermanentDriveSyncError(request.lastError))
+        this.enqueueDriveCreation(request.id)
     }
     for (const uri of pending) {
       if (!(options.shouldContinue?.() ?? true)) break
       queued.push(uri)
-      await this.queueDriveWork('source', uri, async () => {
-        // State may have changed while delayed or while another tab held the lock.
-        const record = await this.files.get(uri)
-        if (!record || !(await this.needsDriveSourceSync(record))) return
-        await this.performSyncFile(uri)
-        this.enqueueMarkdownSync(uri)
-      })
+      await this.queueDriveWork(
+        'source',
+        uri,
+        async () => {
+          // State may have changed while delayed or while another tab held the lock.
+          const record = await this.files.get(uri)
+          if (!record || !(await this.needsDriveSourceSync(record))) return
+          await this.performSyncFile(uri)
+          this.enqueueMarkdownSync(uri)
+        },
+        { discovered: true }
+      )
     }
     if (options.shouldContinue?.() ?? true)
       await this.enqueueFailedDriveExports()
     return queued
   }
 
-  private enqueueSync(uri: string): void {
+  private enqueueSync(uri: string, discovered = false): void {
     void this.queueDriveWork('source', uri, () => this.performSyncFile(uri), {
       delayMs: 20_000,
+      discovered,
     })
   }
 
@@ -5027,20 +5095,21 @@ export class LocalNotebooks extends Dexie {
     }
   }
 
-  private enqueueMarkdownSync(uri: string): void {
-    this.enqueueIpynbSync(uri)
+  private enqueueMarkdownSync(uri: string, discovered = false): void {
+    this.enqueueIpynbSync(uri, discovered)
     void this.queueDriveWork(
       'markdown',
       uri,
       () => this.performMarkdownSync(uri),
-      { delayMs: 20_000 }
+      { delayMs: 20_000, discovered }
     )
   }
 
   /** Derived failures retry independently and never reject a persisted source edit. */
-  private enqueueIpynbSync(uri: string): void {
+  private enqueueIpynbSync(uri: string, discovered = false): void {
     void this.queueDriveWork('ipynb', uri, () => this.performIpynbSync(uri), {
       delayMs: 20_000,
+      discovered,
     })
   }
 
@@ -5212,7 +5281,7 @@ export class LocalNotebooks extends Dexie {
         })
       } catch (error) {
         await this.updateFile(uri, {
-          ipynbExportError: String(error),
+          ipynbExportError: driveSyncErrorText(error),
           ipynbExportPendingClaim:
             error instanceof UnconfirmedDerivedCopyError
               ? error.claim
@@ -5536,15 +5605,22 @@ export class LocalNotebooks extends Dexie {
             })
           this.enqueueIpynbSync(localUri)
         } catch (error) {
-          await this.updateFile(localUri, { lastSyncError: String(error) })
-          appLogger.warn('Notebook sync failed; queued for retry', {
-            attrs: {
-              scope: 'storage.drive.sync',
-              code: 'NOTEBOOK_SYNC_FAILED',
-              localUri,
-              error: String(error),
-            },
+          await this.updateFile(localUri, {
+            lastSyncError: driveSyncErrorText(error),
           })
+          appLogger.warn(
+            isPermanentDriveSyncError(error)
+              ? 'Notebook sync requires action; automatic retries stopped'
+              : 'Notebook sync failed; queued for retry',
+            {
+              attrs: {
+                scope: 'storage.drive.sync',
+                code: 'NOTEBOOK_SYNC_FAILED',
+                localUri,
+                error: String(error),
+              },
+            }
+          )
           throw error
         }
       })
@@ -5579,6 +5655,15 @@ export class LocalNotebooks extends Dexie {
       })
       return
     }
+
+    // Native destinations also reject raw-byte creation; check before a pending
+    // create can send anything. Local-only copies may still be edited offline.
+    if (
+      isNativeDriveFile(record.mimeType) &&
+      (isDriveUri(record.remoteId) ||
+        (!record.remoteId && record.parentRemoteIdWhenCreated))
+    )
+      throw new UnsupportedDriveSyncError()
 
     // Files that do not have a remote counterpart live exclusively in
     // IndexedDB. There is nothing to synchronise for those entries, so we can
@@ -5635,11 +5720,17 @@ export class LocalNotebooks extends Dexie {
     const remoteUri = record.remoteId
 
     let remoteName: string | undefined
+    let remoteMimeType: string | undefined
     try {
       const metadata = await this.driveStore.getMetadata(remoteUri)
       remoteName = metadata?.name
+      remoteMimeType = metadata?.mimeType
     } catch (error) {
       console.error('Failed to fetch remote metadata for', remoteUri, error)
+    }
+    if (isNativeDriveFile(remoteMimeType)) {
+      await this.updateFile(localUri, { mimeType: remoteMimeType })
+      throw new UnsupportedDriveSyncError()
     }
     if (remoteName && remoteName !== record.name) {
       await this.updateFile(localUri, { name: remoteName })

@@ -253,3 +253,39 @@ memory growth in a deployed session has been fixed.
   for diagnosis while normal edits continue to work.
 - Retry a completed Drive creation with the same key/input while OPFS writes
   fail. Return the durable receipt without another payload write or Drive call.
+
+
+## Permanent conversion failures and keyed reconciliation
+
+Drive `conversionUnsupportedConversionPath` responses are actionable failures:
+repeating the same upload cannot repair the destination type. Keep their local
+bytes and diagnostic visible, but remove the work from automatic retries and
+exclude it from reconciliation and the status page's bulk Sync Required action.
+An explicit individual sync can retry after correction. Native Google Workspace
+MIME types (including shortcuts) must never receive notebook byte uploads.
+Untouched native files remain not-downloaded; listing a folder is not an edit.
+Unknown failures, auth/network errors and failed initial downloads still recover.
+
+The queue uses a Map keyed by operation plus local URI. Repeated source saves
+coalesce; source, Markdown export and IPYNB export are intentionally distinct work.
+An edit during processing marks the key dirty for one later pass. A discovery
+scan only ensures the key exists: it must not replace an explicit callback,
+shorten retry backoff, or mark an active attempt dirty. Dirty follow-ups go behind
+already waiting files. The global network lock remains serial; this change does
+not introduce concurrent Drive writes or remove per-file throttling.
+
+Regression checks (`syncWorkQueue.test.ts`, `driveSyncPolicy.test.ts`,
+`local.test.ts`, `DriveSyncStatusTab.test.tsx`):
+
+1. Add the same source URI 100 times from edits and scans; see one waiting key.
+2. Scan while an attempt is blocked; completion leaves no duplicate work. Edit
+   while it is blocked; completion retains exactly one pass using the latest callback.
+3. Queue explicit sync behind another operation, then scan/edit; the explicit
+   attempt must not become a background, throttled callback.
+4. Reject an upload with the conversion reason. Confirm queue depth returns to
+   zero, the error/local bytes survive, auth wake and worker restart do not retry,
+   and explicit recovery is still possible. Check wrapped creation errors too.
+5. Mirror a native Doc with a misleading `.runme` name or discover its MIME type
+   through legacy metadata lookup. Reject before uploading; retain local bytes.
+6. Keep the actionable error visible on Drive status while excluding it from
+   bulk retry. A transient authorization error remains eligible.
