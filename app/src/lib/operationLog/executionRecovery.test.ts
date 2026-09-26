@@ -107,6 +107,183 @@ function outputText(notebook: parser_pb.Notebook) {
 }
 
 describe('execution output recovery', () => {
+  it.each([false, true])(
+    'accepts equivalent duplicate starts (concurrent=%s) without losing completed output',
+    (concurrent) => {
+      const f = fixture()
+      f.finish('saved result')
+      f.append(
+        'execution.start',
+        {
+          ...(f.start.payload as object),
+          started_at: '2030-01-01T00:00:00Z',
+        } as JsonValue,
+        concurrent ? f.start.deps : undefined
+      )
+      const original = JSON.stringify(f.operations)
+      expect(outputText(reopen(f.operations))).toBe('saved result')
+      expect(outputText(reopen([...f.operations].reverse()))).toBe(
+        'saved result'
+      )
+      expect(materializeOperationLog(f.operations).executions).toHaveLength(1)
+      expect(JSON.stringify(f.operations)).toBe(original)
+    }
+  )
+
+  it('does not reactivate an old run when its duplicate arrives after a rerun or clear', () => {
+    const f = fixture()
+    f.finish('old')
+    f.append('execution.start', {
+      ...(f.start.payload as object),
+      execution_id: 'new',
+    } as JsonValue)
+    f.finish('new', undefined, 'new')
+    f.append('execution.start', f.start.payload)
+    f.finish('late old')
+    expect(outputText(reopen(f.operations))).toBe('new')
+    f.append('cell.clear_outputs', {
+      cell_id: 'cell-1',
+      reason: 'user-cleared',
+    })
+    f.append('execution.start', f.start.payload)
+    expect(reopen(f.operations).cells[0]!.outputs).toEqual([])
+  })
+
+  it('supersedes a run when the rerun observes only a concurrent alias', () => {
+    const f = fixture()
+    const alias = f.append('execution.start', f.start.payload, f.start.deps)
+    const next = f.append(
+      'execution.start',
+      { ...(f.start.payload as object), execution_id: 'new' } as JsonValue,
+      [alias.op_id]
+    )
+    f.finish('new', [next.op_id], 'new')
+    f.finish('late old', [f.start.op_id])
+    expect(outputText(reopen(f.operations))).toBe('new')
+    expect(outputText(reopen([...f.operations].reverse()))).toBe('new')
+  })
+
+  it('keeps an unobserved conflicting start until a rerun observes both branches', () => {
+    const f = fixture()
+    const other = f.append(
+      'execution.start',
+      { ...(f.start.payload as object), input_sha256: 'conflict' } as JsonValue,
+      f.start.deps
+    )
+    const next = f.append(
+      'execution.start',
+      {
+        ...(f.start.payload as object),
+        execution_id: 'partial-rerun',
+      } as JsonValue,
+      [f.start.op_id]
+    )
+    f.finish('partial', [next.op_id], 'partial-rerun')
+    expect(outputText(reopen(f.operations))).toContain(
+      'conflicting start records'
+    )
+    f.append('execution.start', {
+      ...(f.start.payload as object),
+      execution_id: 'resolved',
+    } as JsonValue)
+    f.finish('resolved', undefined, 'resolved')
+    // This conflicting re-recording happens after the new run. It is historical,
+    // and must not make the already superseded execution active again.
+    f.append('execution.start', other.payload)
+    expect(outputText(reopen(f.operations))).toBe('resolved')
+  })
+
+  it('ignores rejected and uncommitted duplicate starts', () => {
+    const f = fixture()
+    f.finish('valid')
+    const rejected = f.append('execution.start', {
+      ...(f.start.payload as object),
+      input_sha256: 'rejected',
+    } as JsonValue)
+    f.append('suggestion.review', {
+      suggestion_id: `legacy:${rejected.op_id}`,
+      operation_ids: [rejected.op_id],
+      decision: 'reject',
+    })
+    const pending = f.append('execution.start', {
+      ...(f.start.payload as object),
+      input_sha256: 'pending',
+    } as JsonValue)
+    pending.transaction_id = 'not-committed'
+    expect(outputText(reopen(f.operations))).toBe('valid')
+  })
+
+  it('isolates conflicting cell associations to both affected cells', () => {
+    const f = fixture()
+    const cell = f.operations[0]!
+    f.append('cell.create', {
+      ...(cell.payload as object),
+      cell_id: 'cell-2',
+      position: [[2, 'seed', 1]],
+    } as JsonValue)
+    f.append('execution.start', {
+      ...(f.start.payload as object),
+      cell_id: 'cell-2',
+    } as JsonValue)
+    f.finish('ambiguous')
+    const recovered = reopen(f.operations)
+    expect(recovered.cells).toHaveLength(2)
+    for (const cell of recovered.cells)
+      expect(outputText({ ...recovered, cells: [cell] })).toContain(
+        'conflicting start records'
+      )
+    f.append('execution.start', {
+      ...(f.start.payload as object),
+      execution_id: 'new',
+    } as JsonValue)
+    f.finish('fresh', undefined, 'new')
+    expect(outputText(reopen(f.operations))).toBe('fresh')
+    expect(
+      outputText({ ...recovered, cells: [reopen(f.operations).cells[1]!] })
+    ).toContain('conflicting start records')
+  })
+
+  it('does not emit a second start when stale metadata returns to an existing run', async () => {
+    const f = fixture()
+    f.finish('saved')
+    const next = reopen(f.operations)
+    const previous = cloneNotebook(next)
+    delete previous.cells[0]!.metadata[RunmeMetadataKey.LastRunID]
+    previous.cells[0]!.outputs = []
+    const changes = await buildOperationLogDiff({
+      previous,
+      next,
+      observedOperations: f.operations,
+      actorId: 'stale',
+      firstActorSequence: 1,
+    })
+    expect(changes.some((op) => op.kind === 'execution.start')).toBe(false)
+    expect(changes.some((op) => op.kind === 'execution.finish')).toBe(true)
+    expect(outputText(reopen([...f.operations, ...changes]))).toBe('saved')
+  })
+
+  it('still records a distinct run after a previous execution', async () => {
+    const f = fixture()
+    f.finish('saved')
+    const previous = reopen(f.operations)
+    const next = cloneNotebook(previous)
+    next.cells[0]!.metadata[RunmeMetadataKey.LastRunID] = 'new'
+    next.cells[0]!.metadata[RunmeMetadataKey.ExecutionState] =
+      RunmeExecutionState.Running
+    next.cells[0]!.outputs = []
+    const changes = await buildOperationLogDiff({
+      previous,
+      next,
+      observedOperations: f.operations,
+      actorId: 'new',
+      firstActorSequence: 1,
+    })
+    expect(changes.filter((op) => op.kind === 'execution.start')).toHaveLength(
+      1
+    )
+    expect(reopen([...f.operations, ...changes]).cells[0]!.outputs).toEqual([])
+  })
+
   it('preserves the only completed result when another tab concurrently starts a run', () => {
     const f = fixture()
     f.append(
@@ -376,45 +553,53 @@ describe('execution output recovery', () => {
     expect(notebook.cells[0]!.outputs).toHaveLength(2)
   })
 
-  it('keeps recovered source editable through save/reopen and never journals the diagnostic', async () => {
-    const f = fixture()
-    f.finish('left', [f.start.op_id])
-    f.finish('right', [f.start.op_id])
-    const previous = reopen(f.operations)
-    expect(previous.cells[0]!.outputs[0]!.metadata[RECOVERED_OUTPUT_KEY]).toBe(
-      'true'
-    )
-    const edited = cloneNotebook(previous)
-    edited.cells[0]!.value = 'console.log("edited")'
-    const changes = await buildOperationLogDiff({
-      previous,
-      next: edited,
-      observedOperations: f.operations,
-      actorId: 'editor',
-      firstActorSequence: 1,
-    })
-    expect(changes.map((op) => op.kind)).toEqual(['cell.update'])
-    expect(JSON.stringify(changes)).not.toContain('conflicting or invalid')
-    f.operations.push(...changes)
-    const saved = reopen(f.operations)
-    expect(saved.cells[0]!.value).toBe('console.log("edited")')
-    expect(outputText(saved)).toContain('conflicting')
+  it.each(['finish', 'start'])(
+    'keeps recovered %s conflicts editable through save/reopen/rerun without journaling diagnostics',
+    async (conflict) => {
+      const f = fixture()
+      f.finish('left', [f.start.op_id])
+      if (conflict === 'finish') f.finish('right', [f.start.op_id])
+      else
+        f.append('execution.start', {
+          ...(f.start.payload as object),
+          input_sha256: 'conflicting-hash',
+        } as JsonValue)
+      const previous = reopen(f.operations)
+      expect(
+        previous.cells[0]!.outputs[0]!.metadata[RECOVERED_OUTPUT_KEY]
+      ).toBe('true')
+      const edited = cloneNotebook(previous)
+      edited.cells[0]!.value = 'console.log("edited")'
+      const changes = await buildOperationLogDiff({
+        previous,
+        next: edited,
+        observedOperations: f.operations,
+        actorId: 'editor',
+        firstActorSequence: 1,
+      })
+      expect(changes.map((op) => op.kind)).toEqual(['cell.update'])
+      expect(JSON.stringify(changes)).not.toContain('conflicting or invalid')
+      f.operations.push(...changes)
+      const saved = reopen(f.operations)
+      expect(saved.cells[0]!.value).toBe('console.log("edited")')
+      expect(outputText(saved)).toContain('conflicting')
 
-    const running = cloneNotebook(saved)
-    running.cells[0]!.metadata[RunmeMetadataKey.LastRunID] = 'rerun'
-    running.cells[0]!.metadata[RunmeMetadataKey.ExecutionState] =
-      RunmeExecutionState.Running
-    running.cells[0]!.outputs = []
-    const rerun = await buildOperationLogDiff({
-      previous: saved,
-      next: running,
-      observedOperations: f.operations,
-      actorId: 'runner',
-      firstActorSequence: 1,
-    })
-    f.operations.push(...rerun)
-    expect(reopen(f.operations).cells[0]!.outputs).toEqual([])
-    f.finish('recovered', undefined, 'rerun')
-    expect(outputText(reopen(f.operations))).toBe('recovered')
-  })
+      const running = cloneNotebook(saved)
+      running.cells[0]!.metadata[RunmeMetadataKey.LastRunID] = 'rerun'
+      running.cells[0]!.metadata[RunmeMetadataKey.ExecutionState] =
+        RunmeExecutionState.Running
+      running.cells[0]!.outputs = []
+      const rerun = await buildOperationLogDiff({
+        previous: saved,
+        next: running,
+        observedOperations: f.operations,
+        actorId: 'runner',
+        firstActorSequence: 1,
+      })
+      f.operations.push(...rerun)
+      expect(reopen(f.operations).cells[0]!.outputs).toEqual([])
+      f.finish('recovered', undefined, 'rerun')
+      expect(outputText(reopen(f.operations))).toBe('recovered')
+    }
+  )
 })

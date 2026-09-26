@@ -2,6 +2,7 @@ import {
   type ExecutionFinishRecord,
   advanceExecutionFinishes,
   executionFinishError,
+  executionStartError,
   operationObserves,
 } from './executionRecovery'
 import { committedOperationIds, orderOperationSet } from './order'
@@ -202,6 +203,25 @@ export function materializeOperationLog(
     )
   )
 
+  // Index all effective aliases before replay. A later duplicate is an observation
+  // of the same run, not a new run that can supersede a genuine rerun or a clear.
+  const startAliases = new Map<string, RunmeOperation[]>()
+  for (const operation of ordered.ordered) {
+    if (
+      !committed.has(operation.op_id) ||
+      rejectedOperationIds.has(operation.op_id) ||
+      operation.kind !== 'execution.start'
+    )
+      continue
+    const payload = operation.payload as unknown as ExecutionStartPayload
+    const aliases = startAliases.get(payload.execution_id) ?? []
+    aliases.push(operation)
+    startAliases.set(payload.execution_id, aliases)
+  }
+  const startErrors = new Map(
+    [...startAliases].map(([id, aliases]) => [id, executionStartError(aliases)])
+  )
+
   const registersFor = (cellId: string): CellRegisters => {
     const existing = cells.get(cellId)
     if (existing) return existing
@@ -218,7 +238,15 @@ export function materializeOperationLog(
           (start.payload as unknown as ExecutionStartPayload).execution_id
         ) ?? []
     )
-    const error = finishes.length ? executionFinishError(finishes) : undefined
+    const error =
+      (activeExecutions.get(cellId) ?? [])
+        .map((start) =>
+          startErrors.get(
+            (start.payload as unknown as ExecutionStartPayload).execution_id
+          )
+        )
+        .find(Boolean) ??
+      (finishes.length ? executionFinishError(finishes) : undefined)
     const finish = finishes.at(-1)
     const start = finish
       ? executionStarts.get(finish.payload.execution_id)
@@ -323,19 +351,42 @@ export function materializeOperationLog(
       }
       case 'execution.start': {
         const payload = operation.payload as unknown as ExecutionStartPayload
-        if (executionStarts.has(payload.execution_id)) {
-          throw new Error(
-            `Execution ${payload.execution_id} has more than one start`
-          )
+        if (!executionStarts.has(payload.execution_id)) {
+          executionStarts.set(payload.execution_id, {
+            payload,
+            operationId: operation.op_id,
+          })
         }
-        executionStarts.set(payload.execution_id, {
-          payload,
-          operationId: operation.op_id,
-        })
+        const aliases = startAliases.get(payload.execution_id)!
+        // A conflicting cell association gets a diagnostic in each affected cell.
+        // Within a cell, only its first occurrence activates this execution.
+        if (
+          aliases.find(
+            (alias) =>
+              (alias.payload as unknown as ExecutionStartPayload).cell_id ===
+              payload.cell_id
+          )!.op_id !== operation.op_id
+        )
+          break
         activeExecutions.set(payload.cell_id, [
-          ...(activeExecutions.get(payload.cell_id) ?? []).filter(
-            (start) => !operationObserves(operation, start.op_id, operationById)
-          ),
+          ...(activeExecutions.get(payload.cell_id) ?? []).filter((start) => {
+            const id = (start.payload as unknown as ExecutionStartPayload)
+              .execution_id
+            const aliases = startAliases.get(id)!
+            const observes = (alias: RunmeOperation) =>
+              operationObserves(operation, alias.op_id, operationById)
+            // Conflicting concurrent claims must all be observed before a rerun
+            // resolves them. A later re-recording cannot resurrect the old run.
+            const superseded = startErrors.get(id)
+              ? aliases
+                  .filter(
+                    (alias) =>
+                      !operationObserves(alias, operation.op_id, operationById)
+                  )
+                  .every(observes)
+              : aliases.some(observes)
+            return !superseded
+          }),
           operation,
         ])
         updateExecutionOutputs(payload.cell_id, operation.op_id)
@@ -355,14 +406,24 @@ export function materializeOperationLog(
           operationById
         )
         executionFinishes.set(payload.execution_id, finishes)
-        if (
-          (activeExecutions.get(start.payload.cell_id) ?? []).some(
-            (active) =>
-              (active.payload as unknown as ExecutionStartPayload)
-                .execution_id === payload.execution_id
-          )
+        const cellIds = new Set(
+          startAliases
+            .get(payload.execution_id)!
+            .map(
+              (alias) =>
+                (alias.payload as unknown as ExecutionStartPayload).cell_id
+            )
         )
-          updateExecutionOutputs(start.payload.cell_id, operation.op_id)
+        for (const cellId of cellIds) {
+          if (
+            (activeExecutions.get(cellId) ?? []).some(
+              (active) =>
+                (active.payload as unknown as ExecutionStartPayload)
+                  .execution_id === payload.execution_id
+            )
+          )
+            updateExecutionOutputs(cellId, operation.op_id)
+        }
         break
       }
       case 'comment.add': {
@@ -541,7 +602,9 @@ export function materializeOperationLog(
   const executions: MaterializedExecution[] = [...executionStarts].map(
     ([executionId, start]) => {
       const finishes = executionFinishes.get(executionId)
-      const error = finishes ? executionFinishError(finishes) : undefined
+      const error =
+        startErrors.get(executionId) ??
+        (finishes ? executionFinishError(finishes) : undefined)
       const finish = error ? undefined : finishes?.at(-1)
       return {
         execution_id: executionId,
