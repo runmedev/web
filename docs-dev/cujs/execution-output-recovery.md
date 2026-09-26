@@ -2,7 +2,7 @@
 
 ## User journey
 
-An existing `.runme` notebook contains multiple completion records for the same
+An existing `.runme` notebook contains multiple start or completion records for the same
 execution. The user must still be able to open it, edit its cells, save changes,
 and run the affected cell again.
 
@@ -37,3 +37,22 @@ and run the affected cell again.
   type a source edit, reload, then use the Run button with the browser runner.
   Verify the rendered diagnostic and replacement output, and capture screenshots
   under `app/test/browser/test-output/`.
+
+## Duplicate execution starts
+
+- Refresh flushes pending editor snapshots before loading the shared journal.
+  Returning to a known `lastRunID` must not append another start for that run.
+- Equivalent starts (all payload fields except `started_at` agree) preserve the
+  original result. Different source/provenance, runner, input, or cell associations
+  produce a diagnostic instead of guessing which execution happened. Conflicting
+  cell associations affect each implicated cell; unrelated cells remain usable.
+- A duplicate is not a new execution: even one recorded after a newer run or an
+  explicit clear must not reactivate an older run. A new run observing a duplicate
+  observes the same execution identity as one observing the first start.
+- Distinct concurrent run IDs retain the existing concurrent-result behavior.
+- Exercise open/edit/save/reopen/rerun on conflicting starts as well as finishes.
+  Preserve all original records and omit recovery diagnostics from exports.
+
+Automated coverage lives in `executionRecovery.test.ts`, `editorJournal.test.ts`,
+and the parameterized storage recovery journey in `local.test.ts`. Browser checks
+can use the same journey above with a second start whose input hash conflicts.

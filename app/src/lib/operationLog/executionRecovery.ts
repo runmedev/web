@@ -1,5 +1,10 @@
 import { canonicalJsonEqual } from './canonicalJson'
-import type { ExecutionFinishPayload, JsonValue, RunmeOperation } from './types'
+import type {
+  ExecutionFinishPayload,
+  ExecutionStartPayload,
+  JsonValue,
+  RunmeOperation,
+} from './types'
 
 export interface ExecutionFinishRecord {
   payload: ExecutionFinishPayload
@@ -74,6 +79,27 @@ export function executionFinishError(
     }
   } catch {
     return `Execution ${first.execution_id} has invalid saved output. Run this cell again to replace this error with new output.`
+  }
+  return undefined
+}
+
+/** Re-recording a start may change its timestamp, but must not change provenance. */
+export function executionStartError(
+  starts: RunmeOperation[]
+): string | undefined {
+  const identity = (operation: RunmeOperation): JsonValue => {
+    const { started_at: _startedAt, ...identity } =
+      operation.payload as unknown as ExecutionStartPayload
+    return identity as unknown as JsonValue
+  }
+  if (
+    starts.some(
+      (start) => !canonicalJsonEqual(identity(starts[0]!), identity(start))
+    )
+  ) {
+    const { execution_id } = starts[0]!
+      .payload as unknown as ExecutionStartPayload
+    return `Execution ${execution_id} has conflicting start records. The saved output cannot be determined. Run this cell again to replace this error with new output.`
   }
   return undefined
 }

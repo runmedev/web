@@ -305,7 +305,15 @@ export async function buildOperationLogDiff({
     }
 
     const runChanged = Boolean(nextRunId && nextRunId !== previousRunId)
-    if (runChanged) {
+    // Metadata can return to a historical run after a stale snapshot, restore,
+    // or refresh. That is not a second execution start. Use effective history so
+    // a rejected start does not prevent a subsequent accepted execution.
+    const knownStart = materialized.executions.some(
+      (execution) =>
+        execution.execution_id === nextRunId &&
+        execution.start.cell_id === cell.refId
+    )
+    if (runChanged && !knownStart) {
       const source = materializeOperationLog(operations).notebook.cells.find(
         (candidate) => candidate.cell_id === cell.refId
       )
