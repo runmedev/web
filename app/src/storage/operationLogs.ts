@@ -331,7 +331,10 @@ export class MemoryOperationLogStorage implements OperationLogStorage {
   async read(ref: OperationLogRef): Promise<OperationLogSnapshot> {
     const document = this.documents.get(ref.path)
     if (document === undefined) {
-      throw new Error(`Operation log not found: ${ref.path}`)
+      throw new DOMException(
+        `Operation log not found: ${ref.path}`,
+        'NotFoundError'
+      )
     }
     validateFraming(document, 'Stored operation log')
     return snapshot(ref, document)
@@ -354,7 +357,10 @@ export class MemoryOperationLogStorage implements OperationLogStorage {
     return this.coordinator.runExclusive(ref.path, async () => {
       const original = this.documents.get(ref.path)
       if (original === undefined) {
-        throw new Error(`Operation log not found: ${ref.path}`)
+        throw new DOMException(
+          `Operation log not found: ${ref.path}`,
+          'NotFoundError'
+        )
       }
       const current = options.prepareDocument?.(original) ?? original
       const records = await createRecords(current)
@@ -376,7 +382,10 @@ export class MemoryOperationLogStorage implements OperationLogStorage {
     validateFraming(document, 'Replacement operation log')
     return this.coordinator.runExclusive(ref.path, async () => {
       if (!this.documents.has(ref.path)) {
-        throw new Error(`Operation log not found: ${ref.path}`)
+        throw new DOMException(
+          `Operation log not found: ${ref.path}`,
+          'NotFoundError'
+        )
       }
       if (
         options.expectedChecksum &&

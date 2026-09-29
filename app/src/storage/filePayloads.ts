@@ -103,10 +103,12 @@ export class MemoryFilePayloadStorage implements FilePayloadStorage {
   }
   async read(ref: FilePayloadRef): Promise<string> {
     const content = this.values.get(ref.path)
-    if (
-      content === undefined ||
-      (await filePayloadChecksum(content)) !== ref.checksum
-    )
+    if (content === undefined)
+      throw new DOMException(
+        `Notebook payload missing or corrupt: ${ref.path}`,
+        'NotFoundError'
+      )
+    if ((await filePayloadChecksum(content)) !== ref.checksum)
       throw new Error(`Notebook payload missing or corrupt: ${ref.path}`)
     return content
   }

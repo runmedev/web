@@ -60,6 +60,7 @@ import LocalNotebooks, {
 } from './local'
 import { NotebookStoreItemType } from './notebook'
 import { MemoryOperationLogStorage } from './operationLogs'
+import { OwnedOperationLogs } from './ownedOperationLogs'
 import { MemoryRevisionDocStorage } from './revisionDocs'
 
 /** Collect small fixture pages for assertions; production APIs always expose a cursor. */
@@ -9953,5 +9954,301 @@ describe('OPFS notebook payload migration', () => {
     await store.rename(uri, 'renamed.json')
     expect((await store.files.get(uri))?.contentRef).toEqual(raw?.contentRef)
     expect((await store.files.get(uri))?.name).toBe('renamed.json')
+  })
+})
+
+describe('LocalNotebooks missing OPFS recovery', () => {
+  const uri = 'local://file/lost-opfs'
+  const remoteId = 'https://drive.google.com/file/d/recoverable/view'
+
+  /** Keep IndexedDB locators while removing the durable bytes, as after OPFS loss. */
+  async function fixture(format = 'runme') {
+    const notebook = create(parser_pb.NotebookSchema, {
+      cells: [
+        create(parser_pb.CellSchema, {
+          refId: 'recover-cell',
+          kind: parser_pb.CellKind.CODE,
+          languageId: 'python',
+          value: 'print("from Drive")',
+        }),
+      ],
+    })
+    const content =
+      format === 'runme'
+        ? (
+            await convertLegacyNotebookFileToRunme(
+              encodeRunmeNotebook(notebook),
+              'source.json'
+            )
+          ).content
+        : format === 'ipynb'
+          ? encodeIpynbNotebook(notebook).text
+          : encodeRunmeNotebook(notebook)
+    const drive = {
+      loadContent: vi.fn(async () => content),
+      getVersionMetadata: vi.fn(async () => ({
+        md5Checksum: md5(content),
+        version: '1',
+      })),
+      saveContent: vi.fn(),
+      save: vi.fn(),
+    }
+    const logs = new MemoryOperationLogStorage()
+    const store = createTestStore(drive, { operationLogStorage: logs })
+    const payloads = (store as any).payloadStorage as MemoryFilePayloadStorage
+    const operationLogRef =
+      format === 'runme' ? (await logs.initialize(uri, content)).ref : undefined
+    const contentRef =
+      format !== 'runme'
+        ? await payloads.write(encodeRunmeNotebook(notebook))
+        : undefined
+    await store.files.put({
+      id: uri,
+      name: `lost.${format}`,
+      remoteId,
+      doc: '',
+      operationLogRef,
+      contentRef,
+      md5Checksum: 'lost-local-version',
+      lastRemoteChecksum: 'old-upstream',
+      lastSynced: new Date().toISOString(),
+    })
+    if (operationLogRef) await logs.delete(operationLogRef)
+    payloads.values.clear()
+    return { store, drive, logs, payloads, content, operationLogRef }
+  }
+
+  it.each([
+    'load',
+    'loadContent',
+    'loadOperationLogSnapshot',
+    'createOperationLogSaveStore',
+  ] as const)(
+    'restores a missing journal through %s, preserving history and subsequent edits',
+    async (method) => {
+      const f = await fixture()
+      try {
+        if (method === 'createOperationLogSaveStore')
+          await f.store.createOperationLogSaveStore(uri, {
+            actorId: 'open-test',
+          })
+        else await f.store[method](uri)
+        expect(await f.store.loadContent(uri)).toBe(f.content)
+        expect(f.drive.loadContent).toHaveBeenCalledTimes(1)
+        expect(f.drive.saveContent).not.toHaveBeenCalled()
+        expect((await f.store.files.get(uri))?.id).toBe(uri)
+        const editor = await f.store.createOperationLogSaveStore(uri, {
+          actorId: 'recovered-editor',
+        })
+        editor.initialNotebook.cells[0].value = 'print("edited")'
+        await editor.save(uri, editor.initialNotebook)
+        expect((await f.store.load(uri)).cells[0].value).toBe('print("edited")')
+        // A new execution must persist fresh output in the recovered journal.
+        editor.initialNotebook.cells[0].metadata = {
+          ...editor.initialNotebook.cells[0].metadata,
+          [RunmeMetadataKey.LastRunID]: 'recovered-run',
+          [RunmeMetadataKey.ExecutionState]: 'completed',
+        }
+        editor.initialNotebook.cells[0].outputs = [
+          create(parser_pb.CellOutputSchema, {
+            items: [
+              create(parser_pb.CellOutputItemSchema, {
+                mime: 'text/plain',
+                data: new TextEncoder().encode('edited\n'),
+              }),
+            ],
+          }),
+        ]
+        await editor.save(uri, editor.initialNotebook)
+        const reopened = await f.store.load(uri)
+        expect(
+          new TextDecoder().decode(reopened.cells[0].outputs[0].items[0].data)
+        ).toBe('edited\n')
+        const before = parseOperationLog(f.content)
+        const after = parseOperationLog(await f.store.loadContent(uri))
+        expect(after.header.notebook_id).toBe(before.header.notebook_id)
+        for (const op of before.operations)
+          expect(after.operations).toContainEqual(op)
+        expect(f.drive.loadContent).toHaveBeenCalledTimes(1)
+      } finally {
+        f.store.stopSyncQueue()
+      }
+    }
+  )
+
+  it.each(['json', 'ipynb'])(
+    'restores missing %s payloads and persists edits',
+    async (format) => {
+      const f = await fixture(format)
+      try {
+        const loaded = await f.store.load(uri)
+        expect(loaded.cells[0].value).toBe('print("from Drive")')
+        loaded.cells[0].value = 'edited'
+        await f.store.save(uri, loaded)
+        expect((await f.store.load(uri)).cells[0].value).toBe('edited')
+        expect(f.drive.loadContent).toHaveBeenCalledTimes(1)
+      } finally {
+        f.store.stopSyncQueue()
+      }
+    }
+  )
+
+  it('restores through the storage owner without acknowledging an intervening edit', async () => {
+    const f = await fixture()
+    const generations = new Map<string, { path: string; generation: number }>()
+    Object.assign(f.store.files, {
+      db: {
+        transaction: async (...args: unknown[]) =>
+          (args.at(-1) as () => Promise<unknown>)(),
+      },
+    })
+    const owner = new OwnedOperationLogs(
+      f.logs,
+      f.store.files,
+      {
+        get: async (path: string) => generations.get(path),
+        put: async (value: { path: string; generation: number }) =>
+          generations.set(value.path, value),
+      } as any,
+      (id, changes) => (f.store as any).updateFile(id, changes)
+    )
+    Object.assign(f.store, {
+      ownedLogs: owner,
+      operationLogStorage: owner,
+      runtime: { owner: true },
+    })
+    const initialize = owner.initialize.bind(owner)
+    vi.spyOn(owner, 'initialize').mockImplementationOnce(
+      async (id, content) => {
+        const restored = await initialize(id, content)
+        const editor = await f.store.createOperationLogSaveStore(uri, {
+          actorId: 'concurrent-editor',
+          initialDocument: content,
+        })
+        editor.initialNotebook.cells[0].value = 'new edit during recovery'
+        await editor.save(uri, editor.initialNotebook)
+        return restored
+      }
+    )
+    try {
+      expect((await f.store.load(uri)).cells[0].value).toBe(
+        'new edit during recovery'
+      )
+      const record = await f.store.files.get(uri)
+      expect(record?.md5Checksum).toBe('')
+      expect(record?.lastRemoteChecksum).toBe(md5(f.content))
+      expect(record?.pendingInitializationRef).toBeUndefined()
+    } finally {
+      f.store.stopSyncQueue()
+    }
+  })
+
+  it('recovers when the journal and pending initialization payload are both missing', async () => {
+    const f = await fixture()
+    const ref = await f.payloads.write(f.content)
+    await f.store.files.update(uri, { pendingInitializationRef: ref })
+    f.payloads.values.clear()
+    try {
+      expect((await f.store.load(uri)).cells[0].value).toBe(
+        'print("from Drive")'
+      )
+      expect(
+        (await f.store.files.get(uri))?.pendingInitializationRef
+      ).toBeUndefined()
+      expect(await f.store.loadContent(uri)).toBe(f.content)
+    } finally {
+      f.store.stopSyncQueue()
+    }
+  })
+
+  it('downloads once when two opens encounter the same missing file', async () => {
+    const f = await fixture()
+    try {
+      const results = await Promise.all([f.store.load(uri), f.store.load(uri)])
+      expect(results.map((n) => n.cells[0].value)).toEqual([
+        'print("from Drive")',
+        'print("from Drive")',
+      ])
+      expect(f.drive.loadContent).toHaveBeenCalledTimes(1)
+    } finally {
+      f.store.stopSyncQueue()
+    }
+  })
+
+  it.each(['offline', '404', 'malformed', 'empty', 'changed'])(
+    'preserves the reference if Drive is %s',
+    async (failure) => {
+      const f = await fixture()
+      const original = await f.store.files.get(uri)
+      if (failure === 'offline' || failure === '404')
+        f.drive.loadContent.mockRejectedValue(new Error(failure))
+      else {
+        const content = failure === 'empty' ? '' : 'not a notebook'
+        f.drive.loadContent.mockResolvedValue(content)
+        if (failure !== 'changed')
+          f.drive.getVersionMetadata.mockResolvedValue({
+            md5Checksum: md5(content),
+            version: '1',
+          })
+      }
+      try {
+        await expect(f.store.load(uri)).rejects.toThrow()
+        expect(await f.store.files.get(uri)).toEqual(original)
+        await expect(f.logs.read(f.operationLogRef!)).rejects.toMatchObject({
+          name: 'NotFoundError',
+        })
+        expect(f.drive.saveContent).not.toHaveBeenCalled()
+      } finally {
+        f.store.stopSyncQueue()
+      }
+    }
+  )
+
+  it.each(['local-only', 'healthy', 'corrupt', 'permission'])(
+    'does not download for %s storage',
+    async (state) => {
+      const f = await fixture()
+      try {
+        if (state === 'local-only')
+          await f.store.files.update(uri, { remoteId: uri })
+        if (state === 'healthy') await f.logs.initialize(uri, f.content)
+        if (state === 'corrupt')
+          await f.logs.initialize(uri, 'invalid history\n')
+        if (state === 'permission')
+          vi.spyOn(f.logs, 'read').mockRejectedValue(
+            new DOMException('permission denied', 'NotAllowedError')
+          )
+        if (state === 'healthy')
+          expect((await f.store.load(uri)).cells).toHaveLength(1)
+        else await expect(f.store.load(uri)).rejects.toThrow()
+        expect(f.drive.loadContent).not.toHaveBeenCalled()
+        if (state === 'corrupt')
+          expect((await f.logs.read(f.operationLogRef!)).document).toBe(
+            'invalid history\n'
+          )
+      } finally {
+        f.store.stopSyncQueue()
+      }
+    }
+  )
+
+  it('keeps a journal recreated while Drive downloads', async () => {
+    const f = await fixture()
+    const localContent = (
+      await convertLegacyNotebookFileToRunme(
+        notebookJson('new local content'),
+        'local.json'
+      )
+    ).content
+    f.drive.loadContent.mockImplementationOnce(async () => {
+      await f.logs.initialize(uri, localContent)
+      return f.content
+    })
+    try {
+      expect((await f.store.load(uri)).cells[0].value).toBe('new local content')
+      expect(await f.store.loadContent(uri)).toBe(localContent)
+    } finally {
+      f.store.stopSyncQueue()
+    }
   })
 })
