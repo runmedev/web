@@ -314,3 +314,26 @@ ready items blocked by a file claim and the oldest active attempt.
 through the other real Chromium tab while the first is stalled on credentials.
 Its output includes active count and configured capacity. It then disables both
 tabs' credential availability and verifies offline editing and restart persistence.
+
+## Missing OPFS files with a Drive copy
+
+If IndexedDB still identifies a Drive-backed notebook but its OPFS journal or
+cached JSON/IPYNB payload is missing, opening it downloads a consistent Drive
+snapshot into the same local notebook identity. Healthy cached notebooks still
+open offline. Recovery never uploads an empty replacement or overwrites a
+present but corrupt journal. Drive/auth failures leave the missing-file
+reference intact so opening can retry after connectivity is restored.
+
+Automated regression coverage: the `LocalNotebooks missing OPFS recovery` suite
+in `local.test.ts` removes only fixture OPFS bytes, retains metadata, and verifies
+open, edit, save, reopen, and fresh execution output. It also checks concurrent
+opens, a journal recreated during download, JSON/IPYNB payloads, and failed,
+empty, malformed, or changing Drive downloads. These are storage-level tests;
+the existing browser CUJ does not yet simulate origin storage loss.
+
+Manual acceptance in a disposable browser profile: mirror a Drive notebook,
+close its editor, and remove only its OPFS document while keeping IndexedDB.
+Reopen it and verify its cells are editable, edits and a rerun survive reopening,
+and the Drive file/local URI are unchanged. Repeat while offline, then restore
+connectivity and reopen. Never perform this destructive setup on a user's
+unsynced notebook.

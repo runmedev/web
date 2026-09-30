@@ -16,6 +16,7 @@ import {
   decodeNotebookFile,
   detectNotebookFileFormat,
   encodeIpynbNotebook,
+  inspectRunmeNotebookJsonShape,
   isNotebookFileName,
   notebookFileExtension,
   validateNotebookRenameFormat,
@@ -152,6 +153,16 @@ import {
 } from './revisionDocs'
 import { SyncDeferred, SyncWorkQueue } from './syncWorkQueue'
 import { readTablePage, scanTable, tableHasRecords } from './tableScan'
+
+/** DOMException identity does not survive every worker boundary; use its name. */
+function isMissingOpfsFile(error: unknown): boolean {
+  return Boolean(
+    error &&
+      typeof error === 'object' &&
+      'name' in error &&
+      error.name === 'NotFoundError'
+  )
+}
 
 // Local folder URI is a special folder that contains all notebooks which are local (i.e. not synced to Drive)
 export const LOCAL_FOLDER_URI = 'local://folder/local'
@@ -927,6 +938,145 @@ export class LocalNotebooks extends Dexie {
           ? await this.payloadIO(this.payloadStorage.read(record.contentRef))
           : ''),
     }
+  }
+
+  /** Retry an explicit open once, and only for a filesystem missing-file error. */
+  private async withMissingOpfsRecovery<T>(
+    uri: string,
+    read: () => Promise<T>
+  ): Promise<T> {
+    try {
+      return await read()
+    } catch (error) {
+      if (!isMissingOpfsFile(error)) throw error
+      const recovered = await this.serializeLocalSave(uri, () =>
+        this.driveSyncCoordinator.runExclusive(uri, () =>
+          this.restoreMissingOpfsFile(uri)
+        )
+      )
+      if (!recovered) throw error
+      return read()
+    }
+  }
+
+  /**
+   * Restore the existing mirror identity after OPFS loss. The caller holds the
+   * local-save queue and Drive lock, so recovery cannot race a save or sync.
+   * Present but invalid files are never replaced by this missing-file path.
+   */
+  private async restoreMissingOpfsFile(uri: string): Promise<boolean> {
+    const record = await this.files.get(uri)
+    if (
+      !record ||
+      !isDriveUri(record.remoteId) ||
+      !isNotebookFileName(record.name)
+    )
+      return false
+    const operationLog =
+      detectNotebookFileFormat(record.name) === 'runme-operation-log'
+    const readLocal = async () => {
+      if (operationLog && record.operationLogRef)
+        await this.operationLogStorage.read(record.operationLogRef)
+      else if (record.contentRef) await this.hydrateFile(record)
+      else return false
+      return true
+    }
+    try {
+      // A concurrent open may already have recovered the same file.
+      if (await readLocal()) return true
+      return false
+    } catch (error) {
+      if (!isMissingOpfsFile(error)) throw error
+    }
+
+    const snapshot = await this.loadConsistentDriveOperationLogSnapshot(
+      record.remoteId
+    )
+    if (!snapshot) throw new DriveSnapshotChangedError(record.remoteId)
+    // Decode before writing, retaining the missing reference if Drive is empty,
+    // malformed, unavailable, or changes during the download.
+    if (
+      !snapshot.content.trim() ||
+      (detectNotebookFileFormat(record.name) === 'runme-json' &&
+        !inspectRunmeNotebookJsonShape(snapshot.content))
+    ) {
+      throw new Error(
+        `Drive recovery source is not a notebook: ${record.remoteId}`
+      )
+    }
+    const decoded = decodeNotebookFile(snapshot.content, record.name)
+    const latest = await this.files.get(uri)
+    if (
+      !latest ||
+      latest.remoteId !== record.remoteId ||
+      latest.name !== record.name ||
+      latest.contentRef?.path !== record.contentRef?.path ||
+      latest.operationLogRef?.path !== record.operationLogRef?.path ||
+      latest.md5Checksum !== record.md5Checksum
+    )
+      throw new Error(`Notebook changed during OPFS recovery: ${uri}`)
+    try {
+      if (await readLocal()) return true
+    } catch (error) {
+      if (!isMissingOpfsFile(error)) throw error
+    }
+
+    const upstreamChecksum = md5(snapshot.content)
+    const baseline = {
+      lastRemoteChecksum: upstreamChecksum,
+      lastUpstreamVersion: driveMetadataToUpstreamVersion(snapshot.version),
+      lastSynced: nowIsoString(),
+      lastSyncError: undefined,
+    }
+    if (operationLog) {
+      // initialize refuses to overwrite a journal that appeared meanwhile.
+      // Keep the exact Drive history, including its notebook and operation IDs.
+      const stored = await this.operationLogStorage.initialize(
+        uri,
+        snapshot.content
+      )
+      if (this.ownedLogs) {
+        await this.ownedLogs.acknowledge(uri, stored, record.remoteId, baseline)
+      } else {
+        await this.updateFile(uri, {
+          ...baseline,
+          operationLogRef: stored.ref,
+          md5Checksum: stored.checksum,
+        })
+      }
+      await this.updateFile(uri, {
+        doc: '',
+        pendingOperationLogInitialization: undefined,
+      })
+    } else {
+      const restored = decoded.ipynb
+        ? await this.decodeUpstreamNotebook({
+            localUri: uri,
+            record,
+            content: snapshot.content,
+            upstreamFingerprint: upstreamChecksum,
+          })
+        : {
+            serialized: serializeNotebook(decoded.notebook),
+            ipynbPreservation: undefined,
+          }
+      await this.updateFile(uri, {
+        ...baseline,
+        doc: restored.serialized,
+        md5Checksum: checksumForSerializedNotebook(restored.serialized),
+        ipynbPreservation: restored.ipynbPreservation,
+      })
+    }
+    appLogger.warn('Restored missing OPFS notebook from Google Drive', {
+      attrs: {
+        scope: 'storage.drive.recovery',
+        code: 'NOTEBOOK_OPFS_RESTORED',
+        localUri: uri,
+        remoteUri: record.remoteId,
+      },
+    })
+    this.notifySync(uri)
+    return true
   }
 
   /** Initialization bytes are recovery input, not part of ordinary content reads. */
@@ -2132,8 +2282,7 @@ export class LocalNotebooks extends Dexie {
     }
 
     const initialDocument =
-      options.initialDocument ??
-      (await this.operationLogStorage.read(record.operationLogRef)).document
+      options.initialDocument ?? (await this.loadContent(uri))
     let view: ParsedOperationLog = parseOperationLog(initialDocument)
     let previous = materializedLogToNotebook(
       materializeOperationLog(view.operations)
@@ -3181,7 +3330,12 @@ export class LocalNotebooks extends Dexie {
     }
   }
 
+  /** Read local content, restoring missing OPFS bytes from Drive when necessary. */
   async loadContent(uri: string): Promise<string> {
+    return this.withMissingOpfsRecovery(uri, () => this.loadContentInner(uri))
+  }
+
+  private async loadContentInner(uri: string): Promise<string> {
     await this.recoverLocalInitialization(uri)
     if (!uri.startsWith('local://file/')) {
       throw new Error(
@@ -3283,8 +3437,16 @@ export class LocalNotebooks extends Dexie {
     return content
   }
 
-  /** Materialize the current local .runme OPFS log without upstream I/O. */
+  /** Materialize the local journal, downloading it only when OPFS lost the file. */
   async loadOperationLogSnapshot(uri: string): Promise<parser_pb.Notebook> {
+    return this.withMissingOpfsRecovery(uri, () =>
+      this.loadOperationLogSnapshotInner(uri)
+    )
+  }
+
+  private async loadOperationLogSnapshotInner(
+    uri: string
+  ): Promise<parser_pb.Notebook> {
     if (!uri.startsWith('local://file/')) {
       throw new Error(
         'LocalNotebooks.loadOperationLogSnapshot expects a local://file/ URI; got ' +
@@ -3690,7 +3852,12 @@ export class LocalNotebooks extends Dexie {
     this.notifySync(uri)
   }
 
+  /** Keep healthy opens local; a missing OPFS file can be restored from Drive. */
   async load(uri: string): Promise<parser_pb.Notebook> {
+    return this.withMissingOpfsRecovery(uri, () => this.loadInner(uri))
+  }
+
+  private async loadInner(uri: string): Promise<parser_pb.Notebook> {
     await this.recoverLocalInitialization(uri)
     if (!uri.startsWith('local://file/')) {
       throw new Error(
@@ -3739,7 +3906,7 @@ export class LocalNotebooks extends Dexie {
     }
 
     if (detectNotebookFileFormat(record.name) === 'runme-operation-log') {
-      return this.loadOperationLogSnapshot(uri)
+      return this.loadOperationLogSnapshotInner(uri)
     }
 
     if (!record.doc) {
