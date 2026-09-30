@@ -16,6 +16,7 @@ import {
   decodeNotebookFile,
   detectNotebookFileFormat,
   encodeIpynbNotebook,
+  inspectRunmeNotebookJsonShape,
   isNotebookFileName,
   notebookFileExtension,
   validateNotebookRenameFormat,
@@ -994,6 +995,15 @@ export class LocalNotebooks extends Dexie {
     if (!snapshot) throw new DriveSnapshotChangedError(record.remoteId)
     // Decode before writing, retaining the missing reference if Drive is empty,
     // malformed, unavailable, or changes during the download.
+    if (
+      !snapshot.content.trim() ||
+      (detectNotebookFileFormat(record.name) === 'runme-json' &&
+        !inspectRunmeNotebookJsonShape(snapshot.content))
+    ) {
+      throw new Error(
+        `Drive recovery source is not a notebook: ${record.remoteId}`
+      )
+    }
     const decoded = decodeNotebookFile(snapshot.content, record.name)
     const latest = await this.files.get(uri)
     if (

@@ -10093,6 +10093,31 @@ describe('LocalNotebooks missing OPFS recovery', () => {
     }
   )
 
+  it.each([
+    '',
+    '{"error":"upstream failure"}',
+    '{"cells":[],"unrecognized":"data"}',
+  ])(
+    'does not turn invalid Drive JSON %j into an empty recovered notebook',
+    async (content) => {
+      const f = await fixture('json')
+      const original = await f.store.files.get(uri)
+      f.drive.loadContent.mockResolvedValue(content)
+      f.drive.getVersionMetadata.mockResolvedValue({
+        md5Checksum: md5(content),
+        version: '1',
+      })
+      try {
+        await expect(f.store.load(uri)).rejects.toThrow()
+        expect(await f.store.files.get(uri)).toEqual(original)
+        expect(f.payloads.values.size).toBe(0)
+        expect(f.drive.saveContent).not.toHaveBeenCalled()
+      } finally {
+        f.store.stopSyncQueue()
+      }
+    }
+  )
+
   it('restores through the storage owner without acknowledging an intervening edit', async () => {
     const f = await fixture()
     const generations = new Map<string, { path: string; generation: number }>()
