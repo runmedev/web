@@ -1356,6 +1356,8 @@ class FetchDriveFilesClient implements DriveFilesClient {
     mimeType?: string,
     resourceKey?: string
   ): Promise<void> {
+    // Request version metadata from the CORS-safe v3 upload endpoint. The
+    // receipt is also used to verify that Drive persisted the intended bytes.
     await this.request(
       'PATCH',
       `/upload/drive/v3/files/${encodeURIComponent(fileId)}`,
@@ -1363,6 +1365,7 @@ class FetchDriveFilesClient implements DriveFilesClient {
         params: {
           uploadType: 'media',
           supportsAllDrives: 'true',
+          fields: VERSION_FIELDS,
           resourceKey,
         },
         body: content,
@@ -1476,11 +1479,18 @@ class FetchDriveFilesClient implements DriveFilesClient {
   ): Promise<{
     metadata: DriveVersionMetadata | null
   }> {
+    // Match the normal metadata request shape, including its redundant fileId
+    // parameter. That route succeeds in browsers where the shorter request can
+    // pass preflight and then fail as an opaque fetch against Google's API.
     const response = await this.request(
       'GET',
       `/drive/v3/files/${encodeURIComponent(fileId)}`,
       {
-        params: { supportsAllDrives: true, fields: VERSION_FIELDS },
+        params: {
+          fileId,
+          supportsAllDrives: true,
+          fields: VERSION_FIELDS,
+        },
         headers: driveResourceKeyHeaders({ id: fileId, resourceKey }),
       }
     )
