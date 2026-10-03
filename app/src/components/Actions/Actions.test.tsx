@@ -505,6 +505,31 @@ beforeEach(() => {
 })
 
 describe('Actions tabs', () => {
+  it('toggles agent widget source and render modes without executing or unmounting output', () => {
+    const cell = create(parser_pb.CellSchema, {
+      refId: 'widget-cell', kind: parser_pb.CellKind.CODE, languageId: 'javascript', value: 'agents.monitor("sess_test")',
+      outputs: [create(parser_pb.CellOutputSchema, { items: [create(parser_pb.CellOutputItemSchema, {
+        mime: 'application/vnd.runme.agent-monitor+json',
+        data: new TextEncoder().encode(JSON.stringify({version: 1, id: 'saved-widget', sessionId: 'sess_test', pageSize: 50})),
+      })] })],
+    })
+    const stub = new StubCellData(cell)
+    stub.getRunnerName = () => APPKERNEL_RUNNER_NAME
+    const view = render(<Action cellData={stub as unknown as CellData} docUri="local://file/widget" isFirst={false} />)
+    const editor = view.container.querySelector('[data-cell-focus-role="editor"]') as HTMLElement
+    const output = view.container.querySelector('#widget-output-widget-cell') as HTMLElement
+    expect(editor.hidden).toBe(true)
+    const mounted = screen.getByTestId('agent-monitor')
+    fireEvent.click(screen.getByRole('button', {name: /^Edit$/}))
+    expect(editor.hidden).toBe(false)
+    expect(output.hidden).toBe(true)
+    expect(screen.getByTestId('agent-monitor')).toBe(mounted)
+    fireEvent.click(screen.getByRole('button', {name: /^Render$/}))
+    expect(output.hidden).toBe(false)
+    expect(stub.run).not.toHaveBeenCalled()
+    view.unmount()
+  })
+
 
   it.each([
     ['url', true, true, true],

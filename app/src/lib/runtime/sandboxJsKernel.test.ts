@@ -577,7 +577,9 @@ describe('SandboxJSKernel', () => {
   it('exposes app.getVersion in sandbox helpers, discovery, and the allowlist', () => {
     const srcDoc = buildSandboxSrcDoc({ enableOpfs: false, enableNet: false })
     expect(srcDoc).toContain('getVersion: () => hostCall("app.getVersion", [])')
-    expect(srcDoc).toContain('await app.getVersion() (loaded app build metadata)')
+    expect(srcDoc).toContain(
+      'await app.getVersion() (loaded app build metadata)'
+    )
     expect(CODE_MODE_SANDBOX_ALLOWED_METHODS).toContain('app.getVersion')
   })
 
@@ -589,7 +591,7 @@ describe('SandboxJSKernel', () => {
 
     expect(srcDoc).toMatch(/"tour",\s+"ui",\s+"opfs",\s+"net",\s+"embed"/)
     expect(srcDoc).toContain(
-      'runner(consoleProxy, runme, tour, ui, opfs, net, embed, notebooks'
+      'runner(consoleProxy, agents, runme, tour, ui, opfs, net, embed, notebooks'
     )
     expect(srcDoc).toContain('const runmeRunners = {')
     expect(srcDoc).toContain(

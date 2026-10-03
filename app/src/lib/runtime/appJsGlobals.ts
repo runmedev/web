@@ -17,6 +17,7 @@ import { LOCAL_FOLDER_URI } from '../../storage/local'
 import { NotebookStoreItemType } from '../../storage/notebook'
 import { getAuthData } from '../../token'
 import { agentEndpointManager } from '../agentEndpointManager'
+import { createAgentsApi } from '../agents/runtime'
 import { aisreClientManager } from '../aisreClientManager'
 import {
   disableAppConfigOverridesOnLoad,
@@ -368,6 +369,7 @@ function deriveTitleFromUri(uri: string): string {
 export function createAppJsGlobals({
   runme,
   sendOutput,
+  displayOutput,
   resolveNotebookStore,
   ensureFilesystemStore = defaultEnsureFilesystemStore,
   workspace,
@@ -385,6 +387,7 @@ export function createAppJsGlobals({
 }: {
   runme: RunmeConsoleApi
   sendOutput?: SendOutput
+  displayOutput?: (mime: string, value: string) => void
   resolveNotebookStore?: () => RuntimeNotebookStore | null
   ensureFilesystemStore?: () => FilesystemNotebookStore | null
   workspace?: WorkspaceApi
@@ -1813,9 +1816,11 @@ export function createAppJsGlobals({
         }
       },
     },
+    agents: createAgentsApi(displayOutput),
     help: () => {
       const message = [
         'Available namespaces:',
+        '  agents          - Render and control Agents API session monitors',
         '  runme           - Notebook helpers (run all, clear outputs)',
         '  tour            - Highlight UI targets with AI-authored annotations',
         '  notebooks       - Notebook document API plus create/append helpers',

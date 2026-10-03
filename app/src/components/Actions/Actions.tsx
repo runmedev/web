@@ -1,3 +1,4 @@
+import { AGENT_MONITOR_MIME } from '../../lib/agents/types'
 import { outputReferenceSource } from '../../lib/outputReferenceRuntime'
 import { OutputReferenceCell } from './OutputReferenceCell'
 import {
@@ -264,7 +265,8 @@ function syncIndicatorPresentation(state: NotebookSyncState | null): {
   switch (state?.status) {
     case 'not-downloaded':
       return {
-        label: 'Notebook has not been downloaded to this browser. Click to download now.',
+        label:
+          'Notebook has not been downloaded to this browser. Click to download now.',
         className: 'border border-nb-text-faint bg-transparent',
         clickable: true,
       }
@@ -805,6 +807,12 @@ export function Action({
   })
   const shareTargetUri =
     shareTarget.docUri === docUri ? shareTarget.targetUri : null
+  const [widgetEditing, setWidgetEditing] = useState(false)
+  const hasWidgetOutput =
+    cell?.outputs?.some((output) =>
+      output.items.some((item) => item.mime === AGENT_MONITOR_MIME)
+    ) ?? false
+  const [widgetSourceChanged, setWidgetSourceChanged] = useState(false)
   const [htmlEditRequest, setHtmlEditRequest] = useState(0)
   const [markdownEditRequest, setMarkdownEditRequest] = useState(0)
   const [pid, setPid] = useState<number | null>(null)
@@ -914,6 +922,8 @@ export function Action({
     if (readOnly) {
       return
     }
+    setWidgetEditing(false)
+    setWidgetSourceChanged(false)
     cellData.run()
   }, [cellData, readOnly])
 
@@ -2133,6 +2143,7 @@ export function Action({
           <div
             className="overflow-hidden rounded-t-nb-md"
             data-cell-focus-role="editor"
+            hidden={hasWidgetOutput && !widgetEditing}
           >
             <Editor
               commentRanges={commentSourceRanges}
@@ -2149,6 +2160,7 @@ export function Action({
               shouldFocus={isActiveCell && isWindowFocused}
               readOnly={readOnly}
               onChange={(v) => {
+                if (hasWidgetOutput) setWidgetSourceChanged(true)
                 const updated = create(parser_pb.CellSchema, cell)
                 updated.value = v
                 updateCellLocal(updated)
@@ -2158,6 +2170,30 @@ export function Action({
           </div>
 
           {/* Minimal toolbar: language + runner selectors + run/trash buttons */}
+          {hasWidgetOutput && (
+            <div
+              id={`widget-mode-${cell.refId}`}
+              className="flex items-center gap-2 border-b px-3 py-2 text-xs"
+            >
+              <button
+                type="button"
+                aria-pressed={widgetEditing}
+                onClick={() => setWidgetEditing(true)}
+              >
+                Edit
+              </button>
+              <button
+                type="button"
+                aria-pressed={!widgetEditing}
+                onClick={() => setWidgetEditing(false)}
+              >
+                Render
+              </button>
+              {widgetSourceChanged && (
+                <span>Source changed — Run to update the monitor.</span>
+              )}
+            </div>
+          )}
           <div id={`cell-toolbar-${cell.refId}`} className="cell-toolbar">
             <div className="flex items-center gap-3">
               <select
@@ -2319,7 +2355,12 @@ export function Action({
             {renderedOutputs}
           </div>
         )}
-        {renderedOutputItems}
+        <div
+          id={`widget-output-${cell.refId}`}
+          hidden={hasWidgetOutput && widgetEditing}
+        >
+          {renderedOutputItems}
+        </div>
       </div>
 
       {/* Context menu */}

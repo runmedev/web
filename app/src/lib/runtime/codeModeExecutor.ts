@@ -1,3 +1,4 @@
+import { callAgentsBridge } from '../agents/bridge'
 import {
   createDriveFile,
   listDriveFolderItems,
@@ -338,6 +339,8 @@ async function handleSandboxAppKernelBridgeCall({
   notebookDiffApi: ReturnType<typeof createNotebookDiffRuntimeApi>
 }): Promise<unknown> {
   const target = args[0]
+  if (method.startsWith('agents.'))
+    return callAgentsBridge(globals.agents, method, args)
   switch (method) {
     case 'runme.clear':
       return runmeApi.clear(target)
