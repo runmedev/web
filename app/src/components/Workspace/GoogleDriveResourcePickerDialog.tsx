@@ -14,6 +14,11 @@ import type {
   GoogleDriveResource,
 } from './googleDriveBrowser'
 
+import {
+  resolveGoogleDriveResourcePaths,
+  type GoogleDriveResourcePath,
+} from './googleDrivePaths'
+
 export type GoogleDrivePickerMode = 'file' | 'folder'
 
 export type PickedGoogleDriveResource = {
@@ -54,6 +59,10 @@ export function GoogleDriveResourcePickerDialog({
 }: GoogleDriveResourcePickerDialogProps) {
   const dialogRef = useRef<HTMLElement | null>(null)
   const requestIdRef = useRef(0)
+  const pathsAbortRef = useRef<AbortController | null>(null)
+  const [paths, setPaths] = useState<Record<string, GoogleDriveResourcePath>>(
+    {}
+  )
   const [roots, setRoots] = useState<GoogleDriveLocation[]>([])
   const [breadcrumbs, setBreadcrumbs] = useState<GoogleDriveLocation[]>([])
   const [resources, setResources] = useState<GoogleDriveResource[]>([])
@@ -69,6 +78,8 @@ export function GoogleDriveResourcePickerDialog({
 
   const loadRoots = useCallback(async () => {
     const requestId = ++requestIdRef.current
+    pathsAbortRef.current?.abort()
+    setPaths({})
     setLoading(true)
     setErrorMessage('')
     setBreadcrumbs([])
@@ -107,6 +118,8 @@ export function GoogleDriveResourcePickerDialog({
       nextBreadcrumbs: GoogleDriveLocation[]
     ) => {
       const requestId = ++requestIdRef.current
+      pathsAbortRef.current?.abort()
+      setPaths({})
       setLoading(true)
       setErrorMessage('')
       setBreadcrumbs(nextBreadcrumbs)
@@ -155,6 +168,8 @@ export function GoogleDriveResourcePickerDialog({
         return
       }
       const requestId = ++requestIdRef.current
+      pathsAbortRef.current?.abort()
+      setPaths({})
       setLoading(true)
       setErrorMessage('')
       setActiveSearch(query)
@@ -169,6 +184,20 @@ export function GoogleDriveResourcePickerDialog({
         )
         if (requestId === requestIdRef.current) {
           setResources(matches)
+          setLoading(false)
+          const controller = new AbortController()
+          pathsAbortRef.current = controller
+          await resolveGoogleDriveResourcePaths(
+            accessToken,
+            matches,
+            roots,
+            (id, path) => {
+              if (requestId === requestIdRef.current) {
+                setPaths((previous) => ({ ...previous, [id]: path }))
+              }
+            },
+            controller.signal
+          )
         }
       } catch (error) {
         if (requestId !== requestIdRef.current) {
@@ -192,13 +221,14 @@ export function GoogleDriveResourcePickerDialog({
         }
       }
     },
-    [accessToken, loadRoots, mode]
+    [accessToken, loadRoots, mode, roots]
   )
 
   useEffect(() => {
     void loadRoots()
     return () => {
       requestIdRef.current += 1
+      pathsAbortRef.current?.abort()
     }
   }, [loadRoots])
 
@@ -445,10 +475,12 @@ export function GoogleDriveResourcePickerDialog({
             </p>
           ) : (
             <div id="google-drive-resource-picker-items" className="space-y-2">
-              {visibleResources.map((resource) => {
+              {visibleResources.map((resource, index) => {
                 const isFolder =
                   resource.mimeType === GOOGLE_DRIVE_FOLDER_MIME_TYPE
                 const selected = selectedFile?.id === resource.id
+                const pathLabel = paths[resource.id]?.label ?? 'Loading path…'
+                const pathId = `google-drive-resource-picker-path-${index}`
                 return (
                   <button
                     key={resource.id}
@@ -459,6 +491,7 @@ export function GoogleDriveResourcePickerDialog({
                         : `Select file ${resource.name}`
                     }
                     aria-pressed={isFolder ? undefined : selected}
+                    aria-describedby={activeSearch ? pathId : undefined}
                     className={`flex w-full items-center gap-3 rounded-nb-sm border px-3 py-3 text-left focus:outline-none focus:ring-2 focus:ring-nb-accent-soft ${
                       selected
                         ? 'border-nb-accent bg-nb-accent-muted'
@@ -476,8 +509,17 @@ export function GoogleDriveResourcePickerDialog({
                     }}
                   >
                     {isFolder ? <FolderIcon /> : <FileIcon />}
-                    <span className="min-w-0 flex-1 truncate">
-                      {resource.name}
+                    <span className="min-w-0 flex-1">
+                      <span className="block truncate">{resource.name}</span>
+                      {activeSearch ? (
+                        <span
+                          id={pathId}
+                          title={pathLabel}
+                          className="mt-1 block break-words text-xs text-nb-text-muted"
+                        >
+                          {pathLabel}
+                        </span>
+                      ) : null}
                     </span>
                     <span className="text-xs text-nb-text-muted">
                       {isFolder ? 'Folder' : 'File'}
