@@ -20,6 +20,7 @@ export default function KeyVaultPanel({
   const [name, setName] = useState('')
   const [value, setValue] = useState('')
   const [editing, setEditing] = useState<string>()
+  const [editGeneration, setEditGeneration] = useState(0)
   const [deleting, setDeleting] = useState<string>()
   const [busy, setBusy] = useState(false)
   const [error, setError] = useState('')
@@ -163,12 +164,22 @@ export default function KeyVaultPanel({
                       disabled={busy}
                       aria-label={`Edit ${key}`}
                       onClick={() => {
-                        setName(key)
-                        setValue('')
-                        setEditing(key)
-                        setDeleting(undefined)
-                        setError('')
-                        setNotice('')
+                        try {
+                          // Only the trusted, unlocked editor receives the current secret.
+                          const currentValue = vault.requireValue(key)
+                          setName(key)
+                          setValue(currentValue)
+                          setEditing(key)
+                          // Reopening even the same key starts with a masked input.
+                          setEditGeneration((generation) => generation + 1)
+                          setDeleting(undefined)
+                          setError('')
+                          setNotice('')
+                        } catch {
+                          setError(
+                            'Unable to read this key. Unlock the vault and try again.'
+                          )
+                        }
                       }}
                     >
                       Edit
@@ -256,7 +267,7 @@ export default function KeyVaultPanel({
                 />
               </label>
               <SecretInput
-                key={editing ? `edit:${editing}` : 'new-key'}
+                key={editing ? `edit:${editing}:${editGeneration}` : 'new-key'}
                 label="Key value"
                 value={value}
                 required={!editing}

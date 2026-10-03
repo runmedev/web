@@ -9,7 +9,7 @@ order: 20
 
 Use an AppKernel JavaScript cell to display an Agents API session as an interactive widget. Messages render Markdown; tools and unfamiliar items expand to structured details. The separate Activity disclosure contains the latest 100 stream events.
 
-Open **Key Vault** in the left navigation. Create a vault with a passphrase, then add a key named `openai-api` using your session-management API key. You can add any number of named keys (within browser storage capacity), edit their names or values, and remove them. Secret fields are masked by default. Use the eye button on the right to show or hide a passphrase or key value while entering it. Visibility resets when the field is cleared or closed. Key values are never included in notebook files or Drive sync.
+Open **Key Vault** in the left navigation. Create a vault with a passphrase, then add a key named `openai-api` using your session-management API key. You can add any number of named keys (within browser storage capacity), edit their names or values, and remove them. Secret fields are masked by default. Use the eye button on the right to show or hide a passphrase or key value while entering it. Edit loads the current saved key value, masked by default; use the eye to reveal it or type a replacement. Visibility resets when the field is cleared, closed, or reopened. Key values are never included in notebook files or Drive sync.
 
 The vault is encrypted in this browser for this Runme site. Unlock it after reopening Runme; the passphrase is not saved and cannot be recovered. Clearing the site's browser data removes the vault. Only run trusted browser JavaScript while the vault is unlocked. This is local credential storage, not a cloud secret manager.
 

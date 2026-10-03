@@ -275,7 +275,7 @@ export class KeyVault {
     return reference
   }
 
-  /** Internal transport access checks lock state and deletion on every request. */
+  /** Trusted transport/editor access checks lock state and deletion on every read. */
   requireValue(name: string): string {
     if (!this.key)
       throw new Error('Unlock Key Vault in the left navigation first.')

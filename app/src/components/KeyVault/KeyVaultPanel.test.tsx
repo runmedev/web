@@ -20,6 +20,40 @@ afterEach(() => {
   vi.unstubAllGlobals()
 })
 
+it('loads saved values into a masked editor and clears drafts on cancel or lock', async () => {
+  const vault = new KeyVault()
+  await vault.unlock('long test passphrase', true)
+  await vault.saveKey('openai-api', 'saved-test-key')
+  render(<KeyVaultPanel vault={vault} />)
+  const valueInput = () =>
+    screen.getByLabelText('Key value') as HTMLInputElement
+
+  fireEvent.click(screen.getByRole('button', { name: 'Edit openai-api' }))
+  expect(valueInput().value).toBe('saved-test-key')
+  expect(valueInput().type).toBe('password')
+  fireEvent.click(screen.getByRole('button', { name: 'Show key value' }))
+  expect(valueInput().type).toBe('text')
+  fireEvent.click(screen.getByRole('button', { name: 'Edit openai-api' }))
+  expect(valueInput().value).toBe('saved-test-key')
+  expect(valueInput().type).toBe('password')
+
+  fireEvent.change(valueInput(), { target: { value: 'replacement-test-key' } })
+  fireEvent.click(screen.getByRole('button', { name: 'Save key' }))
+  await screen.findByText('Key saved.')
+  expect(vault.requireValue('openai-api')).toBe('replacement-test-key')
+  expect(valueInput().value).toBe('')
+  fireEvent.click(screen.getByRole('button', { name: 'Edit openai-api' }))
+  expect(valueInput().value).toBe('replacement-test-key')
+  fireEvent.click(screen.getByRole('button', { name: 'Cancel edit' }))
+  expect(valueInput().value).toBe('')
+  fireEvent.click(screen.getByRole('button', { name: 'Edit openai-api' }))
+  fireEvent.click(screen.getByRole('button', { name: 'Lock vault' }))
+  expect(screen.queryByLabelText('Key value')).toBeNull()
+  expect(localStorage.getItem(VAULT_STORAGE_KEY)).not.toContain(
+    'replacement-test-key'
+  )
+})
+
 it('creates a vault, masks and clears key inputs, and removes keys with confirmation', async () => {
   const vault = new KeyVault()
   render(<KeyVaultPanel vault={vault} />)
