@@ -20,6 +20,7 @@ import {
   useEffect,
   useRef,
   useState,
+  useSyncExternalStore,
   type KeyboardEvent as ReactKeyboardEvent,
   type MouseEvent,
 } from 'react'
@@ -61,6 +62,7 @@ import {
 } from '../../auth/appLoginConfiguration'
 import { getServiceAccountCredentialStatusError } from '../../auth/googleServiceAccountImpersonation'
 import KeyVaultPanel from '../KeyVault/KeyVaultPanel'
+import { keyVault } from '../../lib/keyvault/store'
 import AuthenticationSettingsPanel from '../AuthenticationSettings/AuthenticationSettingsPanel'
 import { SuggestionGraderSettings } from '../SuggestionGraderSettings/SuggestionGraderSettings'
 import { showToast } from '../../lib/toast'
@@ -236,6 +238,10 @@ function OpenDocumentsPanel() {
 }
 
 export function SidePanelToolbar() {
+  // Keep the indicator current even while the vault panel is closed.
+  const vaultSnapshot = useSyncExternalStore(keyVault.subscribe, keyVault.getSnapshot)
+  const vaultUnlocked = vaultSnapshot.status === 'unlocked'
+  const vaultStatus = vaultUnlocked ? 'Unlocked' : 'Locked'
   const { activePanel, togglePanel } = useSidePanel()
   const { commentsPanelOpen, toggleCommentsPanel } = useCommentsPanel()
   const { showDocument } = useWorkspaceDocumentContext()
@@ -657,9 +663,10 @@ export function SidePanelToolbar() {
         <button type="button" data-tour-id="left-nav.key-vault"
           className={`${sideButtonBase} ${activePanel === 'keyvault' ? sideButtonActive : sideButtonInactive}`}
           aria-pressed={activePanel === 'keyvault'} aria-label="Toggle Key Vault panel"
+          aria-description={`Key Vault: ${vaultStatus}`}
           onClick={() => togglePanel('keyvault')}>
-          <KeyIcon className="h-5 w-5" />
-          <span className={tooltipBase}>Key Vault</span>
+          <KeyIcon className={`h-5 w-5 ${vaultUnlocked ? 'text-emerald-500' : 'text-red-500'}`} />
+          <span className={tooltipBase}>Key Vault: {vaultStatus}</span>
         </button>
         <button type="button" data-tour-id="left-nav.grader-settings"
           className={`${sideButtonBase} ${activePanel === 'grader' ? sideButtonActive : sideButtonInactive}`}
