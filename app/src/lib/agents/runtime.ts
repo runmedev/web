@@ -18,6 +18,39 @@ let releaseVaultSubscription: (() => void) | undefined
 const monitors = new Map<string, AgentMonitor>()
 const autoConnect = new WeakSet<AgentMonitor>()
 const mountedViews = new WeakMap<AgentMonitor, number>()
+const connectionPreferenceKey = 'runme/agents/connection/v1'
+
+/** Keep only the selected key name locally; custom header callbacks remain memory-only. */
+function vaultTransport(reference: KeyReference): AgentTransport {
+  resolveKeyReference(reference)
+  const transport = createAgentTransport({
+    baseUrl: 'https://api.openai.com/v1',
+    getHeaders: () => ({
+      Authorization: `Bearer ${resolveKeyReference(reference)}`,
+    }),
+  })
+  releaseVaultSubscription?.()
+  // Locking, rotation and deletion revoke open streams, not just future requests.
+  releaseVaultSubscription = keyVault.subscribe(() => {
+    monitors.forEach((monitor) => monitor.pause())
+  })
+  return transport
+}
+
+/** Connect retries current vault state, including after the page lost its transport. */
+function getConnection(): AgentTransport {
+  if (connection) return connection
+  const saved = localStorage.getItem(connectionPreferenceKey)
+  // Empty marks an explicitly configured proxy. Never switch its sessions to OpenAI.
+  if (saved === '')
+    throw new Error(
+      'Run agents.configure(...) in browser JS again, then Connect.'
+    )
+  const name = saved ?? 'openai-api'
+  // Resolve before caching so a locked/missing key can be retried with Connect.
+  connection = vaultTransport(keyVault.getKey(name))
+  return connection
+}
 
 /** Resolve a saved descriptor without automatically connecting an opened notebook. */
 export function resolveAgentMonitor(
@@ -30,13 +63,7 @@ export function resolveAgentMonitor(
     existing.descriptor.pageSize === descriptor.pageSize
   )
     return existing
-  const monitor = new AgentMonitor(descriptor, () => {
-    if (!connection)
-      throw new Error(
-        'Unlock Key Vault and run agents.setKey(keyvault.getKey("openai-api")) in browser JS, then Connect.'
-      )
-    return connection
-  })
+  const monitor = new AgentMonitor(descriptor, getConnection)
   // Bound retained, detached monitor state; active widgets still own their controllers.
   if (monitors.size >= 100) {
     const oldest = [...monitors.entries()].find(
@@ -94,27 +121,19 @@ export function createAgentsApi(display?: Display) {
     /** Select a vault reference for the OpenAI API; never serialize the secret. */
     setKey: (reference: KeyReference) => {
       resolveKeyReference(reference)
-      const transport = createAgentTransport({
-        baseUrl: 'https://api.openai.com/v1',
-        getHeaders: () => ({
-          Authorization: `Bearer ${resolveKeyReference(reference)}`,
-        }),
-      })
+      localStorage.setItem(connectionPreferenceKey, reference.name)
       monitors.forEach((monitor) => monitor.pause())
-      releaseVaultSubscription?.()
-      connection = transport
-      // Rotation/removal/locking revokes existing streams as well as future requests.
-      releaseVaultSubscription = keyVault.subscribe(() => {
-        monitors.forEach((monitor) => monitor.pause())
-      })
+      connection = vaultTransport(reference)
       return { configured: true }
     },
     configure: (options: AgentConnectionOptions) => {
+      const transport = createAgentTransport(options)
+      localStorage.setItem(connectionPreferenceKey, '')
       releaseVaultSubscription?.()
       releaseVaultSubscription = undefined
       // Disconnect existing views before changing the authority serving their IDs.
       monitors.forEach((monitor) => monitor.pause())
-      connection = createAgentTransport(options)
+      connection = transport
       return { configured: true }
     },
     monitor: (

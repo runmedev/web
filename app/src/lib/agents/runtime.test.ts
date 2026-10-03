@@ -9,7 +9,11 @@ import {
 } from './runtime'
 import { AGENT_MONITOR_MIME, parseMonitorDescriptor } from './types'
 
-afterEach(resetAgentMonitors)
+afterEach(() => {
+  resetAgentMonitors()
+  localStorage.clear()
+  vi.unstubAllGlobals()
+})
 describe('agents runtime', () => {
   it('survives the StrictMode remount probe and requires explicit connection after closing', async () => {
     const api = createAgentsApi(() => {})
@@ -64,6 +68,58 @@ describe('agents runtime', () => {
   })
 })
 
+it('restores a named vault key after reload and resolves rotation on resume', async () => {
+  const { webcrypto } = await import('node:crypto')
+  const { keyVault } = await import('../keyvault/store')
+  vi.stubGlobal('crypto', webcrypto)
+  localStorage.clear()
+  keyVault.refresh()
+  await keyVault.unlock('reload test passphrase', true)
+  await keyVault.saveKey('olympus', 'original-secret')
+  const api = createAgentsApi(() => {})
+  api.setKey(keyVault.getKey('olympus'))
+  const descriptor = api.monitor('sess_reload')
+  resetAgentMonitors()
+  keyVault.lock()
+  const restored = resolveAgentMonitor(descriptor)
+  const fetchMock = vi.fn<
+    (url: string, options?: RequestInit) => Promise<Response>
+  >(async () => new Response('{}', { status: 401 }))
+  vi.stubGlobal('fetch', fetchMock)
+  await restored.connect()
+  expect(restored.getSnapshot().error).toContain('Unlock Key Vault')
+  expect(fetchMock).not.toHaveBeenCalled()
+  await keyVault.unlock('reload test passphrase')
+  await restored.connect()
+  expect(
+    new Headers(fetchMock.mock.calls[0][1]?.headers).get('Authorization')
+  ).toBe('Bearer original-secret')
+  await keyVault.saveKey('olympus', 'rotated-secret', 'olympus')
+  expect(restored.getSnapshot().connection).toBe('paused')
+  await restored.connect()
+  expect(
+    new Headers(fetchMock.mock.calls[1][1]?.headers).get('Authorization')
+  ).toBe('Bearer rotated-secret')
+  await keyVault.deleteKey('olympus')
+  await restored.connect()
+  expect(restored.getSnapshot().error).toContain('Key "olympus" is missing')
+  expect(fetchMock).toHaveBeenCalledTimes(2)
+  keyVault.lock()
+})
+
+it('requires reconfiguration for a saved custom connection instead of using a vault key', async () => {
+  const api = createAgentsApi(() => {})
+  api.configure({ baseUrl: 'https://proxy.example/v1' })
+  const descriptor = api.monitor('sess_proxy')
+  resetAgentMonitors()
+  const restored = resolveAgentMonitor(descriptor)
+  const fetchMock = vi.fn()
+  vi.stubGlobal('fetch', fetchMock)
+  await restored.connect()
+  expect(restored.getSnapshot().error).toContain('agents.configure')
+  expect(fetchMock).not.toHaveBeenCalled()
+})
+
 it('uses vault keys only for OpenAI requests and stops monitors when the vault locks', async () => {
   const { webcrypto } = await import('node:crypto')
   const { keyVault, resolveKeyReference } = await import('../keyvault/store')
@@ -77,7 +133,9 @@ it('uses vault keys only for OpenAI requests and stops monitors when the vault l
   expect(api.setKey(keyVault.getKey('openai-api'))).toEqual({
     configured: true,
   })
-  const fetchMock = vi.fn(async () => new Response('{}', { status: 401 }))
+  const fetchMock = vi.fn<
+    (url: string, options?: RequestInit) => Promise<Response>
+  >(async () => new Response('{}', { status: 401 }))
   vi.stubGlobal('fetch', fetchMock)
   const descriptor = api.monitor('sess_test')
   await api.resume(descriptor.id)
@@ -86,7 +144,9 @@ it('uses vault keys only for OpenAI requests and stops monitors when the vault l
     string,
     RequestInit,
   ]
-  expect(url).toBe('https://api.openai.com/v1/agents/sessions/sess_test/events?stream=true')
+  expect(url).toBe(
+    'https://api.openai.com/v1/agents/sessions/sess_test/events?stream=true'
+  )
   expect(new Headers(options.headers).get('Authorization')).toBe(
     'Bearer runtime-secret'
   )

@@ -20,9 +20,9 @@ agents.setKey(keyvault.getKey('openai-api'))
 const widget = agents.monitor('YOUR_SESSION_ID', { pageSize: 50 })
 ```
 
-`getKey` returns an opaque reference, so logging it shows only the key name. `setKey` selects the OpenAI API at `https://api.openai.com/v1` and resolves the current key for every request. A missing key or locked vault gives a clear error. Locking or changing the vault pauses existing monitors; unlock it and use Resume, or rerun the cell, to reconnect. Deleting or renaming a referenced key requires selecting its replacement.
+`getKey` returns an opaque reference, so logging it shows only the key name. `setKey` selects the OpenAI API at `https://api.openai.com/v1` and resolves the current key for every request. Only the selected key name is remembered locally for this Runme site. After reloading, unlock the vault and click Connect; no cell rerun is needed. Without a saved selection, Connect uses `openai-api`. Each attempt checks the current vault state and reports a locked vault or missing key accurately. Locking or changing the vault pauses existing monitors; unlock it and use Resume to reconnect. Deleting or renaming a referenced key requires selecting its replacement with `agents.setKey(...)`.
 
-For an application-owned proxy, advanced browser code may still use `agents.configure({ baseUrl, getHeaders })`. Do not put secrets in notebook code. Sandbox cells can monitor a connection previously configured by browser JS, but cannot access the vault or install credential callbacks. The Python runner's key files are separate and cannot be read by browser JavaScript.
+For an application-owned proxy, advanced browser code may still use `agents.configure({ baseUrl, getHeaders })`. Custom configuration remains memory-only and must be rerun after a reload; Connect never silently replaces an explicitly configured proxy with OpenAI. Do not put secrets in notebook code. Sandbox cells can monitor a connection previously configured by browser JS, but cannot access the vault or install credential callbacks. The Python runner's key files are separate and cannot be read by browser JavaScript.
 
 ## Read and monitor
 
