@@ -1,5 +1,5 @@
 // @vitest-environment jsdom
-import { fireEvent, render, screen, waitFor } from '@testing-library/react'
+import { act, fireEvent, render, screen, waitFor } from '@testing-library/react'
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 
 import { GoogleDriveResourcePickerDialog } from './GoogleDriveResourcePickerDialog'
@@ -9,6 +9,7 @@ const mocks = vi.hoisted(() => ({
   listChildren: vi.fn(),
   listRoots: vi.fn(),
   searchResources: vi.fn(),
+  resolvePaths: vi.fn(),
 }))
 
 vi.mock('./googleDriveBrowser', async () => {
@@ -23,8 +24,14 @@ vi.mock('./googleDriveBrowser', async () => {
   }
 })
 
+vi.mock('./googleDrivePaths', () => ({
+  resolveGoogleDriveResourcePaths: mocks.resolvePaths,
+}))
+
 describe('GoogleDriveResourcePickerDialog', () => {
   beforeEach(() => {
+    mocks.resolvePaths.mockReset()
+    mocks.resolvePaths.mockResolvedValue(undefined)
     mocks.listRoots.mockReset()
     mocks.listRoots.mockResolvedValue([
       { id: 'my-drive-root-id', name: 'My Drive' },
@@ -118,9 +125,7 @@ describe('GoogleDriveResourcePickerDialog', () => {
   it('keeps an actionable error open and retries root listing', async () => {
     mocks.listRoots
       .mockRejectedValueOnce(new Error('Drive API disabled'))
-      .mockResolvedValueOnce([
-        { id: 'my-drive-root-id', name: 'My Drive' },
-      ])
+      .mockResolvedValueOnce([{ id: 'my-drive-root-id', name: 'My Drive' }])
     render(
       <GoogleDriveResourcePickerDialog
         accessToken="token"
@@ -275,4 +280,158 @@ describe('GoogleDriveResourcePickerDialog', () => {
     expect(document.activeElement).toBe(trigger)
     trigger.remove()
   })
+})
+
+/** Starts a search only after root discovery has completed. */
+async function searchNotebooks() {
+  await screen.findByRole('button', { name: 'Open My Drive' })
+  fireEvent.change(screen.getByRole('searchbox'), {
+    target: { value: 'Notebooks' },
+  })
+  fireEvent.click(screen.getByRole('button', { name: 'Search' }))
+}
+
+it('shows duplicate names immediately and progressively adds accessible full paths', async () => {
+  mocks.listRoots.mockResolvedValue([{ id: 'my-root', name: 'My Drive' }])
+  mocks.searchResources.mockResolvedValue([
+    {
+      id: 'a',
+      name: 'Notebooks',
+      mimeType: 'application/vnd.google-apps.folder',
+    },
+    {
+      id: 'b',
+      name: 'Notebooks',
+      mimeType: 'application/vnd.google-apps.folder',
+    },
+  ])
+  let publish!: (id: string, path: { label: string; complete: boolean }) => void
+  let finish!: () => void
+  mocks.resolvePaths.mockImplementation((_token, _matches, _roots, onPath) => {
+    publish = onPath
+    return new Promise<void>((resolve) => {
+      finish = resolve
+    })
+  })
+  render(
+    <GoogleDriveResourcePickerDialog
+      accessToken="token"
+      mode="folder"
+      onCancel={vi.fn()}
+      onSelect={vi.fn()}
+    />
+  )
+  await searchNotebooks()
+  expect(
+    await screen.findAllByRole('button', { name: 'Open folder Notebooks' })
+  ).toHaveLength(2)
+  expect(screen.getAllByText('Loading path…')).toHaveLength(2)
+  await act(async () => {
+    publish('a', { label: 'My Drive / Work / Notebooks', complete: true })
+    publish('b', { label: 'Engineering / Team / Notebooks', complete: true })
+    finish()
+  })
+  const rows = screen.getAllByRole('button', { name: 'Open folder Notebooks' })
+  expect(
+    document.getElementById(rows[0].getAttribute('aria-describedby')!)
+      ?.textContent
+  ).toBe('My Drive / Work / Notebooks')
+  expect(screen.getByTitle('Engineering / Team / Notebooks')).toBeTruthy()
+})
+
+it.each(['navigation', 'new search', 'credentials', 'unmount'])(
+  'aborts paths and ignores late callbacks after %s',
+  async (action) => {
+    mocks.listRoots.mockResolvedValue([{ id: 'my-root', name: 'My Drive' }])
+    mocks.listChildren.mockResolvedValue([])
+    mocks.searchResources.mockResolvedValue([
+      {
+        id: 'a',
+        name: 'Notebooks',
+        mimeType: 'application/vnd.google-apps.folder',
+      },
+    ])
+    const pending: Array<{
+      publish: (id: string, path: { label: string; complete: boolean }) => void
+      signal: AbortSignal
+      finish: () => void
+    }> = []
+    mocks.resolvePaths.mockImplementation(
+      (_token, _matches, _roots, publish, signal) =>
+        new Promise<void>((finish) => pending.push({ publish, signal, finish }))
+    )
+    const props = {
+      accessToken: 'token',
+      mode: 'folder' as const,
+      onCancel: vi.fn(),
+      onSelect: vi.fn(),
+    }
+    const view = render(<GoogleDriveResourcePickerDialog {...props} />)
+    await searchNotebooks()
+    await screen.findByRole('button', { name: 'Open folder Notebooks' })
+    const first = pending[0]
+    if (action === 'navigation')
+      fireEvent.click(
+        screen.getByRole('button', { name: 'Open folder Notebooks' })
+      )
+    if (action === 'new search') {
+      fireEvent.change(screen.getByRole('searchbox'), {
+        target: { value: 'Other' },
+      })
+      fireEvent.click(screen.getByRole('button', { name: 'Search' }))
+      await waitFor(() => expect(pending).toHaveLength(2))
+    }
+    if (action === 'credentials')
+      view.rerender(
+        <GoogleDriveResourcePickerDialog {...props} accessToken="other-token" />
+      )
+    if (action === 'unmount') view.unmount()
+    expect(first.signal.aborted).toBe(true)
+    await act(async () => {
+      first.publish('a', { label: 'Stale path', complete: true })
+      first.finish()
+      pending[1]?.finish()
+    })
+    expect(screen.queryByText('Stale path')).toBeNull()
+  }
+)
+
+it('keeps file selection usable while a partial path is published', async () => {
+  mocks.listRoots.mockResolvedValue([{ id: 'my-root', name: 'My Drive' }])
+  mocks.searchResources.mockResolvedValue([
+    {
+      id: 'file-id',
+      name: 'notes.json',
+      mimeType: 'application/json',
+      resourceKey: 'key',
+    },
+  ])
+  mocks.resolvePaths.mockImplementation(
+    async (_token, _matches, _roots, publish) => {
+      publish('file-id', {
+        label: '… / notes.json (partial path)',
+        complete: false,
+      })
+    }
+  )
+  const onSelect = vi.fn()
+  render(
+    <GoogleDriveResourcePickerDialog
+      accessToken="token"
+      mode="file"
+      onCancel={vi.fn()}
+      onSelect={onSelect}
+    />
+  )
+  await searchNotebooks()
+  fireEvent.click(
+    await screen.findByRole('button', { name: 'Select file notes.json' })
+  )
+  expect(screen.getByText('… / notes.json (partial path)')).toBeTruthy()
+  fireEvent.click(
+    screen.getByRole('button', { name: 'Select file', exact: true })
+  )
+  expect(onSelect).toHaveBeenCalledWith(
+    expect.objectContaining({ id: 'file-id', resourceKey: 'key' })
+  )
 })

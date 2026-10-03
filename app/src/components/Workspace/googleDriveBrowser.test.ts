@@ -153,6 +153,7 @@ describe('googleDriveBrowser', () => {
         name: 'Designs shortcut',
         mimeType: 'application/vnd.google-apps.folder',
         driveId: undefined,
+        isShortcut: true,
         resourceKey: 'target-key',
       },
     ])
@@ -188,20 +189,22 @@ describe('googleDriveBrowser', () => {
   })
 
   it('searches all visible Drives and filters folder mode server-side', async () => {
-    const fetchImpl = vi.fn<typeof fetch>().mockImplementation(async () =>
-      new Response(
-        JSON.stringify({
-          files: [
-            {
-              id: 'folder-1',
-              name: "Bob's Plans",
-              mimeType: 'application/vnd.google-apps.folder',
-              driveId: 'drive-1',
-            },
-          ],
-        }),
-        { status: 200 }
-      )
+    const fetchImpl = vi.fn<typeof fetch>().mockImplementation(
+      async () =>
+        new Response(
+          JSON.stringify({
+            files: [
+              {
+                id: 'folder-1',
+                name: "Bob's Plans",
+                parents: ['parent'],
+                mimeType: 'application/vnd.google-apps.folder',
+                driveId: 'drive-1',
+              },
+            ],
+          }),
+          { status: 200 }
+        )
     )
 
     await expect(
@@ -215,12 +218,14 @@ describe('googleDriveBrowser', () => {
       {
         id: 'folder-1',
         name: "Bob's Plans",
+        parents: ['parent'],
         mimeType: 'application/vnd.google-apps.folder',
         driveId: 'drive-1',
       },
     ])
 
     const url = new URL(fetchImpl.mock.calls[0]?.[0] as string)
+    expect(url.searchParams.get('fields')).toContain('parents')
     expect(url.searchParams.get('corpora')).toBe('allDrives')
     expect(url.searchParams.get('q')).toBe(
       "name contains 'Bob\\'s \\\\ Plans' and trashed = false and " +
@@ -230,32 +235,33 @@ describe('googleDriveBrowser', () => {
   })
 
   it('keeps folder shortcuts in folder search results while filtering file targets', async () => {
-    const fetchImpl = vi.fn<typeof fetch>().mockImplementation(async () =>
-      new Response(
-        JSON.stringify({
-          files: [
-            {
-              id: 'folder-shortcut',
-              name: 'Designs',
-              mimeType: 'application/vnd.google-apps.shortcut',
-              shortcutDetails: {
-                targetId: 'folder-target',
-                targetMimeType: 'application/vnd.google-apps.folder',
+    const fetchImpl = vi.fn<typeof fetch>().mockImplementation(
+      async () =>
+        new Response(
+          JSON.stringify({
+            files: [
+              {
+                id: 'folder-shortcut',
+                name: 'Designs',
+                mimeType: 'application/vnd.google-apps.shortcut',
+                shortcutDetails: {
+                  targetId: 'folder-target',
+                  targetMimeType: 'application/vnd.google-apps.folder',
+                },
               },
-            },
-            {
-              id: 'file-shortcut',
-              name: 'Design notes',
-              mimeType: 'application/vnd.google-apps.shortcut',
-              shortcutDetails: {
-                targetId: 'file-target',
-                targetMimeType: 'text/plain',
+              {
+                id: 'file-shortcut',
+                name: 'Design notes',
+                mimeType: 'application/vnd.google-apps.shortcut',
+                shortcutDetails: {
+                  targetId: 'file-target',
+                  targetMimeType: 'text/plain',
+                },
               },
-            },
-          ],
-        }),
-        { status: 200 }
-      )
+            ],
+          }),
+          { status: 200 }
+        )
     )
 
     await expect(
@@ -266,6 +272,7 @@ describe('googleDriveBrowser', () => {
         name: 'Designs',
         mimeType: 'application/vnd.google-apps.folder',
         driveId: undefined,
+        isShortcut: true,
       },
     ])
 
