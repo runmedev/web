@@ -1,15 +1,75 @@
 // @vitest-environment jsdom
 import { afterEach, describe, expect, it, vi } from 'vitest'
-import { cleanup, fireEvent, render, screen } from '@testing-library/react'
+import {
+  act,
+  cleanup,
+  fireEvent,
+  render,
+  screen,
+  waitFor,
+} from '@testing-library/react'
 import { AgentItemView, AgentMonitorOutput } from './AgentMonitor'
 import { resetAgentMonitors } from '../../lib/agents/runtime'
+import * as runtime from '../../lib/agents/runtime'
+import { AgentMonitor } from '../../lib/agents/monitor'
 
 afterEach(() => {
   cleanup()
   resetAgentMonitors()
   vi.unstubAllGlobals()
+  vi.restoreAllMocks()
 })
 describe('agent monitor rendering', () => {
+  it('supports multiline drafts, explicit send, failure retry, and disabled disconnected input', async () => {
+    const sendMessage = vi
+      .fn()
+      .mockRejectedValueOnce(new Error('offline'))
+      .mockResolvedValue(undefined)
+    const descriptor = {
+      version: 1 as const,
+      id: 'composer',
+      sessionId: 'sess_composer',
+      pageSize: 50,
+    }
+    const model = new AgentMonitor(descriptor, () => ({
+      sendMessage,
+      session: async () => ({ status: 'idle' }),
+      items: async () => ({ data: [], has_more: false, last_id: null }),
+      turns: async () => ({ data: [], has_more: false, last_id: null }),
+      stream: async () => ({
+        close() {},
+        events: {
+          [Symbol.asyncIterator]: () => ({ next: () => new Promise(() => {}) }),
+        },
+      }),
+    }))
+    vi.spyOn(runtime, 'resolveAgentMonitor').mockReturnValue(model)
+    render(<AgentMonitorOutput value={JSON.stringify(descriptor)} />)
+    const input = screen.getByRole('textbox', {
+      name: 'Message the agent',
+    }) as HTMLTextAreaElement
+    fireEvent.change(input, { target: { value: 'Hello\nagent' } })
+    expect(
+      (
+        screen.getByRole('button', {
+          name: 'Send',
+        }) as HTMLButtonElement
+      ).disabled
+    ).toBe(true)
+    fireEvent.click(screen.getByRole('button', { name: 'Connect' }))
+    await waitFor(() => expect(model.getSnapshot().connection).toBe('live'))
+    fireEvent.keyDown(input, { key: 'Enter', shiftKey: true })
+    fireEvent.keyDown(input, { key: 'Enter', isComposing: true })
+    expect(sendMessage).not.toHaveBeenCalled()
+    fireEvent.keyDown(input, { key: 'Enter' })
+    await screen.findByRole('alert')
+    expect(input.value).toBe('Hello\nagent')
+    fireEvent.click(screen.getByRole('button', { name: 'Send' }))
+    await waitFor(() => expect(input.value).toBe(''))
+    expect(sendMessage.mock.calls[1][2]).toBe(sendMessage.mock.calls[0][2])
+    expect(screen.getByText('Message sent.')).toBeTruthy()
+    act(() => model.pause())
+  })
   it('renders Markdown tables and code without executing HTML or loading images', () => {
     const { container } = render(
       <AgentItemView

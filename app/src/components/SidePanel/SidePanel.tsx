@@ -9,12 +9,11 @@ import {
   QueueListIcon,
   ServerStackIcon,
   UserCircleIcon,
-  KeyIcon,
   Cog6ToothIcon,
   SparklesIcon,
 } from '@heroicons/react/24/outline'
 import { XMarkIcon } from '@heroicons/react/20/solid'
-import { CloudIcon as CloudSolidIcon } from '@heroicons/react/24/solid'
+import { CloudIcon as CloudSolidIcon, KeyIcon } from '@heroicons/react/24/solid'
 import {
   useCallback,
   useEffect,

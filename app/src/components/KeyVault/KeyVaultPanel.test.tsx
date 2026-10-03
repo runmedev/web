@@ -29,6 +29,20 @@ it('creates a vault, masks and clears key inputs, and removes keys with confirma
   fireEvent.change(screen.getByLabelText('Confirm passphrase'), {
     target: { value: 'long test passphrase' },
   })
+  fireEvent.click(screen.getByRole('button', { name: 'Show vault passphrase' }))
+  expect(
+    (screen.getByLabelText('Vault passphrase') as HTMLInputElement).type
+  ).toBe('text')
+  expect(
+    (screen.getByLabelText('Confirm passphrase') as HTMLInputElement).type
+  ).toBe('password')
+  fireEvent.click(
+    screen.getByRole('button', { name: 'Show confirm passphrase' })
+  )
+  expect(
+    (screen.getByLabelText('Confirm passphrase') as HTMLInputElement).type
+  ).toBe('text')
+  expect(vault.getSnapshot().status).toBe('new')
   fireEvent.click(screen.getByRole('button', { name: 'Create vault' }))
   await screen.findByRole('button', { name: 'Lock vault' })
   fireEvent.change(screen.getByLabelText('Key name'), {
@@ -37,9 +51,17 @@ it('creates a vault, masks and clears key inputs, and removes keys with confirma
   const input = screen.getByLabelText('Key value') as HTMLInputElement
   expect(input.type).toBe('password')
   fireEvent.change(input, { target: { value: 'test-secret' } })
+  fireEvent.click(screen.getByRole('button', { name: 'Show key value' }))
+  expect(input.type).toBe('text')
+  expect(input.value).toBe('test-secret')
+  expect(vault.getSnapshot().names).toEqual([])
+  fireEvent.click(screen.getByRole('button', { name: 'Hide key value' }))
+  expect(input.type).toBe('password')
+  fireEvent.click(screen.getByRole('button', { name: 'Show key value' }))
   fireEvent.click(screen.getByRole('button', { name: 'Save key' }))
   await screen.findByText('Key saved.')
   expect(input.value).toBe('')
+  expect(input.type).toBe('password')
   expect(localStorage.getItem(VAULT_STORAGE_KEY)).not.toContain('test-secret')
   fireEvent.click(screen.getByRole('button', { name: 'Delete openai-api' }))
   expect(vault.getSnapshot().names).toContain('openai-api')
@@ -50,4 +72,7 @@ it('creates a vault, masks and clears key inputs, and removes keys with confirma
   await waitFor(() =>
     expect(screen.getByRole('button', { name: 'Unlock vault' })).toBeTruthy()
   )
+  expect(
+    (screen.getByLabelText('Vault passphrase') as HTMLInputElement).type
+  ).toBe('password')
 })

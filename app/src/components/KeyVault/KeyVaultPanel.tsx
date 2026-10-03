@@ -1,6 +1,7 @@
 import { useEffect, useState, useSyncExternalStore } from 'react'
 
 import { keyVault, type KeyVault } from '../../lib/keyvault/store'
+import SecretInput from '../SecretInput'
 
 const inputClass =
   'mt-1 w-full rounded-nb-sm border border-nb-border bg-nb-surface px-2 py-2 text-sm text-nb-text'
@@ -92,37 +93,27 @@ export default function KeyVaultPanel({
                 ? 'Create a vault with a passphrase. You will use it to unlock your keys after reopening Runme.'
                 : 'Unlock your saved keys for this tab.'}
             </p>
-            <label className="block text-sm">
-              Vault passphrase
-              <input
-                className={inputClass}
-                type="password"
-                autoComplete={
-                  snapshot.status === 'new'
-                    ? 'new-password'
-                    : 'current-password'
-                }
-                value={passphrase}
-                onChange={(e) => setPassphrase(e.target.value)}
-                required
-                disabled={busy}
-                minLength={snapshot.status === 'new' ? 12 : undefined}
-              />
-            </label>
+            <SecretInput
+              label="Vault passphrase"
+              autoComplete={
+                snapshot.status === 'new' ? 'new-password' : 'current-password'
+              }
+              value={passphrase}
+              onChange={(e) => setPassphrase(e.target.value)}
+              required
+              disabled={busy}
+              minLength={snapshot.status === 'new' ? 12 : undefined}
+            />
             {snapshot.status === 'new' && (
               <>
-                <label className="block text-sm">
-                  Confirm passphrase
-                  <input
-                    className={inputClass}
-                    type="password"
-                    autoComplete="new-password"
-                    value={confirmation}
-                    onChange={(e) => setConfirmation(e.target.value)}
-                    required
-                    disabled={busy}
-                  />
-                </label>
+                <SecretInput
+                  label="Confirm passphrase"
+                  autoComplete="new-password"
+                  value={confirmation}
+                  onChange={(e) => setConfirmation(e.target.value)}
+                  required
+                  disabled={busy}
+                />
                 <p className="text-xs text-nb-text-muted">
                   Use at least 12 characters. Keep the passphrase safe: Runme
                   cannot recover it. Clearing this site's browser data removes
@@ -264,19 +255,16 @@ export default function KeyVaultPanel({
                   onChange={(e) => setName(e.target.value)}
                 />
               </label>
-              <label className="block text-sm">
-                Key value
-                <input
-                  className={inputClass}
-                  type="password"
-                  value={value}
-                  required={!editing}
-                  disabled={busy}
-                  autoComplete="off"
-                  spellCheck={false}
-                  onChange={(e) => setValue(e.target.value)}
-                />
-              </label>
+              <SecretInput
+                key={editing ? `edit:${editing}` : 'new-key'}
+                label="Key value"
+                value={value}
+                required={!editing}
+                disabled={busy}
+                autoComplete="off"
+                spellCheck={false}
+                onChange={(e) => setValue(e.target.value)}
+              />
               {editing && (
                 <p className="text-xs text-nb-text-muted">
                   Leave the value empty to keep the existing key.

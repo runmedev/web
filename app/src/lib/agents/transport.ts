@@ -53,7 +53,7 @@ export async function* readAgentEvents(
   }
 }
 
-/** Read-only REST/SSE transport. Secrets remain in the caller's header provider. */
+/** REST/SSE transport. Secrets remain in the caller's header provider. */
 export function createAgentTransport(
   options: AgentConnectionOptions
 ): AgentTransport {
@@ -73,11 +73,36 @@ export function createAgentTransport(
     )
   }
   const root = base.href.replace(/\/$/, '')
-  const request = async (path: string, signal: AbortSignal, stream = false) => {
+  const request = async (
+    path: string,
+    signal: AbortSignal,
+    stream = false,
+    submission?: { text: string; id: string }
+  ) => {
     const headers = new Headers(await options.getHeaders?.())
     headers.set('OpenAI-Beta', 'agents=v1')
     headers.set('Accept', stream ? 'text/event-stream' : 'application/json')
+    if (submission) {
+      headers.set('Content-Type', 'application/json')
+      headers.set('Idempotency-Key', submission.id)
+    }
     const response = await fetch(`${root}/agents/sessions/${path}`, {
+      method: submission ? 'POST' : 'GET',
+      body: submission
+        ? JSON.stringify({
+            events: [
+              {
+                type: 'agent.session.input.message',
+                input: [
+                  {
+                    role: 'user',
+                    content: [{ type: 'input_text', text: submission.text }],
+                  },
+                ],
+              },
+            ],
+          })
+        : undefined,
       headers,
       signal,
       credentials: 'same-origin',
@@ -94,6 +119,12 @@ export function createAgentTransport(
   const json = async <T>(path: string, signal: AbortSignal): Promise<T> =>
     (await request(path, signal)).json()
   return {
+    sendMessage: async (id, text, submissionId, signal) => {
+      await request(`${encodeURIComponent(id)}/events`, signal, false, {
+        text,
+        id: submissionId,
+      })
+    },
     session: (id, signal) => json<AgentObject>(encodeURIComponent(id), signal),
     items: (id, limit, after, signal) => {
       const query = new URLSearchParams({ order: 'desc', limit: String(limit) })

@@ -12,6 +12,8 @@ Start the Go fixture with `go run testing/fake-agents-server.go` and Runme at `h
 4. Toggle Edit then Render. Assert source is visible only in Edit and the existing monitor remains mounted; neither operation executes the cell.
 5. Pause via `agents.pause(widgetId)`. Assert connection is paused and items remain readable. Resume via `await agents.resume(widgetId)` and assert live state returns.
 6. Reload the browser. The saved widget is disconnected, requires Connect, and does not contain credentials or serialized messages. Configure the connection in a new execution before connecting.
+7. In Render, type a multiline message into **Message the agent**. Shift+Enter must not submit; Enter or Send submits one request. The Go fixture echoes a synthetic reply. Verify the draft clears only after acceptance, both the user message and reply appear, and history returns to Latest.
+8. Pause monitoring: the composer retains its draft but Send is disabled. Resume and send. Controller/component tests verify failed delivery preserves the draft, unchanged retries reuse the idempotency key, double sends are blocked, composition Enter does not submit, and reconnect does not resend. Do not send test messages to a real agent session.
 
 Capture the rendered monitor with notebook context and record assertions. Controller/component tests cover root/subagent completion, replay races, EOF, safe Markdown, malformed descriptors and pagination. NotebookData tests cover browser and sandbox output. The Go fixture drives the manual WebMCP browser CUJ; it is not registered in the automated browser orchestrator yet.
 

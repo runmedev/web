@@ -28,6 +28,7 @@ function setup(overrides: Partial<AgentTransport> = {}) {
   const queued: AgentEvent[] = []
   const close = vi.fn(() => deliver?.({ done: true, value: undefined }))
   const transport: AgentTransport = {
+    sendMessage: vi.fn(async () => {}),
     session: vi.fn(async () => ({ status: 'idle' })),
     items: vi.fn(async () => page(['b', 'a'], true)),
     turns: vi.fn(async () => ({
@@ -72,6 +73,82 @@ function setup(overrides: Partial<AgentTransport> = {}) {
 }
 
 describe('AgentMonitor', () => {
+  it('keeps failed submissions retryable without duplication and requires live observation', async () => {
+    const sendMessage = vi
+      .fn()
+      .mockRejectedValueOnce(new Error('lost response'))
+      .mockResolvedValue(undefined)
+    const { model, transport } = setup({ sendMessage })
+    model.setDraft('Hello\nagent')
+    expect(await model.sendMessage()).toBe(false)
+    expect(sendMessage).not.toHaveBeenCalled()
+    await model.connect()
+    expect(await model.sendMessage()).toBe(false)
+    expect(model.getSnapshot().draft).toBe('Hello\nagent')
+    expect(model.getSnapshot().sendError).toContain('Could not confirm')
+    await model.connect()
+    expect(sendMessage).toHaveBeenCalledTimes(1)
+    expect(await model.sendMessage()).toBe(true)
+    expect(sendMessage.mock.calls[0].slice(0, 3)).toEqual(
+      sendMessage.mock.calls[1].slice(0, 3)
+    )
+    expect(sendMessage.mock.calls[0][0]).toBe('sess_test')
+    expect(transport.stream).toHaveBeenCalled()
+    expect(model.getSnapshot().draft).toBe('')
+    model.setDraft('Hello\nagent')
+    await model.sendMessage()
+    expect(sendMessage.mock.calls[2][2]).not.toBe(sendMessage.mock.calls[1][2])
+  })
+
+  it('prevents double sends, preserves input and aborts pending delivery when paused', async () => {
+    let signal: AbortSignal | undefined
+    const sendMessage = vi.fn(
+      (_id, _text, _key, requestSignal: AbortSignal) =>
+        new Promise<void>((_resolve, reject) => {
+          signal = requestSignal
+          signal.addEventListener('abort', () => reject(new Error('aborted')))
+        })
+    )
+    const { model } = setup({ sendMessage })
+    await model.connect()
+    model.setDraft('  ')
+    expect(await model.sendMessage()).toBe(false)
+    model.setDraft('Keep this draft')
+    const pending = model.sendMessage()
+    expect(model.getSnapshot().sending).toBe(true)
+    expect(await model.sendMessage()).toBe(false)
+    model.setDraft('ignored while sending')
+    model.pause()
+    expect(await pending).toBe(false)
+    expect(signal?.aborted).toBe(true)
+    expect(sendMessage).toHaveBeenCalledTimes(1)
+    expect(model.getSnapshot()).toMatchObject({
+      draft: 'Keep this draft',
+      sending: false,
+    })
+  })
+
+  it('times out uncertain sends and reuses the submission ID after a timeout', async () => {
+    vi.useFakeTimers()
+    const sendMessage = vi
+      .fn()
+      .mockImplementationOnce(
+        (_id, _text, _key, signal: AbortSignal) =>
+          new Promise<void>((_resolve, reject) => {
+            signal.addEventListener('abort', () => reject(new Error('timeout')))
+          })
+      )
+      .mockResolvedValue(undefined)
+    const { model } = setup({ sendMessage })
+    await model.connect()
+    model.setDraft('hello')
+    const sending = model.sendMessage()
+    await vi.advanceTimersByTimeAsync(30_000)
+    expect(await sending).toBe(false)
+    await model.sendMessage()
+    expect(sendMessage.mock.calls[0][2]).toBe(sendMessage.mock.calls[1][2])
+  })
+
   it('does not regress final items or root turns when older events arrive', async () => {
     const { model } = setup()
     await model.connect()

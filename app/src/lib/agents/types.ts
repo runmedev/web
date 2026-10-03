@@ -20,6 +20,12 @@ export type AgentStream = {
   close(): void
 }
 export interface AgentTransport {
+  sendMessage(
+    id: string,
+    text: string,
+    submissionId: string,
+    signal: AbortSignal
+  ): Promise<void>
   session(id: string, signal: AbortSignal): Promise<AgentObject>
   items(
     id: string,

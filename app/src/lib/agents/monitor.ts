@@ -20,6 +20,10 @@ export type MonitorSnapshot = {
   newActivity: number
   loadingPage: boolean
   error: string | null
+  draft: string
+  sending: boolean
+  sendError: string | null
+  sendNotice: string | null
 }
 const finalStatuses = new Set([
   'completed',
@@ -48,6 +52,10 @@ export class AgentMonitor {
     newActivity: 0,
     loadingPage: false,
     error: null,
+    draft: '',
+    sending: false,
+    sendError: null,
+    sendNotice: null,
   }
   private listeners = new Set<() => void>()
   private controller?: AbortController
@@ -62,6 +70,7 @@ export class AgentMonitor {
   private finalParts = new Set<string>()
   private restoredFinalIds = new Set<string>()
   private refreshTimer?: ReturnType<typeof setTimeout>
+  private pendingSubmission?: { text: string; id: string }
 
   constructor(
     readonly descriptor: AgentMonitorDescriptor,
@@ -76,6 +85,61 @@ export class AgentMonitor {
   private update(patch: Partial<MonitorSnapshot>) {
     this.snapshot = { ...this.snapshot, ...patch }
     this.listeners.forEach((listener) => listener())
+  }
+
+  /** Drafts and retry IDs stay in this controller, never in saved notebook output. */
+  setDraft = (draft: string) => {
+    if (!this.snapshot.sending) this.update({ draft, sendNotice: null })
+  }
+
+  /** A retry reuses the logical submission ID; reconnecting never resends input. */
+  sendMessage = async (): Promise<boolean> => {
+    const text = this.snapshot.draft
+    if (this.snapshot.sending || !text.trim()) return false
+    if (
+      this.snapshot.connection !== 'live' ||
+      !this.controller ||
+      this.controller.signal.aborted
+    ) {
+      this.update({
+        sendError: 'Connect or resume monitoring before sending a message.',
+      })
+      return false
+    }
+    if (this.pendingSubmission?.text !== text)
+      this.pendingSubmission = { text, id: crypto.randomUUID() }
+    const submission = this.pendingSubmission
+    const observation = this.controller.signal
+    const controller = new AbortController()
+    const abort = () => controller.abort()
+    observation.addEventListener('abort', abort, { once: true })
+    const timeout = setTimeout(abort, 30_000)
+    this.update({ sending: true, sendError: null, sendNotice: null })
+    try {
+      await this.transport().sendMessage(
+        this.descriptor.sessionId,
+        submission.text,
+        submission.id,
+        controller.signal
+      )
+      this.pendingSubmission = undefined
+      this.update({ draft: '', sendNotice: 'Message sent.' })
+      this.latest()
+      // Hydrate the accepted user item even if the stream only reports agent output.
+      this.scheduleRefresh()
+      return true
+    } catch {
+      // Acceptance is uncertain after a network failure. Keep both text and retry ID.
+      this.update({
+        sendError:
+          'Could not confirm delivery. Your draft is kept. Retry unchanged to avoid duplicates; editing sends a new message.',
+      })
+      return false
+    } finally {
+      clearTimeout(timeout)
+      observation.removeEventListener('abort', abort)
+      this.update({ sending: false })
+    }
   }
 
   /** Stop observation only. Never sends a cancel or other input event. */

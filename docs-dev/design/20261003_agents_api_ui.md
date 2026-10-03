@@ -12,7 +12,13 @@ agents.monitor(session_id, { pageSize: 50 })
 
 The cell has Edit and Render modes. Edit shows the source; Render shows the monitor. Running the cell creates the widget and returns immediately. The cell execution finishing does not mean the agent turn finished. Editing does not execute code or cancel the agent. Rerunning replaces the old monitor.
 
-Keep agent creation, sending messages, and cancellation in explicit code cells. The first version is a read-only monitor; it never submits a message, approves a request, or cancels a turn as a side effect of reconnecting. A composer and approval forms can follow once their semantics are designed.
+Keep agent creation, tool approvals, and cancellation in explicit code cells. The rendered conversation includes a message composer. Sending is explicit; connecting, rerunning, or reopening never sends a message.
+
+Use **Message the agent** below the rendered conversation. Press **Send** or Enter to submit; Shift+Enter inserts a new line. The monitor must be connected. Sending starts a new turn when idle or steers the active turn. The input stays visible while browsing history; a successful send returns to Latest.
+
+The composer prevents simultaneous submissions and clears the draft only after the API accepts it. On a timeout or error, the draft stays available; retry unchanged to reuse its submission ID and avoid duplicates. Editing sends a new message. Reconnecting never sends automatically. Drafts and retry IDs stay in memory for the current widget; reloading or rerunning the cell discards them. After an uncertain send, retry before reloading, or check conversation history before submitting again.
+
+
 
 ## Current state
 
@@ -103,7 +109,7 @@ Test SSE framing across chunk boundaries, HTTP errors, abort cleanup, root/subag
 
 ## Follow-ups
 
-A deployable proxy or runner-backed adapter can bridge the existing local credential workflow. Other follow-ups are explicit send/cancel helpers, request-specific approval forms, subagent drill-down, durable snapshots for offline viewing, and a shared subscription per session. The first version makes each monitor independent so one cell's controls do not affect another.
+A deployable proxy or runner-backed adapter can bridge the existing local credential workflow. Other follow-ups are explicit cancellation helpers, request-specific approval forms, subagent drill-down, durable snapshots for offline viewing, and a shared subscription per session. The first version makes each monitor independent so one cell's controls do not affect another.
 
 ## References
 

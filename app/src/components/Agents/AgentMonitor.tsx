@@ -1,4 +1,5 @@
-import { useEffect, useMemo, useRef, useSyncExternalStore } from 'react'
+import { useEffect, useId, useMemo, useRef, useSyncExternalStore } from 'react'
+import { PaperAirplaneIcon } from '@heroicons/react/24/outline'
 import ReactMarkdown from 'react-markdown'
 import remarkGfm from 'remark-gfm'
 
@@ -98,6 +99,8 @@ function Monitor({ descriptor }: { descriptor: AgentMonitorDescriptor }) {
   const state = useSyncExternalStore(monitor.subscribe, monitor.getSnapshot)
   const viewport = useRef<HTMLDivElement>(null)
   const follow = useRef(true)
+  const composerId = useId()
+  const input = useRef<HTMLTextAreaElement>(null)
   useEffect(() => mountAgentMonitor(monitor), [monitor])
   useEffect(() => {
     if (!viewport.current) return
@@ -113,6 +116,13 @@ function Monitor({ descriptor }: { descriptor: AgentMonitorDescriptor }) {
   }
   const active =
     state.connection === 'live' || state.connection === 'connecting'
+  const canSend =
+    state.connection === 'live' && !state.sending && Boolean(state.draft.trim())
+  /** Follow the active conversation after acceptance; failures preserve the draft. */
+  const send = async () => {
+    if (await monitor.sendMessage()) latest()
+    input.current?.focus()
+  }
   return (
     <section
       aria-label="Agent session monitor"
@@ -212,6 +222,66 @@ function Monitor({ descriptor }: { descriptor: AgentMonitorDescriptor }) {
           <AgentItemView key={item.id ?? `legacy-${index}`} item={item} />
         ))}
       </div>
+      <form
+        id={`agent-composer-${composerId}`}
+        aria-label="Send a message to the agent"
+        className="mt-3 rounded-nb-sm border border-nb-border bg-nb-surface-2 p-3"
+        onSubmit={(event) => {
+          event.preventDefault()
+          if (canSend) void send()
+        }}
+      >
+        <label htmlFor={composerId} className="mb-2 block text-sm font-medium">
+          Message the agent
+        </label>
+        <textarea
+          id={composerId}
+          ref={input}
+          value={state.draft}
+          readOnly={state.sending}
+          rows={3}
+          placeholder="Send a message to this conversation…"
+          aria-describedby={`${composerId}-hint`}
+          className="w-full resize-y rounded-nb-sm border border-nb-border bg-nb-surface px-3 py-2 text-sm text-nb-text focus:outline-none focus:ring-2 focus:ring-blue-500"
+          onChange={(event) => monitor.setDraft(event.target.value)}
+          onKeyDown={(event) => {
+            event.stopPropagation()
+            if (
+              event.key === 'Enter' &&
+              !event.shiftKey &&
+              !event.nativeEvent.isComposing
+            ) {
+              event.preventDefault()
+              if (canSend) void send()
+            }
+          }}
+        />
+        <div className="mt-2 flex items-center justify-between gap-3">
+          <p id={`${composerId}-hint`} className="text-xs text-nb-text-muted">
+            {state.connection !== 'live'
+              ? 'Connect or resume monitoring to send.'
+              : 'Enter to send · Shift+Enter for a new line'}
+          </p>
+          <button
+            type="submit"
+            disabled={!canSend}
+            className="inline-flex items-center gap-2 rounded-nb-sm bg-blue-600 px-3 py-2 text-sm text-white disabled:opacity-40"
+          >
+            <PaperAirplaneIcon className="h-4 w-4" />
+            {state.sending ? 'Sending…' : 'Send'}
+          </button>
+        </div>
+        {state.sendError && (
+          <p role="alert" className="mt-2 text-sm text-red-600">
+            {state.sendError}
+          </p>
+        )}
+        {state.sendNotice && (
+          <p role="status" className="mt-2 text-sm text-nb-text-muted">
+            {state.sendNotice}
+          </p>
+        )}
+      </form>
       {Array.isArray(state.session?.required_actions) &&
         state.session.required_actions.length > 0 && (
           <Details

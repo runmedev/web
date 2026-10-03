@@ -54,3 +54,11 @@ For CUJ/browser scripts:
 - Default format for Runme documentation notebooks is JSON notebook files (for example `docs/<name>.json`), not markdown `.runme.md`.
 - When adding notebook-based walkthroughs under `docs/`, create/update the JSON notebook directly.
 - Use markdown cells inside the JSON notebook for narrative instructions and code cells for runnable steps.
+
+## Secret input pattern
+
+- Use `app/src/components/SecretInput.tsx` for passwords, vault passphrases, API keys, tokens, and other single-line secret entry fields in new or changed UI.
+- Mask by default with `type="password"`. Include a right-aligned eye button to show the text and a crossed-out eye to hide it again. Keep enough input padding so the button never covers the value.
+- Give each field a visible label. The toggle must be keyboard accessible, use `type="button"` so it cannot submit a form, and announce a field-specific action (for example, “Show key value” / “Hide key value”) with `aria-pressed` and `aria-controls`.
+- Visibility is local to each field. Clear or unmount the input to reset masking; reset it when switching records or completing a form. Never persist the visibility choice, log the value, or copy it into notebook output. Revealing affects presentation only, not vault encryption or storage.
+- Disable spelling corrections and capitalization for secrets; preserve the appropriate password-manager autocomplete value. Do not populate a saved secret solely to support reveal: the toggle reveals only the value already being entered.

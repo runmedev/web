@@ -1,4 +1,4 @@
-// Local read-only Agents API fixture for the agent-monitor CUJ.
+// Local Agents API fixture for the agent-monitor and message composer CUJ.
 // Run: go run testing/fake-agents-server.go
 package main
 
@@ -9,8 +9,58 @@ import (
 	"net/http"
 	"strconv"
 	"strings"
+	"sync"
 	"time"
 )
+
+var demoMu sync.Mutex
+var demoMessages = map[int]map[string]any{}
+var demoSubmissions = map[string]string{}
+
+// acceptDemoMessage persists synthetic user/reply items and deduplicates retries.
+func acceptDemoMessage(w http.ResponseWriter, r *http.Request) {
+	var body struct {
+		Events []struct {
+			Type  string `json:"type"`
+			Input []struct {
+				Role    string `json:"role"`
+				Content []struct {
+					Type string `json:"type"`
+					Text string `json:"text"`
+				} `json:"content"`
+			} `json:"input"`
+		} `json:"events"`
+	}
+	if json.NewDecoder(http.MaxBytesReader(w, r.Body, 1<<20)).Decode(&body) != nil || len(body.Events) != 1 || body.Events[0].Type != "agent.session.input.message" || len(body.Events[0].Input) != 1 || len(body.Events[0].Input[0].Content) != 1 {
+		http.Error(w, "Invalid input event", http.StatusBadRequest)
+		return
+	}
+	text := body.Events[0].Input[0].Content[0].Text
+	key := r.Header.Get("Idempotency-Key")
+	if key == "" || strings.TrimSpace(text) == "" {
+		http.Error(w, "Message and key required", http.StatusBadRequest)
+		return
+	}
+	demoMu.Lock()
+	defer demoMu.Unlock()
+	if previous, exists := demoSubmissions[key]; exists {
+		if previous != text {
+			http.Error(w, "Idempotency conflict", http.StatusConflict)
+			return
+		}
+	} else {
+		demoSubmissions[key] = text
+		for _, message := range []struct{ role, text string }{{"user", text}, {"assistant", "Received your message: " + text}} {
+			id := 126 + len(demoMessages)
+			contentType := "output_text"
+			if message.role == "user" {
+				contentType = "input_text"
+			}
+			demoMessages[id] = map[string]any{"id": fmt.Sprintf("msg_%d", id), "type": "message", "role": message.role, "status": "completed", "content": []map[string]any{{"type": contentType, "text": message.text}}}
+		}
+	}
+	w.WriteHeader(http.StatusNoContent)
+}
 
 // main serves synthetic history and an SSE stream on loopback only.
 func main() {
@@ -23,10 +73,15 @@ func serveAgentDemo(w http.ResponseWriter, r *http.Request) {
 	origin := r.Header.Get("Origin")
 	if origin == "http://127.0.0.1:5173" || origin == "http://localhost:5173" {
 		w.Header().Set("Access-Control-Allow-Origin", origin)
-		w.Header().Set("Access-Control-Allow-Headers", "OpenAI-Beta")
+		w.Header().Set("Access-Control-Allow-Headers", "OpenAI-Beta, Content-Type, Idempotency-Key")
+		w.Header().Set("Access-Control-Allow-Methods", "GET, POST, OPTIONS")
 	}
 	if r.Method == "OPTIONS" {
 		w.WriteHeader(http.StatusNoContent)
+		return
+	}
+	if r.Method == "POST" && strings.HasSuffix(r.URL.Path, "/events") {
+		acceptDemoMessage(w, r)
 		return
 	}
 	if r.Method != "GET" {
@@ -54,11 +109,13 @@ func serveAgentDemo(w http.ResponseWriter, r *http.Request) {
 			}
 		}
 	case strings.HasSuffix(r.URL.Path, "/items"):
+		demoMu.Lock()
+		defer demoMu.Unlock()
 		limit, _ := strconv.Atoi(r.URL.Query().Get("limit"))
 		if limit < 1 || limit > 100 {
 			limit = 50
 		}
-		start := 125
+		start := 125 + len(demoMessages)
 		if after := r.URL.Query().Get("after"); after != "" {
 			if after == "msg_live" {
 				start = 125
@@ -69,6 +126,10 @@ func serveAgentDemo(w http.ResponseWriter, r *http.Request) {
 		}
 		data := []map[string]any{}
 		for i := start; i > 0 && len(data) < limit; i-- {
+			if saved, ok := demoMessages[i]; ok {
+				data = append(data, saved)
+				continue
+			}
 			text := fmt.Sprintf("Saved message **%d**.\n\n| Check | Result |\n|---|---|\n| API request | Passed |", i)
 			row := map[string]any{"id": fmt.Sprintf("msg_%d", i), "type": "message", "role": "assistant", "phase": "final_answer", "status": "completed", "content": []map[string]any{{"type": "output_text", "text": text}}}
 			if i%5 == 0 {
