@@ -1,3 +1,8 @@
+import {
+  type KeyReference,
+  keyVault,
+  resolveKeyReference,
+} from '../keyvault/store'
 import { AgentMonitor } from './monitor'
 import { type AgentConnectionOptions, createAgentTransport } from './transport'
 import {
@@ -8,6 +13,7 @@ import {
 
 type Display = (mime: string, value: string) => void
 let connection: AgentTransport | undefined
+let releaseVaultSubscription: (() => void) | undefined
 // This registry owns only this browser lifetime. Descriptors never carry auth or code.
 const monitors = new Map<string, AgentMonitor>()
 const autoConnect = new WeakSet<AgentMonitor>()
@@ -27,7 +33,7 @@ export function resolveAgentMonitor(
   const monitor = new AgentMonitor(descriptor, () => {
     if (!connection)
       throw new Error(
-        'Configure an authenticated connection with agents.configure({ baseUrl, getHeaders }) in AppKernel browser JS, then Connect.'
+        'Unlock Key Vault and run agents.setKey(keyvault.getKey("openai-api")) in browser JS, then Connect.'
       )
     return connection
   })
@@ -70,6 +76,8 @@ export function resetAgentMonitors(): void {
   monitors.forEach((monitor) => monitor.pause())
   monitors.clear()
   connection = undefined
+  releaseVaultSubscription?.()
+  releaseVaultSubscription = undefined
 }
 
 /** The same commands back widget buttons, AppKernel cells and the sandbox bridge. */
@@ -83,7 +91,27 @@ export function createAgentsApi(display?: Display) {
     return monitor
   }
   return {
+    /** Select a vault reference for the OpenAI API; never serialize the secret. */
+    setKey: (reference: KeyReference) => {
+      resolveKeyReference(reference)
+      const transport = createAgentTransport({
+        baseUrl: 'https://api.openai.com/v1',
+        getHeaders: () => ({
+          Authorization: `Bearer ${resolveKeyReference(reference)}`,
+        }),
+      })
+      monitors.forEach((monitor) => monitor.pause())
+      releaseVaultSubscription?.()
+      connection = transport
+      // Rotation/removal/locking revokes existing streams as well as future requests.
+      releaseVaultSubscription = keyVault.subscribe(() => {
+        monitors.forEach((monitor) => monitor.pause())
+      })
+      return { configured: true }
+    },
     configure: (options: AgentConnectionOptions) => {
+      releaseVaultSubscription?.()
+      releaseVaultSubscription = undefined
       // Disconnect existing views before changing the authority serving their IDs.
       monitors.forEach((monitor) => monitor.pause())
       connection = createAgentTransport(options)
@@ -120,6 +148,6 @@ export function createAgentsApi(display?: Display) {
     newer: (id: string) => requireMonitor(id).newer(),
     latest: (id: string) => requireMonitor(id).latest(),
     help: () =>
-      'agents.configure({ baseUrl, getHeaders? }) [browser JS only; memory-only auth]; agents.monitor(sessionId, { pageSize?: 1..100 }) [notebook JS cell]; agents.get(id); agents.pause(id); await agents.resume(id); await agents.older(id); await agents.newer(id); agents.latest(id). Pause stops observation, not the agent. Saved widgets require Connect.',
+      'agents.setKey(keyvault.getKey(name)) [browser JS; OpenAI API]; agents.configure({ baseUrl, getHeaders? }) [browser JS only; memory-only auth]; agents.monitor(sessionId, { pageSize?: 1..100 }) [notebook JS cell]; agents.get(id); agents.pause(id); await agents.resume(id); await agents.older(id); await agents.newer(id); agents.latest(id). Pause stops observation, not the agent. Saved widgets require Connect.',
   }
 }

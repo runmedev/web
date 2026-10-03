@@ -79,7 +79,7 @@ describe('agent monitor rendering', () => {
     expect(fetch).not.toHaveBeenCalled()
     fireEvent.click(screen.getByRole('button', { name: 'Connect' }))
     expect((await screen.findByRole('alert')).textContent).toContain(
-      'agents.configure'
+      'agents.setKey'
     )
     expect(fetch).not.toHaveBeenCalled()
   })

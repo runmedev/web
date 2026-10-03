@@ -17,6 +17,7 @@ import { LOCAL_FOLDER_URI } from '../../storage/local'
 import { NotebookStoreItemType } from '../../storage/notebook'
 import { getAuthData } from '../../token'
 import { agentEndpointManager } from '../agentEndpointManager'
+import { keyvaultApi } from '../keyvault/store'
 import { createAgentsApi } from '../agents/runtime'
 import { aisreClientManager } from '../aisreClientManager'
 import {
@@ -1817,9 +1818,11 @@ export function createAppJsGlobals({
       },
     },
     agents: createAgentsApi(displayOutput),
+    keyvault: keyvaultApi,
     help: () => {
       const message = [
         'Available namespaces:',
+        '  keyvault        - Named credential references (browser JS only)',
         '  agents          - Render and control Agents API session monitors',
         '  runme           - Notebook helpers (run all, clear outputs)',
         '  tour            - Highlight UI targets with AI-authored annotations',

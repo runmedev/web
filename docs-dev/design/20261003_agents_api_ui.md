@@ -31,7 +31,7 @@ Session status, root-turn status, and connection status are separate. Idle is no
 ## Cell UX
 
 1. Write a JS cell and select AppKernel.
-2. Configure an authenticated transport once per browser lifetime, then execute agents.monitor(session_id).
+2. Open Key Vault in the left navigation, create/unlock the vault, and add a named key. In browser JS, call agents.setKey(keyvault.getKey("openai-api")), then agents.monitor(session_id).
 3. The editor collapses into Render mode. A toolbar retains Edit, Render, Run, and normal cell actions.
 4. Edit reveals source while keeping the monitor mounted but hidden. Returning to Render does not rerun code. After source changes, label the existing output as coming from an earlier execution until Run is pressed.
 5. Clearing output, rerunning, deleting the cell, or closing the notebook releases the widget's stream. Pause monitoring stops observation only. Resume reconnects and reloads saved history.
@@ -75,10 +75,7 @@ The latest root-turn endpoint is consulted independently of item history. Missin
 ## Runtime and transport
 
 ```ts
-agents.configure({
-  baseUrl: 'https://api.openai.com/v1',
-  getHeaders: async () => ({ Authorization: `Bearer ${await obtainToken()}` }),
-})
+agents.setKey(keyvault.getKey('openai-api'))
 const widget = agents.monitor(session_id, { pageSize: 50 })
 agents.get(widget.id)        // JSON snapshot
 agents.pause(widget.id)
@@ -88,7 +85,13 @@ await agents.newer(widget.id)
 agents.latest(widget.id)
 ```
 
-obtainToken is an application-owned credential provider, not a built-in helper. Configuration stays in memory and is never returned from help, serialized into output, or written to localStorage. A deployment may supply a same-origin authenticated proxy base URL instead. This change implements the REST/SSE browser transport, not a new credential broker or server proxy. The existing Runme agent endpoint is unrelated and must not be reused implicitly. The Python runner's local key path cannot be accessed by the browser.
+Key Vault is a dedicated left-navigation panel for creating/unlocking a local vault and adding, renaming, rotating, or deleting named keys. Password fields mask values; editing a key never loads its old value into the form. The example uses `openai-api` consistently; users can choose other names.
+
+Persist a versioned AES-256-GCM envelope with a random 96-bit IV per write. Derive the nonextractable encryption key from a user passphrase with PBKDF2-SHA256 (600,000 iterations, random 128-bit salt). Encrypt names and values together. Store only ciphertext, salt, and IV in localStorage, scoped to this browser profile and Runme origin; no Drive or notebook export includes the vault. The passphrase is not saved; forgotten passphrases and cleared browser data are not recoverable. While unlocked, trusted browser JS shares the app's authority; this is not an XSS isolation boundary or a cloud vault.
+
+`keyvault.getKey(name)` returns a process-local opaque reference containing only its name when serialized. `agents.setKey(reference)` accepts only a genuine reference and binds authentication to the OpenAI API. Resolve the current value for each request rather than copying it into a durable descriptor. Lock, rotation, removal, and cross-tab vault changes pause existing streams. Reload/pagehide locks the vault. Missing names and locked vaults produce errors without secret values. Unlock explicitly and resume observation. Web Locks plus ciphertext comparisons reject stale writes; storage failures preserve previous keys, and invalid ciphertext is never automatically deleted.
+
+Keep `agents.configure({ baseUrl, getHeaders })` as an advanced integration point for application-owned proxies. Configuration remains in memory. No server credential broker is added, and browser code cannot read the Python runner's local key file. Vault writes/unlock happen in the sidebar, not in saved notebook source. Sandbox code cannot retrieve keys or install authentication providers.
 
 The transport uses GET session, GET items, GET turns, and GET events?stream=true with OpenAI-Beta: agents=v1. Reject redirects and avoid including upstream error bodies or authorization headers in notebook diagnostics. Refresh headers for each request. Sandbox cells may monitor and control already-configured monitors through host methods; they cannot install credential-provider callbacks. WebMCP can use the same read/control methods and create a monitor in a targeted notebook by inserting/executing a JS cell.
 

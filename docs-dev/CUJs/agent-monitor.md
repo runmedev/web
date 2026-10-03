@@ -14,3 +14,13 @@ Start the Go fixture with `go run testing/fake-agents-server.go` and Runme at `h
 6. Reload the browser. The saved widget is disconnected, requires Connect, and does not contain credentials or serialized messages. Configure the connection in a new execution before connecting.
 
 Capture the rendered monitor with notebook context and record assertions. Controller/component tests cover root/subagent completion, replay races, EOF, safe Markdown, malformed descriptors and pagination. NotebookData tests cover browser and sandbox output. The Go fixture drives the manual WebMCP browser CUJ; it is not registered in the automated browser orchestrator yet.
+
+
+## Named key vault
+
+1. Open Key Vault from the left navigation on an isolated test origin. Create a vault with a test passphrase and add two synthetic named keys; values must be masked and cleared after saving.
+2. Reload: the vault is locked. An incorrect passphrase must preserve the existing vault. Unlock with the correct passphrase and verify both names.
+3. Run browser JS `agents.setKey(keyvault.getKey("openai-api"))` with a synthetic test key. Verify no key value appears in notebook source, output descriptors, help, snapshots, or persisted browser ciphertext. Authentication failures must not echo credentials.
+4. Lock the vault with a monitor active. Observation must pause. Unlock/resume to reconnect; deleted or renamed keys must fail until the cell selects an existing name.
+5. Rotate and rename a key, reject duplicate names, and remove a key using inline confirmation. In a second tab, verify edits lock stale state rather than overwriting the first tab's changes.
+6. Keep existing synthetic Go transport tests for rendered messages/events/pagination. A real API credential is entered by the user through the vault sidebar, never by editing the notebook.

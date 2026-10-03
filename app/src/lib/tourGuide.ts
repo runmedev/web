@@ -77,6 +77,11 @@ export const TOUR_TARGETS: readonly TourTarget[] = [
       'Configure the identities and OAuth clients used by Runme and Google Drive.',
   },
   {
+    id: 'left-nav.key-vault',
+    label: 'Key Vault',
+    description: 'Store named API keys in an encrypted local vault and unlock them for browser JS.',
+  },
+  {
     id: 'left-nav.grader-settings',
     label: 'AI grader',
     description: 'Configure the fine-tuned model and opt in to advisory predictions in Compare changes.',

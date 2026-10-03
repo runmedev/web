@@ -10,6 +10,7 @@ import {
   ServerStackIcon,
   UserCircleIcon,
   KeyIcon,
+  LockClosedIcon,
   SparklesIcon,
 } from '@heroicons/react/24/outline'
 import { XMarkIcon } from '@heroicons/react/20/solid'
@@ -59,6 +60,7 @@ import {
   resolveDriveLoginConfiguration,
 } from '../../auth/appLoginConfiguration'
 import { getServiceAccountCredentialStatusError } from '../../auth/googleServiceAccountImpersonation'
+import KeyVaultPanel from '../KeyVault/KeyVaultPanel'
 import AuthenticationSettingsPanel from '../AuthenticationSettings/AuthenticationSettingsPanel'
 import { SuggestionGraderSettings } from '../SuggestionGraderSettings/SuggestionGraderSettings'
 import { showToast } from '../../lib/toast'
@@ -652,6 +654,13 @@ export function SidePanelToolbar() {
           <KeyIcon className="h-5 w-5" />
           <span className={tooltipBase}>Authentication Settings</span>
         </button>
+        <button type="button" data-tour-id="left-nav.key-vault"
+          className={`${sideButtonBase} ${activePanel === 'keyvault' ? sideButtonActive : sideButtonInactive}`}
+          aria-pressed={activePanel === 'keyvault'} aria-label="Toggle Key Vault panel"
+          onClick={() => togglePanel('keyvault')}>
+          <LockClosedIcon className="h-5 w-5" />
+          <span className={tooltipBase}>Key Vault</span>
+        </button>
         <button type="button" data-tour-id="left-nav.grader-settings"
           className={`${sideButtonBase} ${activePanel === 'grader' ? sideButtonActive : sideButtonInactive}`}
           aria-pressed={activePanel === 'grader'} aria-label="Toggle AI grader settings panel"
@@ -697,6 +706,7 @@ export function SidePanelContent() {
 
   return (
     <div className="relative h-full min-h-0 w-full">
+      {activePanel === 'keyvault' && <KeyVaultPanel />}
       {activePanel === 'grader' && <SuggestionGraderSettings />}
       <div
         className={`h-full min-h-0 w-full ${activePanel === 'explorer' ? 'flex' : 'hidden'}`}

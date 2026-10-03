@@ -9,13 +9,20 @@ order: 20
 
 Use an AppKernel JavaScript cell to display an Agents API session as an interactive widget. Messages render Markdown; tools and unfamiliar items expand to structured details. The separate Activity disclosure contains the latest 100 stream events.
 
-Configure a trusted browser-accessible API root once with `agents.configure({ baseUrl, getHeaders })`. The optional async `getHeaders` provider supplies authorization headers without persisting credentials in the notebook. Do not put API keys in cell source. A same-origin authenticated proxy can omit the provider. The Python runner's local key files are not accessible to browser JavaScript. This release does not include a proxy or credential broker.
+Open **Key Vault** in the left navigation. Create a vault with a passphrase, then add a key named `openai-api` using your session-management API key. You can add any number of named keys (within browser storage capacity), edit their names or values, and remove them. Key values are masked and never included in notebook files or Drive sync.
 
-After configuring the connection, set a session ID and run the following cell using **JS → browser**. Sandbox cells can monitor a connection already configured by browser JS.
+The vault is encrypted in this browser for this Runme site. Unlock it after reopening Runme; the passphrase is not saved and cannot be recovered. Clearing the site's browser data removes the vault. Only run trusted browser JavaScript while the vault is unlocked. This is local credential storage, not a cloud secret manager.
+
+Run the following cell with **JS → browser**:
 
 ```js
+agents.setKey(keyvault.getKey('openai-api'))
 const widget = agents.monitor('YOUR_SESSION_ID', { pageSize: 50 })
 ```
+
+`getKey` returns an opaque reference, so logging it shows only the key name. `setKey` selects the OpenAI API at `https://api.openai.com/v1` and resolves the current key for every request. A missing key or locked vault gives a clear error. Locking or changing the vault pauses existing monitors; unlock it and use Resume, or rerun the cell, to reconnect. Deleting or renaming a referenced key requires selecting its replacement.
+
+For an application-owned proxy, advanced browser code may still use `agents.configure({ baseUrl, getHeaders })`. Do not put secrets in notebook code. Sandbox cells can monitor a connection previously configured by browser JS, but cannot access the vault or install credential callbacks. The Python runner's key files are separate and cannot be read by browser JavaScript.
 
 ## Read and monitor
 
