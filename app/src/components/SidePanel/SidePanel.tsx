@@ -10,7 +10,7 @@ import {
   ServerStackIcon,
   UserCircleIcon,
   KeyIcon,
-  LockClosedIcon,
+  Cog6ToothIcon,
   SparklesIcon,
 } from '@heroicons/react/24/outline'
 import { XMarkIcon } from '@heroicons/react/20/solid'
@@ -651,14 +651,14 @@ export function SidePanelToolbar() {
           aria-label="Toggle Authentication Settings panel"
           onClick={() => togglePanel('authentication')}
         >
-          <KeyIcon className="h-5 w-5" />
+          <Cog6ToothIcon className="h-5 w-5" />
           <span className={tooltipBase}>Authentication Settings</span>
         </button>
         <button type="button" data-tour-id="left-nav.key-vault"
           className={`${sideButtonBase} ${activePanel === 'keyvault' ? sideButtonActive : sideButtonInactive}`}
           aria-pressed={activePanel === 'keyvault'} aria-label="Toggle Key Vault panel"
           onClick={() => togglePanel('keyvault')}>
-          <LockClosedIcon className="h-5 w-5" />
+          <KeyIcon className="h-5 w-5" />
           <span className={tooltipBase}>Key Vault</span>
         </button>
         <button type="button" data-tour-id="left-nav.grader-settings"
