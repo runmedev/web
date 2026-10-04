@@ -412,6 +412,12 @@ describe('SidePanelToolbar drive status button', () => {
     expect(togglePanelMock).toHaveBeenCalledWith('authentication')
   })
 
+  it('opens Key Vault from its dedicated navigation button', () => {
+    render(<SidePanelToolbar />)
+    fireEvent.click(screen.getByRole('button', { name: 'Toggle Key Vault panel' }))
+    expect(togglePanelMock).toHaveBeenCalledWith('keyvault')
+  })
+
   it('opens AI grader settings from the dedicated navigation button', () => {
     render(<SidePanelToolbar />)
     fireEvent.click(screen.getByRole('button', { name: 'Toggle AI grader settings panel' }))

@@ -14,6 +14,7 @@ import {
   RunmeMetadataKey,
   parser_pb,
 } from '../contexts/CellContext'
+import { callAgentsBridge } from './agents/bridge'
 import { isHtmlLanguageId } from './cellContent'
 import { DERIVED_NOTEBOOK_KEY, parseDerivedSource } from './derivedNotebook'
 import { googleAnalytics } from './googleAnalytics'
@@ -1266,12 +1267,26 @@ export class NotebookData {
       listNotebooks: this.listNotebooksForAppKernel,
     })
     const abortController = new AbortController()
+    const richOutputs: parser_pb.CellOutput[] = []
     const appGlobals = createAppJsGlobals({
       runme: runmeApi,
       resolveNotebook: this.resolveNotebookForAppKernel,
       listNotebooks: this.listNotebooksForAppKernel,
       requestNotebookWriteAccess: this.requestNotebookWriteAccess,
       signal: abortController.signal,
+      displayOutput: (mime, value) => {
+        if (abortController.signal.aborted) return
+        richOutputs.push(
+          create(parser_pb.CellOutputSchema, {
+            items: [
+              create(parser_pb.CellOutputItemSchema, {
+                mime,
+                data: encodeCellOutputBytes(value),
+              }),
+            ],
+          })
+        )
+      },
     })
     const notebooksApiBridgeServer = createNotebooksApiBridgeServer({
       notebooksApi: appGlobals.notebooks as typeof hostNotebooksApi,
@@ -1392,7 +1407,10 @@ export class NotebookData {
         // AppKernel runs are not terminal-stream based. Drop stale terminal MIME
         // outputs from prior remote runs so stdout/stderr are visible in the
         // notebook output renderer.
-        updated.outputs = createStdTextOutputs(stdout, stderr)
+        updated.outputs = [
+          ...richOutputs,
+          ...createStdTextOutputs(stdout, stderr),
+        ]
         this.updateCell(updated)
         appLogger.info('Finished AppKernel cell execution', {
           attrs: {
@@ -1417,6 +1435,8 @@ export class NotebookData {
     appGlobals: ReturnType<typeof createAppJsGlobals>
   ): Promise<unknown> {
     const target = args[0]
+    if (method.startsWith('agents.'))
+      return callAgentsBridge(appGlobals.agents, method, args)
     switch (method) {
       case 'runme.clear':
         return runmeApi.clear(target)

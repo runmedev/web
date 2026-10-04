@@ -64,6 +64,14 @@ function serializeHostError(error: unknown): string | SerializedHostError {
 }
 
 const DEFAULT_SANDBOX_ALLOWED_METHODS = [
+  'agents.monitor',
+  'agents.get',
+  'agents.pause',
+  'agents.resume',
+  'agents.older',
+  'agents.newer',
+  'agents.latest',
+  'agents.help',
   'runme.clear',
   'runme.clearOutputs',
   'runme.runAll',
@@ -485,6 +493,16 @@ export function buildSandboxSrcDoc(options: {
           grade: (args) => hostCall("suggestionGrader.grade", [args]),
           help: () => hostCall("suggestionGrader.help", []),
         };
+        const agents = {
+          monitor: (id, options) => hostCall("agents.monitor", [id, options]),
+          get: (id) => hostCall("agents.get", [id]),
+          pause: (id) => hostCall("agents.pause", [id]),
+          resume: (id) => hostCall("agents.resume", [id]),
+          older: (id) => hostCall("agents.older", [id]),
+          newer: (id) => hostCall("agents.newer", [id]),
+          latest: (id) => hostCall("agents.latest", [id]),
+          help: () => hostCall("agents.help", []),
+        };
         const notebookDiff = {
           listDriveRevisions: (target) => hostCall("notebookDiff.listDriveRevisions", [target]),
           diffDriveRevision: (args) => hostCall("notebookDiff.diffDriveRevision", [args]),
@@ -628,6 +646,7 @@ export function buildSandboxSrcDoc(options: {
           consoleProxy.log("- await credentials.google.setServiceAccountFromFilePath(path)");
           consoleProxy.log("- await drive.authorize({ mode?, prompt? })");
           consoleProxy.log("- await drive.saveAsCurrentNotebook(folderIdOrUri, fileName)");
+          consoleProxy.log("- agents.monitor(sessionId, { pageSize: 50 }); agents.help()");
           consoleProxy.log("- help()");
         };
 
@@ -636,6 +655,7 @@ export function buildSandboxSrcDoc(options: {
           try {
             const runner = new Function(
               "console",
+              "agents",
               "runme",
               "tour",
               "ui",
@@ -660,7 +680,7 @@ export function buildSandboxSrcDoc(options: {
               "help",
               '"use strict"; return (async () => {\\n' + code + '\\n})();',
             );
-            await runner(consoleProxy, runme, tour, ui, opfs, net, embed, notebooks, documents, documentation, comments, comparisons, revisions, suggestions, notebookDiff, trainingExamples, suggestionGrader, app, runmeRunners, explorer, credentials, drive, help);
+            await runner(consoleProxy, agents, runme, tour, ui, opfs, net, embed, notebooks, documents, documentation, comments, comparisons, revisions, suggestions, notebookDiff, trainingExamples, suggestionGrader, app, runmeRunners, explorer, credentials, drive, help);
           } catch (error) {
             exitCode = 1;
             post({ type: "stderr", data: String(error) + "\\n" });

@@ -8,6 +8,8 @@ from `docs-dev/cujs/`.
 
 ## Current CUJs
 
+- [agent-monitor.md](agent-monitor.md) — JavaScript widget rendering, live history, Edit/Render, and observation lifecycle using the Go Agents API fixture.
+
 - `authentication-settings-persistence.md` — saved OAuth scopes survive refresh under production config precedence.
 
 - [horizontal-rendering.md](horizontal-rendering.md) — viewport-bounded prose with locally scrolling wide

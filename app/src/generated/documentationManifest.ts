@@ -162,4 +162,12 @@ export const DOCUMENTATION_MANIFEST = [
     order: 19,
     path: 'docs/19-notebook-review-rounds.md',
   },
+  {
+    name: 'agent-monitors',
+    title: 'Agent session monitors',
+    description:
+      'Render Agents API sessions in JavaScript cells with live Markdown, tool details, turn status, and history pagination.',
+    order: 20,
+    path: 'docs/20-agent-monitors.md',
+  },
 ] as const satisfies readonly DocumentationManifestEntry[]

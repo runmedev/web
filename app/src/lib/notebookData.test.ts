@@ -110,6 +110,9 @@ vi.mock("./runtime/sandboxJsKernel", () => ({
     async run(source: string): Promise<void> {
       let exitCode = 0;
       try {
+        if (source.includes("agents.monitor")) {
+          await this.bridge.call("agents.monitor", ["sess_test", { pageSize: 25 }]);
+        }
         if (source.includes("runme.getCurrentNotebook")) {
           const notebook = (await this.bridge.call(
             "runme.getCurrentNotebook",
@@ -292,6 +295,44 @@ async function waitForCondition(
 }
 
 describe("bindStreamsToCell", () => {
+  it.each([APPKERNEL_RUNNER_NAME, APPKERNEL_SANDBOX_RUNNER_NAME])(
+    'renders a typed agent widget from %s without keeping cell execution running',
+    async (runnerName) => {
+      const cell = create(parser_pb.CellSchema, {
+        refId: 'agent-widget-cell',
+        kind: parser_pb.CellKind.CODE,
+        languageId: 'javascript',
+        metadata: { [RunmeMetadataKey.RunnerName]: runnerName },
+        value:
+          'await agents.monitor("sess_test", { pageSize: 25 }); console.log("mounted");',
+      })
+      const model = new NotebookData({
+        notebook: create(parser_pb.NotebookSchema, { cells: [cell] }),
+        uri: 'nb://agents',
+        name: 'agents.runme',
+        notebookStore: null,
+        loaded: true,
+      })
+      model.runCodeCell(cell)
+      await waitForCondition(
+        () =>
+          model.getCellSnapshot(cell.refId)?.metadata?.[
+            RunmeMetadataKey.ExitCode
+          ] === '0'
+      )
+      const output = model
+        .getCellSnapshot(cell.refId)
+        ?.outputs.flatMap((o) => o.items)
+        .find((i) => i.mime === 'application/vnd.runme.agent-monitor+json')
+      expect(output).toBeTruthy()
+      expect(JSON.parse(new TextDecoder().decode(output!.data))).toMatchObject({
+        version: 1,
+        sessionId: 'sess_test',
+        pageSize: 25,
+      })
+    }
+  )
+
   it("appends stdout/stderr to existing outputs", () => {
     const refId = "cell-1";
     const cell = create(parser_pb.CellSchema, {

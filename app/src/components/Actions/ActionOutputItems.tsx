@@ -1,3 +1,5 @@
+import { AgentMonitorOutput } from '../Agents/AgentMonitor'
+import { AGENT_MONITOR_MIME } from '../../lib/agents/types'
 import { HtmlOutput } from './HtmlOutput'
 import React from 'react'
 import { LinkIcon } from '@heroicons/react/20/solid'
@@ -86,7 +88,9 @@ export function ActionOutputItemView({
 
   let content: React.ReactNode = null
 
-  if (mime === 'text/html') {
+  if (mime === AGENT_MONITOR_MIME) {
+    content = <AgentMonitorOutput value={text} />
+  } else if (mime === 'text/html') {
     content = (
       <HtmlOutput
         html={text}

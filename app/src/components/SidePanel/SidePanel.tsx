@@ -9,16 +9,17 @@ import {
   QueueListIcon,
   ServerStackIcon,
   UserCircleIcon,
-  KeyIcon,
+  Cog6ToothIcon,
   SparklesIcon,
 } from '@heroicons/react/24/outline'
 import { XMarkIcon } from '@heroicons/react/20/solid'
-import { CloudIcon as CloudSolidIcon } from '@heroicons/react/24/solid'
+import { CloudIcon as CloudSolidIcon, KeyIcon } from '@heroicons/react/24/solid'
 import {
   useCallback,
   useEffect,
   useRef,
   useState,
+  useSyncExternalStore,
   type KeyboardEvent as ReactKeyboardEvent,
   type MouseEvent,
 } from 'react'
@@ -59,6 +60,8 @@ import {
   resolveDriveLoginConfiguration,
 } from '../../auth/appLoginConfiguration'
 import { getServiceAccountCredentialStatusError } from '../../auth/googleServiceAccountImpersonation'
+import KeyVaultPanel from '../KeyVault/KeyVaultPanel'
+import { keyVault } from '../../lib/keyvault/store'
 import AuthenticationSettingsPanel from '../AuthenticationSettings/AuthenticationSettingsPanel'
 import { SuggestionGraderSettings } from '../SuggestionGraderSettings/SuggestionGraderSettings'
 import { showToast } from '../../lib/toast'
@@ -234,6 +237,10 @@ function OpenDocumentsPanel() {
 }
 
 export function SidePanelToolbar() {
+  // Keep the indicator current even while the vault panel is closed.
+  const vaultSnapshot = useSyncExternalStore(keyVault.subscribe, keyVault.getSnapshot)
+  const vaultUnlocked = vaultSnapshot.status === 'unlocked'
+  const vaultStatus = vaultUnlocked ? 'Unlocked' : 'Locked'
   const { activePanel, togglePanel } = useSidePanel()
   const { commentsPanelOpen, toggleCommentsPanel } = useCommentsPanel()
   const { showDocument } = useWorkspaceDocumentContext()
@@ -649,8 +656,16 @@ export function SidePanelToolbar() {
           aria-label="Toggle Authentication Settings panel"
           onClick={() => togglePanel('authentication')}
         >
-          <KeyIcon className="h-5 w-5" />
+          <Cog6ToothIcon className="h-5 w-5" />
           <span className={tooltipBase}>Authentication Settings</span>
+        </button>
+        <button type="button" data-tour-id="left-nav.key-vault"
+          className={`${sideButtonBase} ${activePanel === 'keyvault' ? sideButtonActive : sideButtonInactive}`}
+          aria-pressed={activePanel === 'keyvault'} aria-label="Toggle Key Vault panel"
+          aria-description={`Key Vault: ${vaultStatus}`}
+          onClick={() => togglePanel('keyvault')}>
+          <KeyIcon className={`h-5 w-5 ${vaultUnlocked ? 'text-emerald-500' : 'text-red-500'}`} />
+          <span className={tooltipBase}>Key Vault: {vaultStatus}</span>
         </button>
         <button type="button" data-tour-id="left-nav.grader-settings"
           className={`${sideButtonBase} ${activePanel === 'grader' ? sideButtonActive : sideButtonInactive}`}
@@ -697,6 +712,7 @@ export function SidePanelContent() {
 
   return (
     <div className="relative h-full min-h-0 w-full">
+      {activePanel === 'keyvault' && <KeyVaultPanel />}
       {activePanel === 'grader' && <SuggestionGraderSettings />}
       <div
         className={`h-full min-h-0 w-full ${activePanel === 'explorer' ? 'flex' : 'hidden'}`}
