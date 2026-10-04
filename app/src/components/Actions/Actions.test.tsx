@@ -3833,7 +3833,9 @@ describe('Action component', () => {
       message: 'Selected text copied',
       tone: 'success',
     })
-    expect(screen.queryByRole('button', { name: 'Copy' })).toBeNull()
+    await waitFor(() => {
+      expect(screen.queryByRole('button', { name: 'Copy' })).toBeNull()
+    })
     selection.removeAllRanges()
   })
 

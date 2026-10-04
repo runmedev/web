@@ -40,7 +40,7 @@ Runtime controls use the descriptor returned by `agents.monitor`: `agents.get(wi
 
 Use **Message the agent** below the rendered conversation. Press **Send** or Enter to submit; Shift+Enter inserts a new line. The monitor must be connected. Sending starts a new turn when idle or steers the active turn. The input stays visible while browsing history; a successful send returns to Latest.
 
-The composer prevents simultaneous submissions and clears the draft only after the API accepts it. On a timeout or error, the draft stays available; retry unchanged to reuse its submission ID and avoid duplicates. Editing sends a new message. Reconnecting never sends automatically. Drafts and retry IDs stay in memory for the current widget; reloading or rerunning the cell discards them. After an uncertain send, retry before reloading, or check conversation history before submitting again.
+The composer prevents simultaneous submissions and clears the draft only after the API accepts it. On a timeout or error, the draft stays available; check the latest conversation before retrying because the message may already have been accepted. Unchanged retries reuse a submission ID for transports that honor it; this is not a guarantee against duplicates. Editing sends a new message. Reconnecting never sends automatically. Drafts and retry IDs stay in memory for the current widget; reloading or rerunning the cell discards them. After an uncertain send, retry before reloading, or check conversation history before submitting again.
 
 ## Synthetic local demo
 

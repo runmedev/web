@@ -55,3 +55,10 @@ jobs:
         uses: stateful/runme-action@v2
         with:
           workflows: test
+      - name: Test agent widgets and key vault
+        run: >-
+          pnpm -C app exec vitest run
+          src/lib/agents src/lib/keyvault src/components/Agents src/components/KeyVault
+          src/lib/runtime/sandboxJsKernel.test.ts src/lib/notebookData.test.ts
+          src/components/Actions/Actions.test.tsx
+          --maxWorkers=2 --minWorkers=1

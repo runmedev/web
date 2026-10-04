@@ -73,6 +73,39 @@ function setup(overrides: Partial<AgentTransport> = {}) {
 }
 
 describe('AgentMonitor', () => {
+  it('defers scheduled refreshes until an in-flight message submission settles', async () => {
+    vi.useFakeTimers()
+    let resolveSend!: () => void
+    let sendSignal!: AbortSignal
+    const { model, transport } = setup({
+      sendMessage: (_id, _text, _key, signal) => {
+        sendSignal = signal
+        return new Promise<void>((resolve) => {
+          resolveSend = resolve
+        })
+      },
+    })
+    await model.connect()
+    model.setDraft('Continue the work')
+    const sending = model.sendMessage()
+    model.applyEvent({
+      type: 'agent.session.turn.completed',
+      turn: {
+        id: 'root',
+        subagent_id: null,
+        status: 'completed',
+        created_at: 1,
+      },
+    })
+    await vi.advanceTimersByTimeAsync(1000)
+    expect(sendSignal.aborted).toBe(false)
+    expect(transport.stream).toHaveBeenCalledTimes(1)
+    resolveSend()
+    expect(await sending).toBe(true)
+    await vi.advanceTimersByTimeAsync(500)
+    expect(transport.stream).toHaveBeenCalledTimes(2)
+  })
+
   it('keeps failed submissions retryable without duplication and requires live observation', async () => {
     const sendMessage = vi
       .fn()

@@ -132,7 +132,7 @@ export class AgentMonitor {
       // Acceptance is uncertain after a network failure. Keep both text and retry ID.
       this.update({
         sendError:
-          'Could not confirm delivery. Your draft is kept. Retry unchanged to avoid duplicates; editing sends a new message.',
+          'Could not confirm delivery. Your draft is kept. Check the latest conversation before retrying: the message may already have been accepted.',
       })
       return false
     } finally {
@@ -263,6 +263,12 @@ export class AgentMonitor {
     if (this.refreshTimer || this.controller?.signal.aborted) return
     this.refreshTimer = setTimeout(() => {
       this.refreshTimer = undefined
+      // Reconnecting aborts the observation signal shared by an active send.
+      // Let delivery settle first so a status refresh cannot interrupt its response.
+      if (this.snapshot.sending) {
+        this.scheduleRefresh()
+        return
+      }
       // Full reconnect applies the documented stream-before-snapshot recovery sequence.
       void this.connect()
     }, 500)
