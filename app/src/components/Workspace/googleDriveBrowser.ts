@@ -14,6 +14,9 @@ export type GoogleDriveLocation = {
 
 export type GoogleDriveResource = GoogleDriveLocation & {
   mimeType: string
+  parents?: string[]
+  /** A shortcut's name is an alias; its target ancestry must be fetched. */
+  isShortcut?: boolean
 }
 
 type DriveListResponse = {
@@ -79,6 +82,7 @@ function normalizeGoogleDriveResource(
       name: file.name,
       mimeType: file.shortcutDetails.targetMimeType,
       driveId: undefined,
+      isShortcut: true,
       ...(file.shortcutDetails.targetResourceKey
         ? { resourceKey: file.shortcutDetails.targetResourceKey }
         : {}),
@@ -90,12 +94,13 @@ function normalizeGoogleDriveResource(
     name: file.name,
     mimeType: file.mimeType,
     driveId: file.driveId ?? parentDriveId,
+    ...(Array.isArray(file.parents) ? { parents: file.parents } : {}),
     ...(file.resourceKey ? { resourceKey: file.resourceKey } : {}),
   }
 }
 
 /** Builds Drive's resource-key header for a protected item when available. */
-function driveResourceKeyHeader(
+export function driveResourceKeyHeader(
   location: Pick<GoogleDriveLocation, 'id' | 'resourceKey'>
 ): Record<string, string> {
   if (!location.resourceKey) {
@@ -110,7 +115,7 @@ function driveResourceKeyHeader(
  * Builds a Drive v3 URL against the configured runtime endpoint. The trailing
  * slash keeps relative API paths stable for production and test base URLs.
  */
-function driveApiUrl(path: string): URL {
+export function driveApiUrl(path: string): URL {
   const baseUrl = getGoogleDriveBaseUrl() || 'https://www.googleapis.com'
   return new URL(path, `${baseUrl}/`)
 }
@@ -353,7 +358,7 @@ export async function searchGoogleDriveResources(
       url.searchParams.set('pageSize', '100')
       url.searchParams.set(
         'fields',
-        'nextPageToken,incompleteSearch,files(id,name,mimeType,driveId,resourceKey,shortcutDetails(targetId,targetMimeType,targetResourceKey))'
+        'nextPageToken,incompleteSearch,files(id,name,mimeType,parents,driveId,resourceKey,shortcutDetails(targetId,targetMimeType,targetResourceKey))'
       )
       url.searchParams.set('spaces', 'drive')
       url.searchParams.set('corpora', 'allDrives')
@@ -395,8 +400,7 @@ export async function searchGoogleDriveResources(
   const distanceLimit = fuzzySearchDistanceLimit(comparableQuery.length)
   if (
     resources.some(
-      (resource) =>
-        normalizeSearchName(resource.name) === comparableQuery
+      (resource) => normalizeSearchName(resource.name) === comparableQuery
     )
   ) {
     return resources
