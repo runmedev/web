@@ -36,6 +36,7 @@ describe('bounded storage read guardrail', () => {
   })
 
   it('keeps production file and creation enumeration behind the helpers', async () => {
+    // This scans the entire source tree; allow bounded headroom on shared CI CPUs.
     // Run the same rule in the regular app test suite, even when CI skips lint.
     const lint = new ESLint({
       allowInlineConfig: false,
@@ -51,5 +52,5 @@ describe('bounded storage read guardrail', () => {
     expect(results.flatMap((result) => result.messages.map((message) =>
       `${result.filePath}:${message.line} ${message.message}`
     ))).toEqual([])
-  })
+  }, 30_000)
 })

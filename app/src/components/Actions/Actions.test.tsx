@@ -997,7 +997,8 @@ describe('Actions tabs', () => {
     )
     expect(await screen.findByText('Feedback from diff')).toBeTruthy()
     expect(screen.getByText(/Historical source/)).toBeTruthy()
-  })
+    // Multiple rendered edit/reply/resolve cycles exceed 5s on shared CI CPUs.
+  }, 20_000)
 
   it.each(['rendered', 'code', 'markdown-source'])(
     'submits a %s selection through real operation-log persistence after a pending flush and later edit',
