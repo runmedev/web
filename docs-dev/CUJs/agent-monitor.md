@@ -18,6 +18,10 @@ Start the Go fixture with `go run testing/fake-agents-server.go` and Runme at `h
 Capture the rendered monitor with notebook context and record assertions. Controller/component tests cover root/subagent completion, replay races, EOF, safe Markdown, malformed descriptors and pagination. NotebookData tests cover browser and sandbox output. The Go fixture drives the manual WebMCP browser CUJ; it is not registered in the automated browser orchestrator yet.
 
 
+## Browser messaging without a widget
+
+Using the Go fixture and an isolated browser JS notebook, configure `agents.configure({baseUrl:'http://127.0.0.1:8989/v1'})`, then `await agents.sendMessage('sess_demo', 'Browser helper test')`. In another cell, call `await agents.listItems('sess_demo', {limit:2})` and assert the newest item is the fixture reply and the next item is the submitted prompt. Verify `{limit:2,after:page.last_id}` returns older items. No monitor needs to be mounted. Save the assertions and browser screenshot under `app/test/browser/test-output/`. Never send this test prompt to a real session.
+
 ## Named key vault
 
 1. Open Key Vault from the left navigation on an isolated test origin. Create a vault with a test passphrase and add two synthetic named keys; values must be masked and cleared after saving.

@@ -64,6 +64,26 @@ Runtime controls use the descriptor returned by `agents.monitor`: `agents.get(wi
 
 ## Send a message
 
+Browser JS can send and read messages without a widget:
+
+```js
+agents.setKey(keyvault.getKey('openai-api'))
+const sessionId = localStorage.getItem('session_id')
+await agents.sendMessage(sessionId, 'Some prompt')
+```
+
+In another cell, read the latest items:
+
+```js
+agents.setKey(keyvault.getKey('openai-api'))
+const page = await agents.listItems(localStorage.getItem('session_id'), { limit: 50 })
+console.log(page.data)
+```
+
+Sending resolves when the API accepts the prompt; it does not wait for the agent's reply. Items are newest first and include tool activity. Use `{ after: page.last_id }` when `page.has_more` is true to fetch the next older page. The default limit is 50 (maximum 100). These helpers use the current connection and a 30-second timeout; pass `{ signal }` to supply your own cancellation instead.
+
+Each send gets a new idempotency key and is never retried automatically. After an uncertain failure, check session history before retrying. For an intentional retry, pass the same `{ idempotencyKey }` as the original call; deduplication depends on the server honoring that key. Rerunning the simple two-argument cell submits a new message. Prompts and replies are not persisted automatically; explicitly logged output follows the notebook's usual saving behavior.
+
 Use **Message the agent** below the rendered conversation. Press **Send** or Enter to submit; Shift+Enter inserts a new line. The monitor must be connected. Sending starts a new turn when idle or steers the active turn. The input stays visible while browsing history; a successful send returns to Latest.
 
 The composer prevents simultaneous submissions and clears the draft only after the API accepts it. On a timeout or error, the draft stays available; check the latest conversation before retrying because the message may already have been accepted. Unchanged retries reuse a submission ID for transports that honor it; this is not a guarantee against duplicates. Editing sends a new message. Reconnecting never sends automatically. Drafts and retry IDs stay in memory for the current widget; reloading or rerunning the cell discards them. After an uncertain send, retry before reloading, or check conversation history before submitting again.

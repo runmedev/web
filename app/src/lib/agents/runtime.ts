@@ -108,6 +108,13 @@ export function resetAgentMonitors(): void {
   releaseVaultSubscription = undefined
 }
 
+/** Catch missing localStorage values before making a request for an invalid session. */
+function requireSessionId(sessionId: string): string {
+  if (typeof sessionId !== 'string' || !sessionId.trim())
+    throw new Error('sessionId must be non-empty.')
+  return sessionId.trim()
+}
+
 /** The same commands back widget buttons, AppKernel cells and the sandbox bridge. */
 export function createAgentsApi(display?: Display) {
   const requireMonitor = (id: string) => {
@@ -119,6 +126,50 @@ export function createAgentsApi(display?: Display) {
     return monitor
   }
   return {
+    /** Submit once without a widget; resolving means accepted, not that the agent finished. */
+    sendMessage: async (
+      sessionId: string,
+      text: string,
+      options: { idempotencyKey?: string; signal?: AbortSignal } = {}
+    ) => {
+      const id = requireSessionId(sessionId)
+      if (typeof text !== 'string' || !text.trim())
+        throw new Error('Message text must be non-empty.')
+      if (
+        options.idempotencyKey !== undefined &&
+        (typeof options.idempotencyKey !== 'string' ||
+          !options.idempotencyKey.trim())
+      )
+        throw new Error('idempotencyKey must be non-empty.')
+      // No automatic retries: an uncertain failure may already have started a turn.
+      await getConnection().sendMessage(
+        id,
+        text,
+        options.idempotencyKey ?? crypto.randomUUID(),
+        options.signal ?? AbortSignal.timeout(30000)
+      )
+    },
+    /** Read one newest-first page, including messages and tool items, without a widget. */
+    listItems: async (
+      sessionId: string,
+      options: { limit?: number; after?: string; signal?: AbortSignal } = {}
+    ) => {
+      const id = requireSessionId(sessionId)
+      const limit = options.limit ?? 50
+      if (!Number.isInteger(limit) || limit < 1 || limit > 100)
+        throw new Error('limit must be between 1 and 100.')
+      if (
+        options.after !== undefined &&
+        (typeof options.after !== 'string' || !options.after.trim())
+      )
+        throw new Error('after must be a non-empty item ID.')
+      return getConnection().items(
+        id,
+        limit,
+        options.after,
+        options.signal ?? AbortSignal.timeout(30000)
+      )
+    },
     /** Create once using the current connection; callers choose what result fields to save. */
     createSession: (
       parameters: AgentSessionCreateParams,
@@ -177,6 +228,6 @@ export function createAgentsApi(display?: Display) {
     newer: (id: string) => requireMonitor(id).newer(),
     latest: (id: string) => requireMonitor(id).latest(),
     help: () =>
-      'agents.setKey(keyvault.getKey(name)) [browser JS; OpenAI API]; await agents.createSession(parameters, { signal? }) [browser JS; creates once, 30s default timeout; check existing sessions before retrying an uncertain failure]; agents.configure({ baseUrl, getHeaders? }) [browser JS only; memory-only auth]; agents.monitor(sessionId, { pageSize?: 1..100 }) [notebook JS cell]; agents.get(id); agents.pause(id); await agents.resume(id); await agents.older(id); await agents.newer(id); agents.latest(id). Pause stops observation, not the agent. Saved widgets require Connect.',
+      'agents.setKey(keyvault.getKey(name)) [browser JS; OpenAI API]; await agents.createSession(parameters, { signal? }) [browser JS; creates once, 30s default timeout; check existing sessions before retrying an uncertain failure]; await agents.sendMessage(sessionId, text, { idempotencyKey?, signal? }) [browser JS; submits once, does not wait for a reply]; await agents.listItems(sessionId, { limit?: 1..100, after?, signal? }) [browser JS; newest-first page]; agents.configure({ baseUrl, getHeaders? }) [browser JS only; memory-only auth]; agents.monitor(sessionId, { pageSize?: 1..100 }) [notebook JS cell]; agents.get(id); agents.pause(id); await agents.resume(id); await agents.older(id); await agents.newer(id); agents.latest(id). Pause stops observation, not the agent. Saved widgets require Connect.',
   }
 }

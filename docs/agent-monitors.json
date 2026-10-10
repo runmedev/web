@@ -61,6 +61,45 @@
       "value": "## Read and monitor\n\n**Edit** shows the source and **Render** shows the widget, without running the cell again. Editing keeps observation active. Press Run to apply changed source. The JS cell finishes immediately; the separate root-turn status tracks agent completion.\n\n**Older** and **Newer** page through saved items, with at most the configured page size visible. **Latest** returns to the live window. New output never replaces an older page while you read it. Scroll to the live bottom to follow incoming output automatically.\n\n**Pause monitoring** stops this widget's requests, not the agent. **Resume monitoring** reloads saved state and reconnects. A closed stream displays Disconnected; it does not imply completion. Session status, root-turn status, and connection status are separate. Child-turn completion does not complete the root turn.\n\nSaved widget outputs contain only a session ID, widget ID, version, and page size. Reopening a notebook requires Connect. Credentials and live messages are not serialized into the widget output. Required actions are shown for inspection; submit tool results or cancellation through your agent client.\n\nRuntime controls use the descriptor returned by `agents.monitor`: `agents.get(widget.id)`, `agents.pause(widget.id)`, `await agents.resume(widget.id)`, `await agents.older(widget.id)`, `await agents.newer(widget.id)`, and `agents.latest(widget.id)`. `agents.help()` lists the commands.\n\n## Send a message\n\nUse **Message the agent** below the rendered conversation. Press **Send** or Enter to submit; Shift+Enter inserts a new line. The monitor must be connected. Sending starts a new turn when idle or steers the active turn. The input stays visible while browsing history; a successful send returns to Latest.\n\nThe composer prevents simultaneous submissions and clears the draft only after the API accepts it. On a timeout or error, the draft stays available; check the latest conversation before retrying because the message may already have been accepted. Unchanged retries reuse a submission ID for transports that honor it; this is not a guarantee against duplicates. Editing sends a new message. Reconnecting never sends automatically. Drafts and retry IDs stay in memory for the current widget; reloading or rerunning the cell discards them. After an uncertain send, retry before reloading, or check conversation history before submitting again.\n\n## Synthetic local demo\n\nStart `go run testing/fake-agents-server.go` from the repository and Runme on port 5173. Configure `agents.configure({ baseUrl: 'http://127.0.0.1:8989/v1' })`, then run `agents.monitor('sess_demo', { pageSize: 5 })`. This fixture contains 125 items and emits live text every two seconds. No real agent or credentials are involved.\n\n",
       "refId": "002946c0829a4f3ab899510f2563b819",
       "metadata": {}
+    },
+    {
+      "kind": 1,
+      "languageId": "markdown",
+      "value": "## Send a message\n\nBrowser JS can send and read messages without a widget:",
+      "metadata": {},
+      "refId": "browser-messaging-0"
+    },
+    {
+      "kind": 2,
+      "languageId": "javascript",
+      "value": "agents.setKey(keyvault.getKey('openai-api'))\nconst sessionId = localStorage.getItem('session_id')\nawait agents.sendMessage(sessionId, 'Some prompt')",
+      "metadata": {
+        "runme.dev/runnerName": "appkernel-js"
+      },
+      "refId": "browser-messaging-1"
+    },
+    {
+      "kind": 1,
+      "languageId": "markdown",
+      "value": "In another cell, read the latest items:",
+      "metadata": {},
+      "refId": "browser-messaging-2"
+    },
+    {
+      "kind": 2,
+      "languageId": "javascript",
+      "value": "agents.setKey(keyvault.getKey('openai-api'))\nconst page = await agents.listItems(localStorage.getItem('session_id'), { limit: 50 })\nconsole.log(page.data)",
+      "metadata": {
+        "runme.dev/runnerName": "appkernel-js"
+      },
+      "refId": "browser-messaging-3"
+    },
+    {
+      "kind": 1,
+      "languageId": "markdown",
+      "value": "Sending resolves when the API accepts the prompt; it does not wait for the agent's reply. Items are newest first and include tool activity. Use `{ after: page.last_id }` when `page.has_more` is true to fetch the next older page. The default limit is 50 (maximum 100). These helpers use the current connection and a 30-second timeout; pass `{ signal }` to supply your own cancellation instead.\n\nEach send gets a new idempotency key and is never retried automatically. After an uncertain failure, check session history before retrying. For an intentional retry, pass the same `{ idempotencyKey }` as the original call; deduplication depends on the server honoring that key. Rerunning the simple two-argument cell submits a new message. Prompts and replies are not persisted automatically; explicitly logged output follows the notebook's usual saving behavior.",
+      "metadata": {},
+      "refId": "browser-messaging-4"
     }
   ],
   "metadata": {}
