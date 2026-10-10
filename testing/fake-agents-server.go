@@ -64,6 +64,7 @@ func acceptDemoMessage(w http.ResponseWriter, r *http.Request) {
 
 // main serves synthetic history and an SSE stream on loopback only.
 func main() {
+	http.HandleFunc("/v1/agents/sessions", serveAgentDemo)
 	http.HandleFunc("/v1/agents/sessions/sess_demo", serveAgentDemo)
 	http.HandleFunc("/v1/agents/sessions/sess_demo/", serveAgentDemo)
 	log.Fatal(http.ListenAndServe("127.0.0.1:8989", nil))
@@ -78,6 +79,20 @@ func serveAgentDemo(w http.ResponseWriter, r *http.Request) {
 	}
 	if r.Method == "OPTIONS" {
 		w.WriteHeader(http.StatusNoContent)
+		return
+	}
+	if r.Method == "POST" && r.URL.Path == "/v1/agents/sessions" {
+		// Reuse the fixed synthetic session so the creation CUJ can also monitor it.
+		var body struct {
+			AgentID string `json:"agent_id"`
+		}
+		if json.NewDecoder(http.MaxBytesReader(w, r.Body, 1<<20)).Decode(&body) != nil || body.AgentID != "agent_demo" {
+			http.Error(w, "Use agent_demo for this fixture", http.StatusBadRequest)
+			return
+		}
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusCreated)
+		json.NewEncoder(w).Encode(map[string]any{"id": "sess_demo", "environment": map[string]any{"id": "env_demo", "remote_url": "http://127.0.0.1:8989/remote"}})
 		return
 	}
 	if r.Method == "POST" && strings.HasSuffix(r.URL.Path, "/events") {

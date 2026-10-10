@@ -6,7 +6,7 @@ Start the Go fixture with `go run testing/fake-agents-server.go` and Runme at `h
 
 ## Journey and acceptance
 
-1. Execute `agents.configure({baseUrl:'http://127.0.0.1:8989/v1'}); agents.monitor('sess_demo',{pageSize:5})` in a targeted notebook cell. Read the cell back: exit code is 0 and output includes `application/vnd.runme.agent-monitor+json`.
+1. Execute `agents.configure({baseUrl:'http://127.0.0.1:8989/v1'}); const session = await agents.createSession({agent_id:'agent_demo',environment:{type:'self_hosted',workspace_directory:'/workspace'}}); localStorage.setItem('session_id',session.id); localStorage.setItem('environment_id',session.environment.id); localStorage.setItem('remote_url',session.environment.remote_url)` in a targeted browser JS cell. Assert the three values are `sess_demo`, `env_demo`, and `http://127.0.0.1:8989/remote`. In a separate browser JS cell, execute `agents.monitor(localStorage.getItem('session_id'),{pageSize:5})`. Read the cell back: exit code is 0 and output includes `application/vnd.runme.agent-monitor+json`.
 2. Verify Render is selected, the editor is hidden, the widget has five items, GFM tables and fenced code render, and connection is live while the root turn remains in progress.
 3. Select Older using the same runtime controller (`await agents.older(widgetId)`). Assert five earlier items remain visible as events arrive, and the Latest update count increases. Newer/Latest return to the bounded live page.
 4. Toggle Edit then Render. Assert source is visible only in Edit and the existing monitor remains mounted; neither operation executes the cell.
@@ -17,6 +17,10 @@ Start the Go fixture with `go run testing/fake-agents-server.go` and Runme at `h
 
 Capture the rendered monitor with notebook context and record assertions. Controller/component tests cover root/subagent completion, replay races, EOF, safe Markdown, malformed descriptors and pagination. NotebookData tests cover browser and sandbox output. The Go fixture drives the manual WebMCP browser CUJ; it is not registered in the automated browser orchestrator yet.
 
+
+## Browser messaging without a widget
+
+Using the Go fixture and an isolated browser JS notebook, configure `agents.configure({baseUrl:'http://127.0.0.1:8989/v1'})`, then `await agents.sendMessage('sess_demo', 'Browser helper test')`. In another cell, call `await agents.listItems('sess_demo', {limit:2})` and assert the newest item is the fixture reply and the next item is the submitted prompt. Verify `{limit:2,after:page.last_id}` returns older items. No monitor needs to be mounted. Save the assertions and browser screenshot under `app/test/browser/test-output/`. Never send this test prompt to a real session.
 
 ## Named key vault
 
