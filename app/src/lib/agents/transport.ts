@@ -3,6 +3,7 @@ import type {
   AgentItem,
   AgentObject,
   AgentPage,
+  AgentSession,
   AgentTransport,
 } from './types'
 
@@ -77,38 +78,27 @@ export function createAgentTransport(
     path: string,
     signal: AbortSignal,
     stream = false,
-    submission?: { text: string; id: string }
+    submission?: { body: AgentObject; id?: string }
   ) => {
     const headers = new Headers(await options.getHeaders?.())
     headers.set('OpenAI-Beta', 'agents=v1')
     headers.set('Accept', stream ? 'text/event-stream' : 'application/json')
     if (submission) {
       headers.set('Content-Type', 'application/json')
-      headers.set('Idempotency-Key', submission.id)
+      if (submission.id) headers.set('Idempotency-Key', submission.id)
     }
-    const response = await fetch(`${root}/agents/sessions/${path}`, {
-      method: submission ? 'POST' : 'GET',
-      body: submission
-        ? JSON.stringify({
-            events: [
-              {
-                type: 'agent.session.input.message',
-                input: [
-                  {
-                    role: 'user',
-                    content: [{ type: 'input_text', text: submission.text }],
-                  },
-                ],
-              },
-            ],
-          })
-        : undefined,
-      headers,
-      signal,
-      credentials: 'same-origin',
-      redirect: 'error',
-      cache: 'no-store',
-    })
+    const response = await fetch(
+      `${root}/agents/sessions${path ? `/${path}` : ''}`,
+      {
+        method: submission ? 'POST' : 'GET',
+        body: submission ? JSON.stringify(submission.body) : undefined,
+        headers,
+        signal,
+        credentials: 'same-origin',
+        redirect: 'error',
+        cache: 'no-store',
+      }
+    )
     // Do not echo upstream response bodies: gateways can include credentials.
     if (!response.ok)
       throw new Error(
@@ -119,9 +109,28 @@ export function createAgentTransport(
   const json = async <T>(path: string, signal: AbortSignal): Promise<T> =>
     (await request(path, signal)).json()
   return {
+    // A timeout can still leave a created session; never retry this POST automatically.
+    createSession: async (parameters, signal) => {
+      const response = await request('', signal, false, { body: parameters })
+      const session = await response.json().catch(() => null)
+      if (!session || typeof session.id !== 'string' || !session.id.trim())
+        throw new Error(
+          'Invalid session response. Check existing sessions before retrying creation.'
+        )
+      return session as AgentSession
+    },
     sendMessage: async (id, text, submissionId, signal) => {
       await request(`${encodeURIComponent(id)}/events`, signal, false, {
-        text,
+        body: {
+          events: [
+            {
+              type: 'agent.session.input.message',
+              input: [
+                { role: 'user', content: [{ type: 'input_text', text }] },
+              ],
+            },
+          ],
+        },
         id: submissionId,
       })
     },

@@ -1,5 +1,14 @@
 /** Wire objects retain unknown fields so new API item types remain inspectable. */
 export type AgentObject = Record<string, unknown>
+/** Creation accepts API fields unchanged, including stored agents and environments. */
+export type AgentSessionCreateParams = AgentObject & {
+  agent_id?: string
+  environment?: AgentObject
+}
+export type AgentSession = AgentObject & {
+  id: string
+  environment?: AgentObject & { id: string; remote_url?: string }
+}
 export type AgentItem = AgentObject & {
   id: string | null
   type: string
@@ -20,6 +29,10 @@ export type AgentStream = {
   close(): void
 }
 export interface AgentTransport {
+  createSession(
+    parameters: AgentSessionCreateParams,
+    signal: AbortSignal
+  ): Promise<AgentSession>
   sendMessage(
     id: string,
     text: string,

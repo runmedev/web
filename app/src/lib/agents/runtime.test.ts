@@ -15,6 +15,54 @@ afterEach(() => {
   vi.unstubAllGlobals()
 })
 describe('agents runtime', () => {
+  it('creates with fresh vault auth without displaying or saving session data', async () => {
+    const { webcrypto } = await import('node:crypto')
+    const { keyVault } = await import('../keyvault/store')
+    vi.stubGlobal('crypto', webcrypto)
+    keyVault.refresh()
+    await keyVault.unlock('session creation test passphrase', true)
+    await keyVault.saveKey('test-project', 'first-secret')
+    const display = vi.fn()
+    const api = createAgentsApi(display)
+    api.setKey(keyVault.getKey('test-project'))
+    const result = {
+      id: 'sess_created',
+      environment: {
+        id: 'env_created',
+        remote_url: 'https://api.openai.com/remote',
+      },
+    }
+    const fetch = vi.fn<
+      (url: string, options?: RequestInit) => Promise<Response>
+    >(async () => new Response(JSON.stringify(result)))
+    vi.stubGlobal('fetch', fetch)
+    const parameters = {
+      agent_id: 'agent_test',
+      environment: { type: 'self_hosted' },
+    }
+    const signal = new AbortController().signal
+    expect(await api.createSession(parameters, { signal })).toEqual(result)
+    expect(fetch.mock.calls[0][1]?.signal).toBe(signal)
+    expect(
+      new Headers(fetch.mock.calls[0][1]?.headers).get('Authorization')
+    ).toBe('Bearer first-secret')
+    await keyVault.saveKey('test-project', 'rotated-secret', 'test-project')
+    await api.createSession(parameters)
+    expect(
+      new Headers(fetch.mock.calls[1][1]?.headers).get('Authorization')
+    ).toBe('Bearer rotated-secret')
+    expect(display).not.toHaveBeenCalled()
+    expect(JSON.stringify(localStorage)).not.toContain('sess_created')
+    expect(JSON.stringify(localStorage)).not.toContain('first-secret')
+    keyVault.lock()
+    await expect(api.createSession(parameters)).rejects.toThrow(
+      'Unlock Key Vault'
+    )
+    expect(fetch).toHaveBeenCalledTimes(2)
+    expect(() =>
+      callAgentsBridge(api, 'agents.createSession', [parameters])
+    ).toThrow('Unsupported')
+  })
   it('survives the StrictMode remount probe and requires explicit connection after closing', async () => {
     const api = createAgentsApi(() => {})
     const monitor = resolveAgentMonitor(api.monitor('sess_test'))

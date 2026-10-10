@@ -24,6 +24,32 @@ const widget = agents.monitor('YOUR_SESSION_ID', { pageSize: 50 })
 
 For an application-owned proxy, advanced browser code may still use `agents.configure({ baseUrl, getHeaders })`. Custom configuration remains memory-only and must be rerun after a reload; Connect never silently replaces an explicitly configured proxy with OpenAI. Do not put secrets in notebook code. Sandbox cells can monitor a connection previously configured by browser JS, but cannot access the vault or install credential callbacks. The Python runner's key files are separate and cannot be read by browser JavaScript.
 
+## Create a session
+
+Run once in **JS → browser**, after unlocking Key Vault:
+
+```js
+agents.setKey(keyvault.getKey('openai-api'))
+const session = await agents.createSession({
+  agent_id: 'YOUR_AGENT_ID',
+  environment: { type: 'self_hosted', workspace_directory: '/workspace' },
+})
+localStorage.setItem('session_id', session.id)
+localStorage.setItem('environment_id', session.environment.id)
+localStorage.setItem('remote_url', session.environment.remote_url)
+```
+
+Use the saved ID in another browser JS cell:
+
+```js
+agents.setKey(keyvault.getKey('openai-api'))
+const widget = agents.monitor(localStorage.getItem('session_id'), { pageSize: 50 })
+```
+
+`createSession` sends the parameters to the configured Agents API and returns its session object. It creates the session, not the self-hosted executor. It does not display or save the result automatically. Each execution creates a new session; requests time out after 30 seconds without automatic retries. After a timeout or uncertain error, check existing sessions before rerunning. An optional second argument `{ signal }` supplies your own abort signal instead of the default timeout.
+
+`localStorage.setItem` / `getItem` are standard browser APIs. These values persist across reloads and are shared by notebooks on the same Runme origin; a later creation cell overwrites them. Staging and production have separate storage. Save only the IDs and connection URL, never API keys. Local Python runners cannot read browser storage; copy the values into their configuration cells.
+
 ## Read and monitor
 
 **Edit** shows the source and **Render** shows the widget, without running the cell again. Editing keeps observation active. Press Run to apply changed source. The JS cell finishes immediately; the separate root-turn status tracks agent completion.

@@ -8,6 +8,7 @@ import { type AgentConnectionOptions, createAgentTransport } from './transport'
 import {
   AGENT_MONITOR_MIME,
   type AgentMonitorDescriptor,
+  type AgentSessionCreateParams,
   type AgentTransport,
 } from './types'
 
@@ -118,6 +119,15 @@ export function createAgentsApi(display?: Display) {
     return monitor
   }
   return {
+    /** Create once using the current connection; callers choose what result fields to save. */
+    createSession: (
+      parameters: AgentSessionCreateParams,
+      options: { signal?: AbortSignal } = {}
+    ) =>
+      getConnection().createSession(
+        parameters,
+        options.signal ?? AbortSignal.timeout(30000)
+      ),
     /** Select a vault reference for the OpenAI API; never serialize the secret. */
     setKey: (reference: KeyReference) => {
       resolveKeyReference(reference)
@@ -167,6 +177,6 @@ export function createAgentsApi(display?: Display) {
     newer: (id: string) => requireMonitor(id).newer(),
     latest: (id: string) => requireMonitor(id).latest(),
     help: () =>
-      'agents.setKey(keyvault.getKey(name)) [browser JS; OpenAI API]; agents.configure({ baseUrl, getHeaders? }) [browser JS only; memory-only auth]; agents.monitor(sessionId, { pageSize?: 1..100 }) [notebook JS cell]; agents.get(id); agents.pause(id); await agents.resume(id); await agents.older(id); await agents.newer(id); agents.latest(id). Pause stops observation, not the agent. Saved widgets require Connect.',
+      'agents.setKey(keyvault.getKey(name)) [browser JS; OpenAI API]; await agents.createSession(parameters, { signal? }) [browser JS; creates once, 30s default timeout; check existing sessions before retrying an uncertain failure]; agents.configure({ baseUrl, getHeaders? }) [browser JS only; memory-only auth]; agents.monitor(sessionId, { pageSize?: 1..100 }) [notebook JS cell]; agents.get(id); agents.pause(id); await agents.resume(id); await agents.older(id); await agents.newer(id); agents.latest(id). Pause stops observation, not the agent. Saved widgets require Connect.',
   }
 }
