@@ -41,7 +41,7 @@ import MainPage from './components/MainPage/MainPage'
 import { RunnersProvider } from './contexts/RunnersContext'
 import { Runner } from './lib/runner'
 import { getBrowserAdapter, useBrowserAuthData } from './browserAdapter.client'
-import { getAuthData } from './token'
+import { getRunnerAuthData } from './token'
 import { Interceptor } from '@connectrpc/connect'
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query'
 import { SidePanelProvider } from './contexts/SidePanelContext'
@@ -277,7 +277,7 @@ export function makeAuthInterceptor(): Interceptor[] {
   console.log('Creating auth interceptor')
   return [
     (next) => async (req) => {
-      const authData = await getAuthData()
+      const authData = await getRunnerAuthData(req.url)
       const token = authData?.idToken || ''
       if (token !== '') {
         req.header.set('Authorization', `Bearer ${token}`)

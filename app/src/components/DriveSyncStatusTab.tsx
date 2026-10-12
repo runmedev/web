@@ -142,6 +142,8 @@ function credentialTypeLabel(
   authFlow: GoogleDriveCredentialAuthFlow | null
 ): string {
   switch (authFlow) {
+    case 'workload_identity':
+      return 'Workload identity access token'
     case 'implicit':
       return 'Human OAuth access token (implicit)'
     case 'pkce':
@@ -156,9 +158,16 @@ function credentialTypeLabel(
 }
 
 function renewalLabel(
-  renewal: 'interactive' | 'oauth_refresh_token' | 'service_account_key' | null
+  renewal:
+    | 'interactive'
+    | 'oauth_refresh_token'
+    | 'service_account_key'
+    | 'workload_identity'
+    | null
 ): string {
   switch (renewal) {
+    case 'workload_identity':
+      return 'Automatic renewal through runner'
     case 'interactive':
       return 'Interactive authorization required'
     case 'oauth_refresh_token':

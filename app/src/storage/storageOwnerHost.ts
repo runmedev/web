@@ -17,7 +17,7 @@ import { SyncDeferred } from './syncWorkQueue'
 export class StorageOwnerHost {
   private ports = new Map<
     MessagePort,
-    { available: boolean; lastSeen: number }
+    { available: boolean; lastSeen: number; credentialBoundary: string }
   >()
   private tokenRequests = new Map<
     string,
@@ -39,13 +39,18 @@ export class StorageOwnerHost {
     ReturnType<LocalNotebooks['listFileSyncStatusPage']>
   >()
   private configuredBaseUrl: string | undefined
+  private credentialBoundary: string | undefined
   private available = false
   private scanning: Promise<unknown> | undefined
 
   constructor(private readonly store: LocalNotebooks) {}
 
   attach(port: MessagePort): void {
-    this.ports.set(port, { available: false, lastSeen: Date.now() })
+    this.ports.set(port, {
+      available: false,
+      lastSeen: Date.now(),
+      credentialBoundary: 'default',
+    })
     this.views.set(port, new Map())
     port.onmessage = (event) => {
       void this.receive(port, event.data)
@@ -95,7 +100,12 @@ export class StorageOwnerHost {
     forceRefresh?: boolean
   }): Promise<string> {
     for (const [port, state] of this.ports) {
-      if (!state.available || Date.now() - state.lastSeen >= 60_000) continue
+      if (
+        !state.available ||
+        state.credentialBoundary !== this.credentialBoundary ||
+        Date.now() - state.lastSeen >= 60_000
+      )
+        continue
       const id = crypto.randomUUID()
       try {
         return await new Promise<string>((resolve, reject) => {
@@ -118,6 +128,7 @@ export class StorageOwnerHost {
             type: 'token',
             id,
             options: { ...options, interactive: false },
+            credentialBoundary: state.credentialBoundary,
           })
         })
       } catch {
@@ -163,20 +174,65 @@ export class StorageOwnerHost {
     }
     if (request.type !== 'request' || typeof request.id !== 'string') return
     try {
+      if (
+        typeof request.credentialBoundary === 'string' &&
+        state.credentialBoundary !== request.credentialBoundary
+      ) {
+        state.available = false
+        state.credentialBoundary = request.credentialBoundary
+        this.updateAvailability()
+      }
       if (request.version !== STORAGE_OWNER_VERSION)
         throw new Error(
           'Storage worker version mismatch. Reload all Runme tabs to reconnect.'
         )
       if (!Array.isArray(request.args))
         throw new Error('Invalid storage request arguments')
+      if (
+        !['hello', 'availability', 'disconnect', 'heartbeat'].includes(
+          request.method
+        ) &&
+        this.credentialBoundary !== undefined &&
+        state.credentialBoundary !== this.credentialBoundary
+      )
+        throw new Error(
+          'Drive identity differs from the storage owner; use an isolated browser profile'
+        )
       await this.store.ready
       let value: unknown
       switch (request.method) {
         case 'hello':
           {
+            // Restore the profile's durable identity before accepting reads or
+            // queued writes, even when no tab has authenticated after restart.
+            const profileBoundary = (
+              request.args[0] as
+                | { profileCredentialBoundary?: string }
+                | undefined
+            )?.profileCredentialBoundary
+            if (profileBoundary) {
+              if (
+                this.credentialBoundary !== undefined &&
+                this.credentialBoundary !== profileBoundary
+              )
+                throw new Error(
+                  'Drive identity differs from the storage owner; use an isolated browser profile'
+                )
+              this.credentialBoundary = profileBoundary
+            }
             const baseUrl =
               (request.args[0] as { driveBaseUrl?: string } | undefined)
                 ?.driveBaseUrl ?? ''
+            state.credentialBoundary =
+              (request.args[0] as { credentialBoundary?: string } | undefined)
+                ?.credentialBoundary ?? 'default'
+            if (
+              this.credentialBoundary !== undefined &&
+              this.credentialBoundary !== state.credentialBoundary
+            )
+              throw new Error(
+                'Drive identity differs from the storage owner; use an isolated browser profile'
+              )
             if (
               this.configuredBaseUrl !== undefined &&
               this.configuredBaseUrl !== baseUrl
@@ -209,6 +265,20 @@ export class StorageOwnerHost {
           this.detach(port)
           return
         case 'availability': {
+          state.available = false
+          state.credentialBoundary =
+            typeof request.args[1] === 'string' ? request.args[1] : 'default'
+          if (
+            this.credentialBoundary !== undefined &&
+            this.credentialBoundary !== state.credentialBoundary
+          ) {
+            this.updateAvailability()
+            throw new Error(
+              'Drive identity differs from the storage owner; use an isolated browser profile'
+            )
+          }
+          if (request.args[0] === true)
+            this.credentialBoundary = state.credentialBoundary
           state.available = request.args[0] === true
           this.updateAvailability()
           break

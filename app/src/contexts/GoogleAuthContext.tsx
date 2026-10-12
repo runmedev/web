@@ -7,6 +7,7 @@ import {
   useMemo,
   useRef,
   useState,
+  useSyncExternalStore,
 } from 'react'
 import pkceChallenge from 'pkce-challenge'
 import { mintGoogleServiceAccountAccessToken } from '../auth/googleServiceAccount'
@@ -47,6 +48,15 @@ import { appLogger } from '../lib/logging/runtime'
 import { markOnboardingTaskComplete } from '../lib/onboarding'
 import { appState } from '../lib/runtime/AppState'
 import { resolveCommentIdentity } from '../lib/commentIdentity'
+import {
+  getWorkloadIdentityConfig,
+  getWorkloadIdentityAccessToken,
+  getWorkloadIdentityStatus,
+  subscribeWorkloadIdentity,
+  getWorkloadIdentityVersion,
+  clearWorkloadIdentityToken,
+  configureGoogleWorkloadIdentity,
+} from '../auth/workloadIdentity'
 
 // N.B. I couldn't make sharing work with the more restrictive "https://www.googleapis.com/auth/drive.file"
 // scope. In particular, I couldn't quite figure out how to share a link with a user and then have that
@@ -77,6 +87,7 @@ const DRIVE_ABOUT_URL =
 export type GoogleDriveCredentialAuthFlow =
   | GoogleDriveAuthFlow
   | 'impersonated_service_account'
+  | 'workload_identity'
 
 interface AccessTokenInfo {
   token: string
@@ -94,7 +105,12 @@ export interface GoogleDriveCredentialStatus {
   effectivePrincipal: string | null
   authorizingPrincipal: string | null
   expiresAt: string | null
-  renewal: 'interactive' | 'oauth_refresh_token' | 'service_account_key' | null
+  renewal:
+    | 'interactive'
+    | 'oauth_refresh_token'
+    | 'service_account_key'
+    | 'workload_identity'
+    | null
   lastError: string | null
 }
 
@@ -110,7 +126,7 @@ export interface StartGoogleDriveOAuthOptions {
 
 export interface StartGoogleDriveOAuthResult {
   status: 'started' | 'authorized'
-  authFlow: GoogleDriveAuthFlow
+  authFlow: GoogleDriveCredentialAuthFlow
   mode: GoogleDriveAuthUxMode
   accessToken?: string
 }
@@ -310,7 +326,9 @@ export function useCommentAuthor() {
   return useCallback(() => {
     const submittingContext = current.current
     return resolveCommentIdentity(
-      submittingContext ? () => submittingContext.ensureAccessToken({interactive:false}) : undefined,
+      submittingContext
+        ? () => submittingContext.ensureAccessToken({ interactive: false })
+        : undefined,
       () => current.current === submittingContext
     )
   }, [])
@@ -606,6 +624,8 @@ export function GoogleAuthProvider({ children }: { children: ReactNode }) {
         authorizingPrincipal?: string
       }
     ) => {
+      // Ignore an old human OAuth completion after unattended mode was selected.
+      if (token && getWorkloadIdentityConfig()) return
       if (!token) {
         setTokenInfo(null)
         tokenInfoRef.current = null
@@ -1620,11 +1640,23 @@ export function GoogleAuthProvider({ children }: { children: ReactNode }) {
     }
   }, [])
 
-  const isDriveSyncing = Boolean(
-    tokenInfo?.token && tokenInfo.expiresAt > nowMs
+  const workloadVersion = useSyncExternalStore(
+    subscribeWorkloadIdentity,
+    getWorkloadIdentityVersion,
+    getWorkloadIdentityVersion
   )
+  const workloadStatus = getWorkloadIdentityStatus()
+  useEffect(() => {
+    if (getWorkloadIdentityConfig()) setAccessToken('')
+  }, [workloadVersion, setAccessToken])
+
+  const isDriveSyncing = workloadStatus
+    ? workloadStatus.canRenew
+    : Boolean(tokenInfo?.token && tokenInfo.expiresAt > nowMs)
 
   const driveCredentialStatus = useMemo<GoogleDriveCredentialStatus>(() => {
+    const workload = getWorkloadIdentityStatus()
+    if (workload) return workload
     const authFlow = tokenInfo?.authFlow ?? null
     const isHumanOAuth = authFlow === 'implicit' || authFlow === 'pkce'
     const effectivePrincipal = tokenInfo
@@ -1655,7 +1687,14 @@ export function GoogleAuthProvider({ children }: { children: ReactNode }) {
             : 'interactive',
       lastError: credentialError,
     }
-  }, [credentialError, driveAccount, isDriveSyncing, tokenInfo])
+  }, [
+    credentialError,
+    driveAccount,
+    isDriveSyncing,
+    tokenInfo,
+    workloadVersion,
+    nowMs,
+  ])
 
   const canUseCachedToken = useCallback((info: AccessTokenInfo | null) => {
     if (!info?.token || info.expiresAt <= Date.now() + REFRESH_MARGIN_MS) {
@@ -2011,6 +2050,10 @@ export function GoogleAuthProvider({ children }: { children: ReactNode }) {
   )
 
   const logoutGoogleDrive = useCallback(async () => {
+    if (getWorkloadIdentityConfig()) {
+      clearWorkloadIdentityToken()
+      return
+    }
     const oauthClient = googleClientManager.getOAuthClient()
     const accessToken = tokenInfoRef.current?.token
 
@@ -2069,6 +2112,17 @@ export function GoogleAuthProvider({ children }: { children: ReactNode }) {
     ): Promise<StartGoogleDriveOAuthResult> => {
       const oauthClient = googleClientManager.getOAuthClient()
       const requestedMode = options?.mode ?? oauthClient.authUxMode
+      const workloadConfig = getWorkloadIdentityConfig()
+      if (workloadConfig) {
+        // Only explicit reconnect/configuration may resume a disconnected source.
+        configureGoogleWorkloadIdentity(workloadConfig)
+        await getWorkloadIdentityAccessToken(true)
+        return {
+          status: 'authorized',
+          authFlow: 'workload_identity',
+          mode: requestedMode,
+        }
+      }
 
       invalidatePendingAuth(
         'Invalidated pending Google Drive authorization before starting a fresh flow'
@@ -2227,6 +2281,8 @@ export function GoogleAuthProvider({ children }: { children: ReactNode }) {
   // all of the state orchestration so Callers can simply `await`.
   const ensureAccessToken = useCallback(
     (options?: EnsureAccessTokenOptions) => {
+      if (getWorkloadIdentityConfig())
+        return getWorkloadIdentityAccessToken(options?.forceRefresh)
       const interactive = options?.interactive ?? true
       const forceRefresh = options?.forceRefresh ?? false
       const currentInfo = tokenInfoRef.current

@@ -78,6 +78,7 @@ import {
   SEARCH_DRIVE_ITEMS_TOOL_TITLE,
 } from '../../lib/runtime/driveWorkspaceTools'
 import { appState } from '../../lib/runtime/AppState'
+import { runnerAuthTools } from '../../lib/runtime/runnerAuthTools'
 
 type ToolExecuteOptionsLike = {
   signal?: AbortSignal
@@ -207,6 +208,8 @@ export default function WebMcpToolRegistrationHost() {
     }
 
     try {
+      for (const tool of runnerAuthTools())
+        registerTool(tool, { signal: registrationController.signal })
       registerTool(
         {
           name: EXECUTE_CODE_TOOL_NAME,

@@ -1,3 +1,4 @@
+import { getRunnerTokenForEndpoint } from '../../auth/runnerAuth'
 import { getBrowserAdapter } from '../../browserAdapter.client'
 import { getAuthData } from '../../token'
 import { appLogger } from '../logging/runtime'
@@ -93,7 +94,13 @@ export function buildJupyterChannelsWebSocketURL(args: {
   return parsed.toString()
 }
 
-export async function getJupyterAuthorization(): Promise<string> {
+export async function getJupyterAuthorization(
+  endpoint?: string
+): Promise<string> {
+  if (endpoint) {
+    const runnerToken = await getRunnerTokenForEndpoint(endpoint)
+    if (runnerToken) return `Bearer ${runnerToken}`
+  }
   const authData = await getAuthData().catch(() => null)
   const token =
     authData?.idToken?.trim() ||
@@ -339,7 +346,7 @@ class JupyterManager {
   }
 
   private async fetchJSON<T>(url: string, init?: RequestInit): Promise<T> {
-    const authorization = await getJupyterAuthorization()
+    const authorization = await getJupyterAuthorization(url)
     const method = (init?.method ?? 'GET').toUpperCase()
     const headers = new Headers(init?.headers)
     if (authorization) {
