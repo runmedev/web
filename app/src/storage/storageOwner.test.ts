@@ -16,14 +16,19 @@ afterEach(() => {
   for (const client of clients.splice(0)) client.close()
   for (const port of ports.splice(0)) port.close()
 })
-function connect(host: StorageOwnerHost, token = async () => 'token') {
+function connect(
+  host: StorageOwnerHost,
+  token = async () => 'token',
+  boundary = () => 'default'
+) {
   const channel = new MessageChannel()
   const port = channel.port1 as unknown as MessagePort
   ports.push(port)
   host.attach(port)
   const client = new StorageOwnerClient(
     channel.port2 as unknown as MessagePort,
-    token
+    token,
+    boundary
   )
   clients.push(client)
   return client
@@ -47,6 +52,24 @@ function setup() {
 }
 
 describe('SharedWorker message boundary', () => {
+  it('rejects workload operations on a human credential owner', async () => {
+    const { host, store } = setup()
+    const human = connect(host)
+    const workload = connect(
+      host,
+      async () => 'workload-token',
+      () => 'workload:test'
+    )
+    await human.request('availability', [true, 'default'])
+    await expect(
+      workload.request('availability', [true, 'workload:test'])
+    ).rejects.toThrow('isolated browser profile')
+    await expect(workload.request('save', ['a', {}])).rejects.toThrow(
+      'isolated browser profile'
+    )
+    expect(store.save).not.toHaveBeenCalled()
+    expect(await host.accessToken()).toBe('token')
+  })
   it('coalesces same-file sync from two tabs while another file progresses', async () => {
     const { host, store } = setup()
     const q = new SyncWorkQueue({ concurrency: 10 })

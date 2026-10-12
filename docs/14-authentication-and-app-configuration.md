@@ -258,6 +258,86 @@ still read data it is authorized to use. Use browser-persisted private keys only
 for tightly scoped local/CI testing, and use a trusted token broker for
 production.
 
+## Workload identity in an agent browser
+
+An agent browser can authenticate to a Runme runner as the stable application
+identity `runme`. The browser signs short-lived ES256 JWTs with a provisioned
+P-256 key. The runner pins the public key through `assistantServer.oidc.static`
+and grants `runme` the required roles. No browser-session identity is needed.
+
+Use an isolated browser profile for each workload. The shared storage owner
+rejects mixing workload credentials with another identity's queued Drive writes.
+Changing an existing profile from human Drive auth to workload auth requires a
+fresh profile. Signing keys and tokens stay in memory; nonsecret configuration
+is retained so reload requires provisioning again instead of falling back to a
+saved human login.
+
+Provide a private JSON file matching this shape (the key is PEM **content**, not
+a path). Keep it out of notebook cells, console history, and recordings:
+
+```json
+{
+  "runnerName": "pod-runner",
+  "runnerBaseUrl": "https://localhost:9988",
+  "issuer": "urn:runme:browser",
+  "audience": "urn:runme:runner",
+  "subject": "runme",
+  "keyId": "browser-auth-v1",
+  "privateKeyPkcs8Pem": "<PKCS#8 PEM content>"
+}
+```
+
+With the intended Runme tab selected, inspect the tool schema and import the
+configuration. `agent-browser` reads the file outside the page:
+
+```sh
+agent-browser webmcp list configureRunnerAuth --json
+agent-browser webmcp invoke configureRunnerAuth --params @runner-auth-input.json
+agent-browser webmcp invoke getRunnerAuthStatus --params '{"runnerName":"pod-runner"}'
+```
+
+`configureRunnerAuth` also registers the runner's `/ws` endpoint. The same
+origin-bound JWT provider serves runner, parser, Jupyter, and Google token-broker
+requests. Status tools return no private keys or raw tokens. The configured HTTPS
+endpoint must already have browser-trusted transport; these steps do not install
+certificates. Repeat the import after reloading the browser.
+
+Select Drive workload auth through `configureGoogleWorkloadIdentity` with a JSON
+file containing:
+
+```json
+{
+  "authFlow": "workload_identity",
+  "runnerName": "pod-runner",
+  "expectedServiceAccountEmail": "runme@project.iam.gserviceaccount.com",
+  "scopes": ["https://www.googleapis.com/auth/drive"],
+  "lifetimeSeconds": 900
+}
+```
+
+```sh
+agent-browser webmcp invoke configureGoogleWorkloadIdentity --params @drive-auth-input.json
+```
+
+The equivalent trusted browser helpers are `credentials.runner.configure(...)`,
+`credentials.runner.getStatus(...)`, `credentials.runner.clear(...)`, and
+`credentials.google.configureWorkloadIdentity(...)`. They are not exposed to
+untrusted AppKernel sandbox code. Prefer the dedicated tools for secret imports;
+ordinary App Console input history can retain supplied source text.
+
+The runner uses workload ADC to request a Google access token for its configured
+service account. Requested scopes and lifetime must satisfy runner policy, and
+the caller needs `role/tokenCreator`. The service account also needs Google IAM
+token-mint permission and Drive sharing. A linked GKE service account may need
+explicit self-impersonation permission for this extra IAM Credentials call.
+Create new notebooks in a Shared drive, since a service account cannot own new
+files in My Drive. A failed broker request never starts human OAuth.
+
+`googleDrive` runtime YAML also accepts `authFlow: workload_identity`,
+`runnerName`, `expectedServiceAccountEmail`, `scopes`, and `lifetimeSeconds`.
+Authentication Settings shows the signing identity, and Drive diagnostics show
+the service-account identity, token expiry, and renewal mode.
+
 ## App config helpers
 
 ```js

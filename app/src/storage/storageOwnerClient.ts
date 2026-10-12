@@ -1,3 +1,4 @@
+import { getWorkloadIdentityConfig } from '../auth/workloadIdentity'
 import { getGoogleDriveBaseUrl } from '../lib/googleDriveRuntime'
 import { appLogger } from '../lib/logging/runtime'
 import { DriveCreateNotCommittedError, type DriveNotebookStore } from './drive'
@@ -22,7 +23,8 @@ export class StorageOwnerClient {
   onChange?: (uri: string) => void
   constructor(
     private readonly port: MessagePort,
-    private readonly token: DriveNotebookStore['getAccessToken']
+    private readonly token: DriveNotebookStore['getAccessToken'],
+    private readonly getCredentialBoundary: () => string = () => 'default'
   ) {
     port.onmessage = (event) => {
       void this.receive(event.data)
@@ -67,6 +69,7 @@ export class StorageOwnerClient {
           id,
           method,
           args,
+          credentialBoundary: this.getCredentialBoundary(),
         })
       } catch (error) {
         clearTimeout(timer)
@@ -84,6 +87,7 @@ export class StorageOwnerClient {
     value: unknown
     error?: Record<string, unknown>
     options?: { forceRefresh?: boolean }
+    credentialBoundary?: string
   }) {
     if (message.type === 'event' && message.eventType) {
       window.dispatchEvent(
@@ -97,10 +101,18 @@ export class StorageOwnerClient {
     }
     if (message.type === 'token') {
       try {
+        const boundary = this.getCredentialBoundary()
+        if (
+          message.credentialBoundary !== undefined &&
+          boundary !== message.credentialBoundary
+        )
+          throw new Error('Drive credential identity changed')
         const token = await this.token({
           ...message.options,
           interactive: false,
         })
+        if (this.getCredentialBoundary() !== boundary)
+          throw new Error('Drive credential identity changed')
         this.port.postMessage({ type: 'token-result', id: message.id, token })
       } catch (error) {
         this.port.postMessage({
@@ -162,8 +174,10 @@ export function createSharedNotebookStore(
     new URL('./storageOwner.worker.ts', import.meta.url),
     { type: 'module', name: 'runme-storage-owner' }
   )
-  const client = new StorageOwnerClient(worker.port, (options) =>
-    drive.getAccessToken(options)
+  const client = new StorageOwnerClient(
+    worker.port,
+    (options) => drive.getAccessToken(options),
+    credentialBoundary
   )
   // Migration is part of the handshake: do not let a recovery scan generate a
   // second remote identity while an old reserved ID only exists in localStorage.
@@ -178,6 +192,7 @@ export function createSharedNotebookStore(
     await client.request('hello', [
       {
         driveBaseUrl: getGoogleDriveBaseUrl(),
+        credentialBoundary: credentialBoundary(),
         attempts,
         creationMigrationError,
       },
@@ -250,7 +265,21 @@ export function createSharedNotebookStore(
       if (key === 'operationLogSupportsConcurrentWriters') return () => true
       if (key === 'setDriveSyncAvailable')
         return (available: boolean) => {
-          void call('availability', [available]).catch((error) =>
+          const boundary = credentialBoundary()
+          const saved = localStorage.getItem('runme/storageCredentialBoundary')
+          // Existing queued edits belong to this profile's identity. A different
+          // workload must use a fresh profile, including after worker restart.
+          if (available && saved && saved !== boundary) {
+            void call('availability', [false, boundary]).catch(() => {})
+            appLogger.warn(
+              'Drive identity changed; use an isolated browser profile',
+              { attrs: { scope: 'storage.owner' } }
+            )
+            return
+          }
+          if (available)
+            localStorage.setItem('runme/storageCredentialBoundary', boundary)
+          void call('availability', [available, boundary]).catch((error) =>
             appLogger.warn('Storage owner auth update failed', {
               attrs: { scope: 'storage.owner', error: String(error) },
             })
@@ -313,4 +342,11 @@ export function createSharedNotebookStore(
       return typeof value === 'function' ? value.bind(target) : value
     },
   })
+}
+
+// A workload credential must never be borrowed from an unrelated human tab.
+function credentialBoundary(): string {
+  if (typeof window === 'undefined') return 'default'
+  const cfg = getWorkloadIdentityConfig()
+  return cfg ? `workload:${JSON.stringify(cfg)}` : 'default'
 }

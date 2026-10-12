@@ -2,6 +2,7 @@ import { create } from '@bufbuild/protobuf'
 import { jwtDecode } from 'jwt-decode'
 
 import { OidcConfig, oidcConfigManager } from '../../auth/oidcConfig'
+import { clearRunnerAuth, getRunnerAuthStatus } from '../../auth/runnerAuth'
 import { parser_pb } from '../../runme/client'
 import {
   driveFileUrl,
@@ -17,7 +18,6 @@ import { LOCAL_FOLDER_URI } from '../../storage/local'
 import { NotebookStoreItemType } from '../../storage/notebook'
 import { getAuthData } from '../../token'
 import { agentEndpointManager } from '../agentEndpointManager'
-import { keyvaultApi } from '../keyvault/store'
 import { createAgentsApi } from '../agents/runtime'
 import { aisreClientManager } from '../aisreClientManager'
 import {
@@ -52,6 +52,7 @@ import {
   type EmbeddedImageSource,
   embedImageInNotebook,
 } from '../imageEmbedding'
+import { keyvaultApi } from '../keyvault/store'
 import {
   type AttachResourceOptions,
   type AttachResourceSource,
@@ -106,6 +107,7 @@ import {
   createNotebooksApi,
   resolveNotebookTargetUri,
 } from './runmeConsole'
+import { configureRunner, configureWorkloadDrive } from './runnerAuthTools'
 import { getRunnersManager } from './runnersManager'
 
 type SendOutput = (data: string) => void
@@ -161,6 +163,7 @@ type RunnerSync = {
 
 type EnsureAccessToken = (options?: {
   interactive?: boolean
+  forceRefresh?: boolean
 }) => Promise<string>
 
 type LocalTextSelection = {
@@ -1192,6 +1195,7 @@ export function createAppJsGlobals({
   }
 
   const googleClientRuntimeApi = {
+    configureWorkloadIdentity: configureWorkloadDrive,
     get: () => googleClientManager.getOAuthClient(),
     getOAuthClient: () => googleClientManager.getOAuthClient(),
     setOAuthClient: (config: {
@@ -1740,6 +1744,11 @@ export function createAppJsGlobals({
       },
     },
     credentials: {
+      runner: {
+        configure: configureRunner,
+        getStatus: getRunnerAuthStatus,
+        clear: clearRunnerAuth,
+      },
       google: googleClientRuntimeApi,
       oidc: oidcConfigManager,
     },

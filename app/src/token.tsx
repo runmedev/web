@@ -2,6 +2,14 @@ import { jwtDecode } from "jwt-decode";
 
 import { getBrowserAdapter } from "./browserAdapter.client";
 
+import { getRunnerTokenForEndpoint } from "./auth/runnerAuth";
+
+// Runner credentials are origin-bound and never used by unrelated API clients.
+export async function getRunnerAuthData(endpoint: string) {
+  const token = await getRunnerTokenForEndpoint(endpoint);
+  return token ? { idToken: token } : getAuthData();
+}
+
 const ID_TOKEN_EXP_SKEW_SECONDS = 60;
 
 type JwtWithExp = {

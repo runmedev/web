@@ -1587,7 +1587,7 @@ export class NotebookData {
 
     let channelsURL: string
     try {
-      const authorization = await getJupyterAuthorization()
+      const authorization = await getJupyterAuthorization(runner.endpoint)
       if (!isCurrentLaunch()) {
         return
       }

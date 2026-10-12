@@ -7,6 +7,7 @@ import type {
   OidcConfig,
 } from '../auth/oidcConfig'
 import { OIDC_STORAGE_KEY, oidcConfigManager } from '../auth/oidcConfig'
+import { configureGoogleWorkloadIdentity } from '../auth/workloadIdentity'
 import { agentEndpointManager } from './agentEndpointManager'
 import { getOidcCallbackUrl, resolveAppUrl } from './appBase'
 import type {
@@ -70,7 +71,8 @@ export interface GoogleDriveRuntimeConfig {
   clientId: string
   clientSecret: string
   baseUrl: string
-  authFlow: GoogleDriveAuthFlow
+  authFlow: GoogleDriveAuthFlow | 'workload_identity'
+  workloadIdentity?: import('../auth/workloadIdentity').WorkloadIdentityDriveConfig
   authUxMode: GoogleDriveAuthUxMode
   serviceAccount?: GoogleServiceAccountCredentials
 }
@@ -458,9 +460,11 @@ export class RuntimeAppConfigSchema {
         drive.clientMaterial ?? drive.client_material
       ).join('')
       const authFlow =
-        asGoogleDriveAuthFlow(
-          drive.authFlow ?? drive.auth_flow ?? drive.oauthFlow ?? drive.flow
-        ) ?? 'implicit'
+        drive.authFlow === 'workload_identity'
+          ? 'workload_identity'
+          : (asGoogleDriveAuthFlow(
+              drive.authFlow ?? drive.auth_flow ?? drive.oauthFlow ?? drive.flow
+            ) ?? 'implicit')
       const authUxMode =
         asGoogleDriveAuthUxMode(
           drive.authUxMode ??
@@ -480,6 +484,21 @@ export class RuntimeAppConfigSchema {
         authFlow,
         authUxMode,
         serviceAccount,
+        ...(authFlow === 'workload_identity'
+          ? {
+              workloadIdentity: {
+                authFlow: 'workload_identity' as const,
+                runnerName: pickString(drive, ['runnerName']),
+                expectedServiceAccountEmail: pickString(drive, [
+                  'expectedServiceAccountEmail',
+                ]),
+                scopes: asStringArray(drive.scopes),
+                ...(typeof drive.lifetimeSeconds === 'number'
+                  ? { lifetimeSeconds: drive.lifetimeSeconds }
+                  : {}),
+              },
+            }
+          : {}),
       }
     }
 
@@ -596,7 +615,11 @@ export function applyAppConfig(
   const googleServiceAccount = parsed.googleDrive.serviceAccount
   const skipGoogleDriveFromConfig =
     preserveLocalConfiguration && hasLocalDriveConfig
-  if (skipGoogleDriveFromConfig) {
+  if (googleAuthFlow === 'workload_identity') {
+    if (!parsed.googleDrive.workloadIdentity)
+      throw new Error('Missing workload identity configuration')
+    configureGoogleWorkloadIdentity(parsed.googleDrive.workloadIdentity)
+  } else if (skipGoogleDriveFromConfig) {
     googleOAuth = googleClientManager.getOAuthClient()
   } else {
     if (googleClientId || googleAuthFlow === 'service_account') {

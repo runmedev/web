@@ -1,6 +1,17 @@
 import { ArrowPathIcon } from '@heroicons/react/24/outline'
 import { jwtDecode } from 'jwt-decode'
-import { useCallback, useMemo, useState, type ReactNode } from 'react'
+import {
+  useCallback,
+  useMemo,
+  useState,
+  useSyncExternalStore,
+  type ReactNode,
+} from 'react'
+import {
+  subscribeRunnerAuth,
+  getRunnerAuthVersion,
+  listRunnerAuthStatus,
+} from '../../auth/runnerAuth'
 
 import { OpenAISettings } from './OpenAISettings'
 import {
@@ -227,6 +238,12 @@ export default function AuthenticationSettingsPanel() {
     'runme' | 'drive' | 'save' | null
   >(null)
   const [errorMessage, setErrorMessage] = useState<string | null>(null)
+  useSyncExternalStore(
+    subscribeRunnerAuth,
+    getRunnerAuthVersion,
+    getRunnerAuthVersion
+  )
+  const runnerAuthStatuses = listRunnerAuthStatus()
 
   const runmeAccount = currentRunmeAccount(authData?.idToken)
   const effectiveDriveMode =
@@ -479,6 +496,23 @@ export default function AuthenticationSettingsPanel() {
       </header>
 
       <div className="min-h-0 flex-1 overflow-y-auto">
+        {runnerAuthStatuses.length > 0 && (
+          <SettingsSection
+            title="Runner signing identity"
+            description="Provisioned application credentials are kept in memory. Reload requires importing the key again."
+          >
+            <div id="runner-auth-status" className="text-sm text-nb-text">
+              {runnerAuthStatuses.map((status) => (
+                <p key={status.runnerName}>
+                  {status.runnerName}: {status.subject} —{' '}
+                  {status.configured
+                    ? 'Signing key ready'
+                    : 'Key provisioning required'}
+                </p>
+              ))}
+            </div>
+          </SettingsSection>
+        )}
         <SettingsSection
           title="Identity usage"
           description="Decide whether Runme and Google Drive use one effective identity or are configured independently."
