@@ -191,3 +191,17 @@ it('opens every current-build help permalink without network access', async () =
   }
   expect(blocked).not.toHaveBeenCalled()
 })
+
+it('keeps anchored and query-qualified current-build help links local', async () => {
+  const blocked = vi.fn(() => Promise.reject(new Error('Network disabled'))) as typeof fetch
+  const entry = getGettingStartedDocument()
+  for (const base of [entry.uri, entry.rawUri]) {
+    const uri = `${base}?source=help#open-a-notebook`
+    const doc = await fetchRemoteMarkdownDocument(uri, blocked)
+    expect(doc.uri).toBe(uri)
+    expect(doc.content).toContain('# Getting Started')
+    expect(doc.content).toMatch(/^---/)
+    expect(doc.version?.revisionId).toBe(entry.revision)
+  }
+  expect(blocked).not.toHaveBeenCalled()
+})

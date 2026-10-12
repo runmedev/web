@@ -241,10 +241,11 @@ export async function fetchRemoteMarkdownDocument(
   }
   // Current-build permalinks are document identities, not network dependencies.
   // Older revisions and user-supplied remote Markdown retain their HTTP behavior.
-  const bundled = runmeVersionInfo.webCommit
-    ? listDocumentation().find(
-        (entry) => entry.uri === uri || entry.rawUri === uri
-      )
+  // Anchors and query parameters do not change the bytes at a commit-pinned
+  // path. Keep those links local too, while preserving the caller's URI.
+  const path = bundledPath(uri)
+  const bundled = path
+    ? listDocumentation().find((entry) => entry.path === path)
     : undefined
   if (bundled) {
     return {
