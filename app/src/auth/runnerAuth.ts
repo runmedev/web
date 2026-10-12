@@ -33,7 +33,7 @@ type Entry = {
 const storageKey = 'runme/runnerAuthDescriptors/v1'
 const entries = new Map<string, Entry>()
 const configurationVersions = new Map<string, number>()
-const listeners = new Set<() => void>()
+const listeners = new Set<(runnerName: string) => void>()
 let version = 0
 let loaded = false
 
@@ -104,15 +104,20 @@ function descriptor(input: unknown): Descriptor {
   return d
 }
 
-function changed() {
+function changed(runnerName: string) {
   version++
   // Persist only the mode/identity marker, so reload fails closed until the key
   // is reimported instead of reverting to an unrelated saved human credential.
-  sessionStorage.setItem(
-    storageKey,
-    JSON.stringify([...entries.values()].map((e) => e.descriptor))
-  )
-  listeners.forEach((listener) => listener())
+  try {
+    sessionStorage.setItem(
+      storageKey,
+      JSON.stringify([...entries.values()].map((e) => e.descriptor))
+    )
+  } finally {
+    // Clearing authority must invalidate dependent tokens even when storage is
+    // unavailable (quota, browser policy, or a transient write failure).
+    listeners.forEach((listener) => listener(runnerName))
+  }
 }
 
 /** Import a provisioned signing key into memory. Never return or persist it. */
@@ -121,6 +126,9 @@ export async function configureRunnerAuth(
 ): Promise<RunnerAuthStatus> {
   load()
   const d = descriptor(input)
+  const previous = entries.get(d.runnerName)
+  if (previous && previous.descriptor.runnerBaseUrl !== d.runnerBaseUrl)
+    throw new Error('Use a new runner name when changing its origin')
   const attempt = (configurationVersions.get(d.runnerName) ?? 0) + 1
   configurationVersions.set(d.runnerName, attempt)
   if (
@@ -146,7 +154,7 @@ export async function configureRunnerAuth(
       )
   }
   entries.set(d.runnerName, { descriptor: d, key })
-  changed()
+  changed(d.runnerName)
   return getRunnerAuthStatus({ runnerName: d.runnerName })
 }
 
@@ -178,7 +186,7 @@ export function clearRunnerAuth({ runnerName }: { runnerName: string }): void {
   )
   const e = entries.get(runnerName)
   if (e) entries.set(runnerName, { descriptor: e.descriptor })
-  changed()
+  changed(runnerName)
 }
 
 /** Return one refresh-coalesced JWT shared by all APIs for this runner. */
@@ -232,7 +240,9 @@ export function hasRunnerAuthForEndpoint(endpoint: string): boolean {
   )
 }
 
-export function subscribeRunnerAuth(listener: () => void): () => void {
+export function subscribeRunnerAuth(
+  listener: (runnerName: string) => void
+): () => void {
   listeners.add(listener)
   return () => {
     listeners.delete(listener)

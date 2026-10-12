@@ -19,6 +19,8 @@ HTTPS for a real runner; do not disable browser certificate verification.
    fail. Changing identity while a request is pending must discard its result.
 7. Connect a second tab using a different credential mode. Assert the storage
    owner rejects mixing identities and never borrows another tab's token.
+   Restart the worker with a persisted profile identity and verify an
+   unauthenticated tab cannot enqueue writes under a different identity.
 8. For the deployment smoke, create/edit/reopen a notebook in a dedicated Shared
    drive and repeat after real Google token expiry. Record effective GSA and
    redacted status; never record input private keys or raw credentials.
@@ -27,3 +29,10 @@ Unit/integration coverage: `auth/runnerAuth.test.ts`, GoogleAuthContext and
 WebMCP registration tests, storage owner message-boundary tests, and the runner's
 static verifier, credential policy/coalescing, IAM request, and HTTP tests.
 The real GKE/Drive smoke requires deployment credentials and is a release gate.
+
+The provider integration regression also advances time past idle token expiry:
+the sync queue must remain able to renew without user interaction, and explicit
+disconnect must stop sync. Clearing a signer must drop cached Google authority
+even if browser storage fails. Repointing an existing runner name to another
+origin is rejected; configure a new name so the old origin retains its auth
+marker and cannot fall back to saved human credentials.

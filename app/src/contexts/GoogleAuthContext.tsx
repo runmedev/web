@@ -55,6 +55,7 @@ import {
   subscribeWorkloadIdentity,
   getWorkloadIdentityVersion,
   clearWorkloadIdentityToken,
+  configureGoogleWorkloadIdentity,
 } from '../auth/workloadIdentity'
 
 // N.B. I couldn't make sharing work with the more restrictive "https://www.googleapis.com/auth/drive.file"
@@ -1650,7 +1651,7 @@ export function GoogleAuthProvider({ children }: { children: ReactNode }) {
   }, [workloadVersion, setAccessToken])
 
   const isDriveSyncing = workloadStatus
-    ? workloadStatus.connected
+    ? workloadStatus.canRenew
     : Boolean(tokenInfo?.token && tokenInfo.expiresAt > nowMs)
 
   const driveCredentialStatus = useMemo<GoogleDriveCredentialStatus>(() => {
@@ -1692,6 +1693,7 @@ export function GoogleAuthProvider({ children }: { children: ReactNode }) {
     isDriveSyncing,
     tokenInfo,
     workloadVersion,
+    nowMs,
   ])
 
   const canUseCachedToken = useCallback((info: AccessTokenInfo | null) => {
@@ -2110,7 +2112,10 @@ export function GoogleAuthProvider({ children }: { children: ReactNode }) {
     ): Promise<StartGoogleDriveOAuthResult> => {
       const oauthClient = googleClientManager.getOAuthClient()
       const requestedMode = options?.mode ?? oauthClient.authUxMode
-      if (getWorkloadIdentityConfig()) {
+      const workloadConfig = getWorkloadIdentityConfig()
+      if (workloadConfig) {
+        // Only explicit reconnect/configuration may resume a disconnected source.
+        configureGoogleWorkloadIdentity(workloadConfig)
         await getWorkloadIdentityAccessToken(true)
         return {
           status: 'authorized',

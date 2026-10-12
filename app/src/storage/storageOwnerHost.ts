@@ -203,6 +203,23 @@ export class StorageOwnerHost {
       switch (request.method) {
         case 'hello':
           {
+            // Restore the profile's durable identity before accepting reads or
+            // queued writes, even when no tab has authenticated after restart.
+            const profileBoundary = (
+              request.args[0] as
+                | { profileCredentialBoundary?: string }
+                | undefined
+            )?.profileCredentialBoundary
+            if (profileBoundary) {
+              if (
+                this.credentialBoundary !== undefined &&
+                this.credentialBoundary !== profileBoundary
+              )
+                throw new Error(
+                  'Drive identity differs from the storage owner; use an isolated browser profile'
+                )
+              this.credentialBoundary = profileBoundary
+            }
             const baseUrl =
               (request.args[0] as { driveBaseUrl?: string } | undefined)
                 ?.driveBaseUrl ?? ''

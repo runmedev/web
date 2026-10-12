@@ -10,6 +10,7 @@ import {
   resetRunnerAuthForTests,
 } from './runnerAuth'
 import {
+  clearWorkloadIdentityToken,
   configureGoogleWorkloadIdentity,
   getWorkloadIdentityAccessToken,
   getWorkloadIdentityConfig,
@@ -47,8 +48,110 @@ describe('workload runner credentials', () => {
     await configureRunnerAuth({ ...base, privateKeyPkcs8Pem })
   })
   afterEach(() => {
+    vi.restoreAllMocks()
     vi.useRealTimers()
     vi.unstubAllGlobals()
+  })
+
+  it('keeps the previous origin protected when a runner name is repointed', async () => {
+    clearRunnerAuth({ runnerName: 'pod' })
+    await expect(
+      configureRunnerAuth({
+        ...base,
+        runnerBaseUrl: 'https://localhost:9999',
+        privateKeyPkcs8Pem,
+      })
+    ).rejects.toThrow('new runner name')
+    await expect(getRunnerTokenForEndpoint(base.runnerBaseUrl)).rejects.toThrow(
+      'provisioning'
+    )
+  })
+
+  it('keeps the workload source renewable after idle expiry and transient failures', async () => {
+    const fetcher = vi.fn(
+      async () =>
+        new Response(
+          JSON.stringify({
+            accessToken: 'google-B',
+            tokenType: 'Bearer',
+            serviceAccountEmail: drive.expectedServiceAccountEmail,
+            scopes: drive.scopes,
+            expiresAt: new Date(Date.now() + 899000).toISOString(),
+          })
+        )
+    )
+    vi.stubGlobal('fetch', fetcher)
+    configureGoogleWorkloadIdentity(drive)
+    await getWorkloadIdentityAccessToken()
+    vi.useFakeTimers()
+    vi.setSystemTime(Date.now() + 910000)
+    expect(getWorkloadIdentityStatus()).toMatchObject({
+      connected: false,
+      canRenew: true,
+    })
+    fetcher.mockRejectedValueOnce(new Error('offline'))
+    await expect(getWorkloadIdentityAccessToken(true)).rejects.toThrow()
+    expect(getWorkloadIdentityStatus()?.canRenew).toBe(true)
+    await expect(getWorkloadIdentityAccessToken()).resolves.toBe('google-B')
+    clearWorkloadIdentityToken()
+    expect(getWorkloadIdentityStatus()).toMatchObject({
+      connected: false,
+      canRenew: false,
+    })
+    await expect(getWorkloadIdentityAccessToken(true)).rejects.toThrow(
+      'disconnected'
+    )
+    expect(fetcher).toHaveBeenCalledTimes(3)
+  })
+
+  it('invalidates cached Google authority when clearing fails to persist', async () => {
+    vi.stubGlobal(
+      'fetch',
+      vi.fn(
+        async () =>
+          new Response(
+            JSON.stringify({
+              accessToken: 'google-B',
+              tokenType: 'Bearer',
+              serviceAccountEmail: drive.expectedServiceAccountEmail,
+              scopes: drive.scopes,
+              expiresAt: new Date(Date.now() + 899000).toISOString(),
+            })
+          )
+      )
+    )
+    configureGoogleWorkloadIdentity(drive)
+    await getWorkloadIdentityAccessToken()
+    vi.spyOn(Storage.prototype, 'setItem').mockImplementation(() => {
+      throw new Error('storage unavailable')
+    })
+    expect(() => clearRunnerAuth({ runnerName: 'pod' })).toThrow()
+    expect(getWorkloadIdentityStatus()).toMatchObject({
+      connected: false,
+      canRenew: false,
+    })
+    await expect(getWorkloadIdentityAccessToken()).rejects.toThrow()
+  })
+
+  it('does not invalidate Drive credentials when another runner changes', async () => {
+    const fetcher = vi.fn(
+      async () =>
+        new Response(
+          JSON.stringify({
+            accessToken: 'google-B',
+            tokenType: 'Bearer',
+            serviceAccountEmail: drive.expectedServiceAccountEmail,
+            scopes: drive.scopes,
+            expiresAt: new Date(Date.now() + 899000).toISOString(),
+          })
+        )
+    )
+    vi.stubGlobal('fetch', fetcher)
+    configureGoogleWorkloadIdentity(drive)
+    await getWorkloadIdentityAccessToken()
+    clearRunnerAuth({ runnerName: 'unrelated' })
+    await expect(getWorkloadIdentityAccessToken()).resolves.toBe('google-B')
+    expect(fetcher).toHaveBeenCalledTimes(1)
   })
 
   it('reuses and renews one verifiable token without persisting secrets', async () => {

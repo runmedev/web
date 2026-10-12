@@ -52,6 +52,36 @@ function setup() {
 }
 
 describe('SharedWorker message boundary', () => {
+  it('restores the profile boundary before unauthenticated tabs can queue writes', async () => {
+    const { host, store } = setup()
+    const human = connect(host)
+    await expect(
+      human.request('hello', [
+        {
+          credentialBoundary: 'default',
+          profileCredentialBoundary: 'workload:test',
+        },
+      ])
+    ).rejects.toThrow('isolated browser profile')
+    await expect(human.request('save', ['a', {}])).rejects.toThrow(
+      'isolated browser profile'
+    )
+    const workload = connect(
+      host,
+      async () => 'workload-token',
+      () => 'workload:test'
+    )
+    await workload.request('hello', [
+      {
+        credentialBoundary: 'workload:test',
+        profileCredentialBoundary: 'workload:test',
+      },
+    ])
+    await workload.request('save', ['a', {}])
+    expect(store.save).toHaveBeenCalledTimes(1)
+    await workload.request('availability', [true, 'workload:test'])
+    expect(await host.accessToken()).toBe('workload-token')
+  })
   it('rejects workload operations on a human credential owner', async () => {
     const { host, store } = setup()
     const human = connect(host)

@@ -21,6 +21,7 @@ let pending: Promise<string> | undefined
 let generation = 0
 let version = 0
 let lastError: string | null = null
+let suspended = false
 const listeners = new Set<() => void>()
 
 function emit() {
@@ -33,7 +34,9 @@ function invalidate() {
   pending = undefined
   emit()
 }
-subscribeRunnerAuth(invalidate)
+subscribeRunnerAuth((runnerName) => {
+  if (getWorkloadIdentityConfig()?.runnerName === runnerName) invalidate()
+})
 
 function normalize(
   input: WorkloadIdentityDriveConfig
@@ -91,6 +94,7 @@ export function configureGoogleWorkloadIdentity(
   config = next
   loaded = true
   lastError = null
+  suspended = false
   invalidate()
 }
 
@@ -101,6 +105,8 @@ export function getWorkloadIdentityAccessToken(
   const cfg = getWorkloadIdentityConfig()
   if (!cfg)
     return Promise.reject(new Error('Workload identity is not configured'))
+  if (suspended)
+    return Promise.reject(new Error('Workload identity sync is disconnected'))
   if (forceRefresh) token = undefined
   if (token && token.refreshAt > Date.now())
     return Promise.resolve(token.accessToken)
@@ -192,6 +198,11 @@ export function getWorkloadIdentityStatus() {
   return cfg
     ? {
         connected: Boolean(token && token.expiresAt > Date.now()),
+        // Sync availability describes the renewable source, not a cached token.
+        // Otherwise an idle expired token disables the only queue that can renew it.
+        canRenew:
+          !suspended &&
+          getRunnerAuthStatus({ runnerName: cfg.runnerName }).configured,
         authFlow: 'workload_identity' as const,
         effectivePrincipal: cfg.expectedServiceAccountEmail,
         authorizingPrincipal: 'runme',
@@ -213,6 +224,7 @@ export function getWorkloadIdentityVersion(): number {
 
 /** Drop cached Google credentials while retaining the selected auth mode. */
 export function clearWorkloadIdentityToken(): void {
+  suspended = true
   invalidate()
 }
 
@@ -220,5 +232,6 @@ export function resetWorkloadIdentityForTests(): void {
   config = undefined
   loaded = false
   lastError = null
+  suspended = false
   invalidate()
 }

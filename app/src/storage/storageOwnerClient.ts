@@ -193,6 +193,9 @@ export function createSharedNotebookStore(
       {
         driveBaseUrl: getGoogleDriveBaseUrl(),
         credentialBoundary: credentialBoundary(),
+        profileCredentialBoundary: localStorage.getItem(
+          'runme/storageCredentialBoundary'
+        ),
         attempts,
         creationMigrationError,
       },

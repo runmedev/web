@@ -301,6 +301,8 @@ origin-bound JWT provider serves runner, parser, Jupyter, and Google token-broke
 requests. Status tools return no private keys or raw tokens. The configured HTTPS
 endpoint must already have browser-trusted transport; these steps do not install
 certificates. Repeat the import after reloading the browser.
+When changing a runner's origin, configure a new runner name. Existing names
+retain their origin binding so the old address cannot fall back to human auth.
 
 Select Drive workload auth through `configureGoogleWorkloadIdentity` with a JSON
 file containing:
@@ -332,6 +334,8 @@ token-mint permission and Drive sharing. A linked GKE service account may need
 explicit self-impersonation permission for this extra IAM Credentials call.
 Create new notebooks in a Shared drive, since a service account cannot own new
 files in My Drive. A failed broker request never starts human OAuth.
+The sync queue can renew an expired token after an idle period. Disconnecting
+Drive pauses workload token acquisition until explicit reconnect or configuration.
 
 `googleDrive` runtime YAML also accepts `authFlow: workload_identity`,
 `runnerName`, `expectedServiceAccountEmail`, `scopes`, and `lifetimeSeconds`.
