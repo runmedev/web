@@ -1,5 +1,6 @@
 // Must be imported first to ensure Tailwind layers and style foundations are defined before component styles
 import "./index.css";
+import "./lib/localEditorAssets";
 
 import { setContext } from "@runmedev/renderers";
 import type { RendererContext } from "vscode-notebook-renderer";
@@ -64,7 +65,7 @@ const noopBridge: RendererContext<void> = {
   postMessage: (msg: unknown) => {
     console.error(
       "Unexpected call to noopBridge; this indicates a console-view messaging call before a specific bridge is wired up.",
-      msg,
+      msg
     );
   },
   onDidReceiveMessage: () => ({ dispose: () => {} }),
@@ -74,7 +75,6 @@ setContext(noopBridge);
 captureStartupDocumentRequest();
 normalizeAppIndexUrl();
 ensureSessionQueryParam();
-googleAnalytics.initialize();
 registerPwaServiceWorker();
 
 void ensurePersistentStorage().then((status) => {
@@ -103,19 +103,18 @@ void ensurePersistentStorage().then((status) => {
   }
 });
 
-// Initialize auth, then render
-maybeSetAppConfig().finally(() => {
-  getBrowserAdapter()
+// Local rendering must not wait for an optional identity provider to respond.
+maybeSetAppConfig().finally(async () => {
+  googleAnalytics.initialize();
+  await initializeNotebookSessionPersistence();
+  createRoot(document.getElementById("root")!).render(
+    <App branding={{ name: "runme notebook", logo: runmeIcon }} />
+  );
+  void getBrowserAdapter()
     .init()
-    .then(async () => {
-      await initializeNotebookSessionPersistence();
-      createRoot(document.getElementById("root")!).render(
-        <App
-          branding={{
-            name: "runme notebook",
-            logo: runmeIcon,
-          }}
-        />,
-      );
+    .catch((error: unknown) => {
+      appLogger.warn("Optional authentication initialization failed", {
+        attrs: { scope: "auth.bootstrap", error: String(error) },
+      });
     });
 });

@@ -1,4 +1,7 @@
-@import url("https://fonts.googleapis.com/css2?family=PT+Sans:wght@400;700&family=Fira+Mono:wght@400;500&display=swap");
+@import "@fontsource/pt-sans/400.css";
+@import "@fontsource/pt-sans/700.css";
+@import "@fontsource/fira-mono/400.css";
+@import "@fontsource/fira-mono/500.css";
 @import "tailwindcss";
 
 /* Notebook width belongs to the viewport, never to the widest descendant.

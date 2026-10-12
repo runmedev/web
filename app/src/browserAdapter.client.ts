@@ -24,6 +24,10 @@ import type {
   SimpleAuthJSONWithHelpers,
   StoredTokenResponse,
 } from './auth/types'
+import {
+  getExternalServices,
+  requireGoogleSignIn,
+} from './lib/externalServices'
 import { appLogger } from './lib/logging/runtime'
 
 const STORAGE_KEY = 'oidc-auth'
@@ -169,6 +173,7 @@ let discoveryPromise: Promise<DiscoveryDocument> | null = null
 
 async function loadDiscovery(): Promise<DiscoveryDocument> {
   const nextUrl = getOidcConfig().discoveryUrl
+  if (new URL(nextUrl).hostname === 'accounts.google.com') requireGoogleSignIn()
   if (discoveryUrl !== nextUrl) {
     discoveryPromise = null
     discoveryUrl = nextUrl
@@ -260,6 +265,10 @@ export class BrowserAuthAdapter {
 
   /** Validate the selected OAuth flow and persist only its verified credentials. */
   private processCallback = async (url?: URL) => {
+    if (
+      new URL(getOidcConfig().discoveryUrl).hostname === 'accounts.google.com'
+    )
+      requireGoogleSignIn()
     const operationVersion = this.authOperationVersion
     const callbackUrl = url ?? new URL(window.location.href)
     const loginConfig = window.sessionStorage.getItem('oidc_login_config')
@@ -468,6 +477,8 @@ export class BrowserAuthAdapter {
     clearPendingLogin()
     const version = this.authOperationVersion
     const config = getOidcConfig()
+    if (new URL(config.discoveryUrl).hostname === 'accounts.google.com')
+      requireGoogleSignIn()
     const interaction = config.authUxMode ?? 'redirect'
     const child = openOidcWindow(
       interaction,
@@ -497,6 +508,7 @@ export class BrowserAuthAdapter {
         const google =
           config.discoveryUrl ===
           'https://accounts.google.com/.well-known/openid-configuration'
+        if (google) requireGoogleSignIn()
         const discovery = google ? undefined : await loadDiscovery()
         if (discovery && (!discovery.issuer || !discovery.jwks_uri))
           throw new Error(
@@ -659,6 +671,12 @@ export class BrowserAuthAdapter {
    * Initializes the adapter, refreshing tokens if they are about to expire.
    */
   init = async () => {
+    if (
+      new URL(getOidcConfig().discoveryUrl).hostname ===
+        'accounts.google.com' &&
+      !getExternalServices().googleSignIn
+    )
+      return
     if (this.simpleAuth?.willExpireSoon()) {
       await this.refresh()
     }

@@ -19,8 +19,6 @@ import {
   NotebookStoreItemType,
 } from './notebook'
 
-const GAPI_SCRIPT_SRC = 'https://apis.google.com/js/api.js'
-
 // VERSION_FIELDS is the fields we want to return when fetching metadata to determine the file content version.
 // https://developers.google.com/workspace/drive/api/guides/fields-parameter
 const VERSION_FIELDS =
@@ -147,17 +145,6 @@ function decodeDriveRevision(
   return fromJsonString(parser_pb.NotebookSchema, body, {
     ignoreUnknownFields: true,
   })
-}
-
-let gapiScriptPromise: Promise<void> | null = null
-let clientPromise: Promise<DriveFilesClient> | null = null
-
-// Minimal type definitions that describe just the specific pieces of the global
-// gapi client that this module relies on. This keeps the usage of window.gapi
-// type-safe without pulling in the full Google typings.
-type GapiLoadOptions = {
-  callback: () => void
-  onerror?: (error: unknown) => void
 }
 
 export type DriveDoc = {
@@ -328,47 +315,6 @@ type Drive = {
   name?: string
 }
 
-type GapiDriveFileMethods = {
-  create: (request: Record<string, unknown>) => Promise<unknown>
-  update: (request: Record<string, unknown>) => Promise<unknown>
-  get: (request: Record<string, unknown>) => Promise<unknown>
-  list: (request: Record<string, unknown>) => Promise<unknown>
-}
-
-type GapiDriveMethods = {
-  get: (request: Record<string, unknown>) => Promise<unknown>
-}
-
-type GapiDriveRevisionMethods = {
-  get: (request: Record<string, unknown>) => Promise<unknown>
-  list: (request: Record<string, unknown>) => Promise<unknown>
-}
-
-type GapiRequestArgs = {
-  path: string
-  method?: string
-  params?: Record<string, string>
-  headers?: Record<string, string>
-  body?: string | ArrayBuffer
-}
-
-interface GapiGlobal {
-  load: (name: string, options: GapiLoadOptions) => void
-  client: {
-    load: (name: string, version: string) => Promise<void>
-    setToken: (token: { access_token: string } | null) => void
-    getToken?: () => { access_token?: string } | null
-    drive: {
-      files: GapiDriveFileMethods
-      drives: GapiDriveMethods
-      revisions: GapiDriveRevisionMethods
-    }
-    request: (args: GapiRequestArgs) => Promise<unknown>
-  }
-}
-
-type DriveCreateResponse = { result?: DriveDoc }
-type DriveUpdateResponse = { result?: DriveDoc }
 type DriveGetResponse = { result?: Drive }
 type DriveListResponse = {
   result?: {
@@ -691,557 +637,8 @@ const DRIVE_COMMENT_FIELDS =
   'id,createdTime,modifiedTime,resolved,anchor,author(displayName,photoLink,me),deleted,htmlContent,content,quotedFileContent(mimeType,value),replies(id,createdTime,modifiedTime,action,author(displayName,photoLink,me),deleted,htmlContent,content)'
 const DRIVE_COMMENT_LIST_FIELDS = `nextPageToken,comments(${DRIVE_COMMENT_FIELDS})`
 
-export class GapiDriveFilesClient implements DriveFilesClient {
-  private readonly files: GapiDriveFileMethods
-  private readonly drives: GapiDriveMethods
-  private readonly revisions: GapiDriveRevisionMethods
-
-  constructor(private readonly gapi: GapiGlobal) {
-    this.files = this.gapi.client.drive.files
-    this.drives = this.gapi.client.drive.drives
-    this.revisions = this.gapi.client.drive.revisions
-  }
-
-  private buildUrl(path: string, params?: Record<string, unknown>): string {
-    const url = new URL(path.replace(/^\//, ''), 'https://www.googleapis.com/')
-    for (const [key, value] of Object.entries(params ?? {})) {
-      if (value === undefined || value === null || value === '') {
-        continue
-      }
-      url.searchParams.set(key, String(value))
-    }
-    return url.toString()
-  }
-
-  private async request(
-    method: string,
-    path: string,
-    options: {
-      params?: Record<string, unknown>
-      body?: string
-      contentType?: string
-      expectText?: boolean
-      headers?: Record<string, string>
-    } = {}
-  ): Promise<{ body?: string; result?: unknown }> {
-    const token = this.gapi.client.getToken?.()?.access_token ?? ''
-    if (!token) {
-      throw new Error('Google Drive request requires an access token')
-    }
-    const response = await fetch(this.buildUrl(path, options.params), {
-      method,
-      headers: {
-        Authorization: `Bearer ${token}`,
-        ...options.headers,
-        ...(options.body !== undefined
-          ? {
-              'Content-Type': options.contentType ?? 'application/json',
-            }
-          : {}),
-      },
-      body: options.body,
-    })
-
-    if (response.status === 412) {
-      throw new DrivePreconditionFailedError(
-        'Google Drive write precondition failed'
-      )
-    }
-    if (!response.ok) {
-      const errorBody = await response.text().catch(() => '')
-      throw new DriveRequestError(
-        `Drive request failed (${response.status} ${response.statusText}): ${errorBody}`,
-        response.status
-      )
-    }
-
-    if (options.expectText) {
-      return {
-        body: await response.text(),
-      }
-    }
-
-    const text = await response.text()
-    if (!text) {
-      return {
-        result: undefined,
-      }
-    }
-    return {
-      result: JSON.parse(text),
-    }
-  }
-
-  private getUtf8Media(
-    path: string,
-    request: Record<string, unknown>
-  ): Promise<{ body?: string; result?: unknown }> {
-    const params = { ...request }
-    delete params.fileId
-    delete params.revisionId
-
-    // GAPI decodes media response bytes as Latin-1. Fetch's Response.text()
-    // decodes them as UTF-8, preserving emoji and other non-ASCII text.
-    return this.request('GET', path, { params, expectText: true })
-  }
-
-  // setContent uploads content to a Google Drive file using a media upload.
-  // https://content.googleapis.com/upload/drive/v3/files/19uA730OLadqxfEUgUHN35YAQDAt2Pcax?uploadType=media&alt=json
-  // It looks like gapi unlike node clients don't have helper methods for media uploads
-  // so we have to do it manually.
-  //
-  // The API reference says you can update media and metadata in a single request but I couldn't quite
-  // figure it out so it seemed easier to just use two requests; one which updates metadata (name, mimeType)
-  // and another which uploads the content.
-  private async setContent(
-    fileId: string,
-    content: string,
-    mimeType?: string,
-    resourceKey?: string
-  ): Promise<void> {
-    const token = this.gapi.client.getToken?.()?.access_token ?? ''
-    if (!token) {
-      throw new Error('Google Drive upload requires an access token')
-    }
-    const url = new URL(
-      `https://www.googleapis.com/upload/drive/v3/files/${encodeURIComponent(fileId)}`
-    )
-    url.searchParams.set('uploadType', 'media')
-    url.searchParams.set('supportsAllDrives', 'true')
-    if (resourceKey) {
-      url.searchParams.set('resourceKey', resourceKey)
-    }
-    const response = await fetch(url.toString(), {
-      method: 'PATCH',
-      headers: {
-        Authorization: `Bearer ${token}`,
-        'Content-Type': mimeType ?? 'application/octet-stream',
-      },
-      body: content,
-    })
-    if (!response.ok) {
-      const message = await response.text().catch(() => '')
-      throw new Error(
-        `Google Drive media upload failed (${response.status}): ${message}`
-      )
-    }
-  }
-
-  private buildResource(
-    doc: DriveDoc,
-    includeId = false
-  ): Record<string, unknown> {
-    const resource: Record<string, unknown> = {}
-    if (includeId && typeof doc.id === 'string') {
-      resource.id = doc.id
-    }
-    if (typeof doc.name === 'string') {
-      resource.name = doc.name
-    }
-    if (typeof doc.mimeType === 'string') {
-      resource.mimeType = doc.mimeType
-    }
-    if (Array.isArray(doc.parents)) {
-      resource.parents = doc.parents
-    }
-    if (typeof doc.trashed === 'boolean') {
-      resource.trashed = doc.trashed
-    }
-    if (doc.appProperties) {
-      resource.appProperties = doc.appProperties
-    }
-    return resource
-  }
-
-  async generateFileId(): Promise<string> {
-    const response = await this.request('GET', '/drive/v3/files/generateIds', {
-      params: { count: 1, space: 'drive', type: 'files' },
-    })
-    const id = (response.result as { ids?: unknown } | undefined)?.ids
-    if (!Array.isArray(id) || typeof id[0] !== 'string' || !id[0]) {
-      throw new Error('Google Drive did not return a generated file id')
-    }
-    return id[0]
-  }
-
-  async create(
-    doc: DriveDoc,
-    resourceKeyHeaders: Record<string, string> = {}
-  ): Promise<DriveDoc> {
-    const resource = this.buildResource(doc, true)
-    const fields =
-      doc.content === undefined
-        ? 'id,name,mimeType,parents'
-        : 'id,name,mimeType,parents,headRevisionId'
-    const response =
-      Object.keys(resourceKeyHeaders).length > 0
-        ? ((await this.request('POST', '/drive/v3/files', {
-            params: { fields, supportsAllDrives: true },
-            body: JSON.stringify(resource),
-            headers: resourceKeyHeaders,
-          })) as DriveCreateResponse)
-        : ((await this.files.create({
-            resource,
-            fields,
-            supportsAllDrives: true,
-          } as Record<string, unknown>)) as DriveCreateResponse)
-    const file = response.result ?? {}
-    if (file.id && doc.content !== undefined) {
-      console.log(`Setting content for new Drive file ${file.id}`)
-      try {
-        await this.setContent(file.id, doc.content, doc.mimeType)
-      } catch (error) {
-        throw new DriveFileCreatedError(
-          file.id,
-          file.name,
-          error,
-          file.headRevisionId
-        )
-      }
-    }
-    return file
-  }
-
-  async update(doc: DriveDoc): Promise<DriveDoc> {
-    if (!doc.id) {
-      throw new Error('Drive file id is required for update')
-    }
-    const resource = this.buildResource(doc)
-    let file: DriveDoc = { id: doc.id }
-    if (Object.keys(resource).length > 0) {
-      // Use the REST request path for metadata updates. The discovery client's
-      // files.update method can acknowledge a request while dropping its
-      // resource body, which makes renames appear successful but leaves the
-      // Drive item unchanged.
-      const response = (await this.request(
-        'PATCH',
-        `/drive/v3/files/${encodeURIComponent(doc.id)}`,
-        {
-          params: {
-            fields: 'id,name,mimeType,parents',
-            supportsAllDrives: true,
-            resourceKey: doc.resourceKey,
-          },
-          body: JSON.stringify(resource),
-        }
-      )) as DriveUpdateResponse
-      file = response.result ?? { id: doc.id }
-    } else {
-      file = {
-        id: doc.id,
-        name: doc.name,
-        mimeType: doc.mimeType,
-        parents: doc.parents,
-      }
-    }
-
-    if (doc.content !== undefined && file.id) {
-      await this.setContent(file.id, doc.content, doc.mimeType, doc.resourceKey)
-    }
-
-    return file
-  }
-
-  async move(
-    fileId: string,
-    sourceParentId: string,
-    destinationParentId: string,
-    resourceKey?: string,
-    resourceKeyHeaders: Record<string, string> = {}
-  ): Promise<DriveDoc> {
-    const params = {
-      addParents: destinationParentId,
-      removeParents: sourceParentId,
-      supportsAllDrives: true,
-      fields: 'id,name,mimeType,parents',
-      resourceKey,
-    }
-    const response =
-      Object.keys(resourceKeyHeaders).length > 0
-        ? ((await this.request(
-            'PATCH',
-            `/drive/v3/files/${encodeURIComponent(fileId)}`,
-            { params, headers: resourceKeyHeaders }
-          )) as DriveUpdateResponse)
-        : ((await this.files.update({
-            fileId,
-            ...params,
-          } as Record<string, unknown>)) as DriveUpdateResponse)
-    return response.result ?? { id: fileId }
-  }
-
-  get(
-    request: Record<string, unknown>
-  ): Promise<{ body?: string; result?: unknown }> {
-    if (request.alt === 'media') {
-      const fileId = String(request.fileId ?? '')
-      return this.getUtf8Media(
-        `/drive/v3/files/${encodeURIComponent(fileId)}`,
-        request
-      )
-    }
-    return this.files.get(request as any) as Promise<{
-      body?: string
-      result?: unknown
-    }>
-  }
-
-  /** Read v3 metadata; browser sync does not depend on an exposed ETag. */
-  async readVersionMetadata(
-    fileId: string,
-    resourceKey?: string
-  ): Promise<{
-    metadata: DriveVersionMetadata | null
-  }> {
-    const response = await this.request(
-      'GET',
-      `/drive/v3/files/${encodeURIComponent(fileId)}`,
-      {
-        params: { supportsAllDrives: true, fields: VERSION_FIELDS },
-        headers: driveResourceKeyHeaders({ id: fileId, resourceKey }),
-      }
-    )
-    return {
-      metadata: (response.result as DriveVersionMetadata | undefined) ?? null,
-    }
-  }
-
-  /** Update a public property. Callers recheck ownership; this is not a lock. */
-  async setPublicProperty(
-    fileId: string,
-    key: string,
-    value: string | null,
-    resourceKey?: string
-  ): Promise<boolean> {
-    await this.request(
-      'PATCH',
-      `/drive/v3/files/${encodeURIComponent(fileId)}`,
-      {
-        params: { supportsAllDrives: true },
-        body: JSON.stringify({ properties: { [key]: value } }),
-        headers: driveResourceKeyHeaders({ id: fileId, resourceKey }),
-      }
-    )
-    return true
-  }
-
-  /** Return metadata from this upload response, never from a later file read. */
-  async uploadContent(
-    fileId: string,
-    content: string,
-    mimeType: string,
-    resourceKey?: string,
-    placement?: DerivedCopyPlacement
-  ): Promise<DriveVersionMetadata> {
-    const upload = contentUpload(content, mimeType, placement)
-    const response = await this.request(
-      'PATCH',
-      `/upload/drive/v3/files/${encodeURIComponent(fileId)}`,
-      {
-        params: {
-          ...upload.params,
-          supportsAllDrives: true,
-          fields: VERSION_FIELDS,
-        },
-        body: upload.body,
-        contentType: upload.contentType,
-        headers: driveResourceKeyHeaders({ id: fileId, resourceKey }),
-      }
-    )
-    return (response.result as DriveVersionMetadata | undefined) ?? {}
-  }
-
-  /** Pin a blob revision before downloading it through the supported v3 API. */
-  async keepRevision(
-    fileId: string,
-    revisionId: string,
-    resourceKey?: string
-  ): Promise<void> {
-    await this.request(
-      'PATCH',
-      `/drive/v3/files/${encodeURIComponent(fileId)}/revisions/${encodeURIComponent(revisionId)}`,
-      {
-        body: JSON.stringify({ keepForever: true }),
-        headers: driveResourceKeyHeaders({ id: fileId, resourceKey }),
-      }
-    )
-  }
-
-  list(
-    request: Record<string, unknown>,
-    headers: Record<string, string> = {}
-  ): Promise<DriveListResponse> {
-    if (Object.keys(headers).length > 0) {
-      return this.request('GET', '/drive/v3/files', {
-        params: request,
-        headers,
-      }) as Promise<DriveListResponse>
-    }
-    return this.files.list(request as any) as Promise<DriveListResponse>
-  }
-
-  getDrive(request: Record<string, unknown>): Promise<DriveGetResponse> {
-    return this.drives.get(request as any) as Promise<DriveGetResponse>
-  }
-
-  listRevisions(
-    request: Record<string, unknown>,
-    headers: Record<string, string> = {}
-  ): Promise<DriveRevisionListResponse> {
-    if (Object.keys(headers).length > 0) {
-      const fileId = String(request.fileId ?? '')
-      const params = { ...request }
-      delete params.fileId
-      return this.request(
-        'GET',
-        `/drive/v3/files/${encodeURIComponent(fileId)}/revisions`,
-        { params, headers }
-      ) as Promise<DriveRevisionListResponse>
-    }
-    return this.revisions.list(
-      request as any
-    ) as Promise<DriveRevisionListResponse>
-  }
-
-  getRevision(
-    request: Record<string, unknown>,
-    headers: Record<string, string> = {}
-  ): Promise<{ body?: string; result?: unknown }> {
-    if (request.alt === 'media' || Object.keys(headers).length > 0) {
-      const fileId = String(request.fileId ?? '')
-      const revisionId = String(request.revisionId ?? '')
-      const params = { ...request }
-      delete params.fileId
-      delete params.revisionId
-      return this.request(
-        'GET',
-        `/drive/v3/files/${encodeURIComponent(fileId)}/revisions/${encodeURIComponent(revisionId)}`,
-        {
-          params,
-          expectText: request.alt === 'media',
-          headers,
-        }
-      )
-    }
-    return this.revisions.get(request as any) as Promise<{
-      body?: string
-      result?: unknown
-    }>
-  }
-
-  listComments(
-    request: Record<string, unknown>,
-    headers: Record<string, string> = {}
-  ): Promise<DriveCommentListResponse> {
-    const fileId = String(request.fileId ?? '')
-    const params = { ...request }
-    delete params.fileId
-    return this.request(
-      'GET',
-      `/drive/v3/files/${encodeURIComponent(fileId)}/comments`,
-      { params, headers }
-    ) as Promise<DriveCommentListResponse>
-  }
-
-  createComment(request: {
-    fileId: string
-    resource: Record<string, unknown>
-    fields?: string
-    headers?: Record<string, string>
-  }): Promise<{ result?: unknown }> {
-    return this.request(
-      'POST',
-      `/drive/v3/files/${encodeURIComponent(request.fileId)}/comments`,
-      {
-        params: {
-          fields: request.fields ?? DRIVE_COMMENT_FIELDS,
-          supportsAllDrives: 'true',
-        },
-        body: JSON.stringify(request.resource),
-        headers: request.headers,
-      }
-    )
-  }
-
-  updateComment(request: {
-    fileId: string
-    commentId: string
-    resource: Record<string, unknown>
-    fields?: string
-    headers?: Record<string, string>
-  }): Promise<{ result?: unknown }> {
-    return this.request(
-      'PATCH',
-      `/drive/v3/files/${encodeURIComponent(request.fileId)}/comments/${encodeURIComponent(request.commentId)}`,
-      {
-        params: {
-          fields: request.fields ?? DRIVE_COMMENT_FIELDS,
-          supportsAllDrives: 'true',
-        },
-        body: JSON.stringify(request.resource),
-        headers: request.headers,
-      }
-    )
-  }
-
-  createReply(request: {
-    fileId: string
-    commentId: string
-    resource: Record<string, unknown>
-    fields?: string
-    headers?: Record<string, string>
-  }): Promise<{ result?: unknown }> {
-    return this.request(
-      'POST',
-      `/drive/v3/files/${encodeURIComponent(request.fileId)}/comments/${encodeURIComponent(request.commentId)}/replies`,
-      {
-        params: {
-          fields:
-            request.fields ??
-            `id,action,createdTime,modifiedTime,author(displayName,photoLink,me),deleted,htmlContent,content`,
-          supportsAllDrives: 'true',
-        },
-        body: JSON.stringify(request.resource),
-        headers: request.headers,
-      }
-    )
-  }
-
-  async ensureParent(
-    file: DriveDoc,
-    parentId?: string,
-    resourceKeyHeaders: Record<string, string> = {}
-  ): Promise<DriveDoc> {
-    if (!file.id || !parentId) {
-      return file
-    }
-    if ((file.parents ?? []).includes(parentId)) {
-      return file
-    }
-    const request: Record<string, unknown> = {
-      fileId: file.id,
-      addParents: parentId,
-      supportsAllDrives: true,
-      fields: 'id,name,mimeType,parents',
-    }
-    if ((file.parents ?? []).includes('root')) {
-      request.removeParents = 'root'
-    }
-    const rawParams = { ...request }
-    delete rawParams.fileId
-    const response =
-      Object.keys(resourceKeyHeaders).length > 0
-        ? ((await this.request(
-            'PATCH',
-            `/drive/v3/files/${encodeURIComponent(file.id)}`,
-            { params: rawParams, headers: resourceKeyHeaders }
-          )) as DriveUpdateResponse)
-        : ((await this.files.update(request)) as DriveUpdateResponse)
-    return response.result ?? file
-  }
-}
-
-class FetchDriveFilesClient implements DriveFilesClient {
+/** Google Drive REST client; all executable code is part of the app bundle. */
+export class FetchDriveFilesClient implements DriveFilesClient {
   constructor(
     private readonly baseUrl: string,
     private readonly accessToken: string
@@ -1463,7 +860,11 @@ class FetchDriveFilesClient implements DriveFilesClient {
       'GET',
       `/drive/v3/files/${encodeURIComponent(fileId)}`,
       {
-        params: request,
+        params: Object.fromEntries(
+          Object.entries(request).filter(
+            ([key]) => !['fileId', 'driveId', 'revisionId'].includes(key)
+          )
+        ),
         expectText: request.alt === 'media',
       }
     )
@@ -1565,7 +966,11 @@ class FetchDriveFilesClient implements DriveFilesClient {
     return this.request(
       'GET',
       `/drive/v3/drives/${encodeURIComponent(driveId)}`,
-      { params: request }
+      {
+        params: Object.fromEntries(
+          Object.entries(request).filter(([key]) => key !== 'driveId')
+        ),
+      }
     ) as Promise<DriveGetResponse>
   }
 
@@ -1577,7 +982,14 @@ class FetchDriveFilesClient implements DriveFilesClient {
     return this.request(
       'GET',
       `/drive/v3/files/${encodeURIComponent(fileId)}/revisions`,
-      { params: request, headers }
+      {
+        params: Object.fromEntries(
+          Object.entries(request).filter(
+            ([key]) => !['fileId', 'driveId', 'revisionId'].includes(key)
+          )
+        ),
+        headers,
+      }
     ) as Promise<DriveRevisionListResponse>
   }
 
@@ -1591,7 +1003,11 @@ class FetchDriveFilesClient implements DriveFilesClient {
       'GET',
       `/drive/v3/files/${encodeURIComponent(fileId)}/revisions/${encodeURIComponent(revisionId)}`,
       {
-        params: request,
+        params: Object.fromEntries(
+          Object.entries(request).filter(
+            ([key]) => !['fileId', 'driveId', 'revisionId'].includes(key)
+          )
+        ),
         expectText: request.alt === 'media',
         headers,
       }
@@ -1708,123 +1124,16 @@ class FetchDriveFilesClient implements DriveFilesClient {
   }
 }
 
-// Augment the browser Window type so TypeScript knows that the Google API
-// script may attach a gapi object at runtime. This lets the rest of the module
-// access window.gapi without falling back to any-typed shims.
-declare global {
-  interface Window {
-    gapi?: GapiGlobal
-  }
-}
-
-function loadGapiScript(): Promise<void> {
-  if (typeof window === 'undefined') {
-    return Promise.reject(
-      new Error('Google APIs are only available in a browser environment')
-    )
-  }
-
-  if (window.gapi?.load) {
-    return Promise.resolve()
-  }
-
-  if (!gapiScriptPromise) {
-    gapiScriptPromise = new Promise<void>((resolve, reject) => {
-      const existingScript = document.querySelector<HTMLScriptElement>(
-        `script[src="${GAPI_SCRIPT_SRC}"]`
-      )
-
-      if (existingScript) {
-        existingScript.addEventListener('load', () => resolve(), {
-          once: true,
-        })
-        existingScript.addEventListener('error', reject, { once: true })
-        return
-      }
-
-      const script = document.createElement('script')
-      script.src = GAPI_SCRIPT_SRC
-      script.async = true
-      script.defer = true
-      script.onload = () => resolve()
-      script.onerror = reject
-      document.head.appendChild(script)
-    })
-  }
-
-  return gapiScriptPromise.then(() => {
-    if (!window.gapi?.load) {
-      throw new Error('Google API script loaded but gapi is unavailable')
-    }
-  })
-}
-
-async function ensureGapi(): Promise<typeof window.gapi> {
-  if (typeof window === 'undefined') {
-    throw new Error('Google APIs are only available in a browser environment')
-  }
-
-  if (!window.gapi?.load) {
-    await loadGapiScript()
-  }
-
-  if (!window.gapi?.load) {
-    throw new Error('Google API script failed to initialize gapi')
-  }
-
-  return window.gapi
-}
-
-// ensureDriveFilesClient creates a gapi client for the Google Drive Files API
-// by loading the discovery document for the Drive API v3.
-// it is parameterized by the accessToken.
-//
-// TODO(jlewi): Does it make sense to take the accessToken as a parameter?
-// This seems like it means we need to recreate the client every time the token expires.
-// The more common pattern seems to be to have the client take a reference to a class/function
-// which can be called to get get a token and which handles refreshing the token as needed.
+/** Use the same REST transport in tabs, workers, and fake-server tests.
+ * Each operation supplies its current credential; no global token is retained.
+ */
 async function ensureDriveFilesClient(
   accessToken: string
 ): Promise<DriveFilesClient> {
-  const baseUrl = getGoogleDriveBaseUrl()
-  if (baseUrl || typeof window === 'undefined') {
-    return new FetchDriveFilesClient(
-      baseUrl || 'https://www.googleapis.com',
-      accessToken
-    )
-  }
-
-  const gapi = await ensureGapi()
-  if (!gapi) {
-    throw new Error('Google API client is unavailable')
-  }
-
-  if (!clientPromise) {
-    clientPromise = new Promise<DriveFilesClient>((resolve, reject) => {
-      gapi.load('client', {
-        callback: async () => {
-          try {
-            await gapi.client.load('drive', 'v3')
-            resolve(new GapiDriveFilesClient(gapi))
-          } catch (error) {
-            reject(error)
-          }
-        },
-        onerror: (error: unknown) => reject(error),
-      })
-    }).catch((error) => {
-      clientPromise = null
-      throw error
-    })
-  }
-
-  const pendingClient = clientPromise
-  if (!pendingClient) {
-    throw new Error('Google Drive client initialization failed')
-  }
-  const client = await pendingClient
-  gapi.client.setToken({ access_token: accessToken })
-  return client
+  return new FetchDriveFilesClient(
+    getGoogleDriveBaseUrl() || 'https://www.googleapis.com',
+    accessToken
+  )
 }
 
 function validateDriveId(id: string | null | undefined): string {

@@ -378,8 +378,8 @@ describe('codeModeExecutor', () => {
         expect.objectContaining({ name: 'getting-started' }),
       ])
     )
-    expect(markdown).toBe('# Getting Started')
-    expect(fetchMock).toHaveBeenCalled()
+    expect(markdown).toContain('# Getting Started')
+    expect(fetchMock).not.toHaveBeenCalled()
   })
 
   it('bridges notebook write access requests in sandbox mode', async () => {

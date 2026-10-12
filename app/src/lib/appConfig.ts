@@ -10,6 +10,10 @@ import { OIDC_STORAGE_KEY, oidcConfigManager } from '../auth/oidcConfig'
 import { configureGoogleWorkloadIdentity } from '../auth/workloadIdentity'
 import { agentEndpointManager } from './agentEndpointManager'
 import { getOidcCallbackUrl, resolveAppUrl } from './appBase'
+import {
+  type ExternalServices,
+  configureExternalServices,
+} from './externalServices'
 import type {
   GoogleDriveAuthFlow,
   GoogleDriveAuthUxMode,
@@ -83,6 +87,7 @@ export interface AgentRuntimeConfig {
 }
 
 export interface RuntimeAppConfig {
+  externalServices: ExternalServices
   agent: AgentRuntimeConfig
   oidc: OidcRuntimeConfig
   googleDrive: GoogleDriveRuntimeConfig
@@ -372,6 +377,11 @@ function createDefaultOidcGoogleRuntimeConfig(): OidcGoogleRuntimeConfig {
 
 function createDefaultRuntimeAppConfig(): RuntimeAppConfig {
   return {
+    externalServices: {
+      googleSignIn: false,
+      analytics: false,
+      remoteContent: false,
+    },
     agent: {
       endpoint: '',
       defaultRunnerEndpoint: '',
@@ -404,6 +414,12 @@ export class RuntimeAppConfigSchema {
       return parsed
     }
 
+    const external = asRecord(root.externalServices)
+    parsed.externalServices = {
+      googleSignIn: external?.googleSignIn === true,
+      analytics: external?.analytics === true,
+      remoteContent: external?.remoteContent === true,
+    }
     const agent = asRecord(root.agent)
     const oidc = asRecord(root.oidc)
     const oidcGeneric = asRecord(oidc?.generic)
@@ -535,6 +551,7 @@ export function applyAppConfig(
   const hasLocalDriveRuntimeBaseUrl = Boolean(getGoogleDriveBaseUrl())
 
   const parsed = RuntimeAppConfigSchema.fromUnknown(rawConfig)
+  configureExternalServices(parsed.externalServices)
   const hasOidcBlock = isRecord(rawConfig.oidc)
   const rawOidc = asRecord(rawConfig.oidc)
   const hasOidcGoogleBlock = isRecord(rawOidc?.google)
@@ -701,7 +718,10 @@ export async function setAppConfig(
   options?: AppConfigApplyOptions
 ): Promise<AppliedAppConfig> {
   const resolvedUrl = normalizeString(url) ?? getDefaultAppConfigUrl()
-  const response = await fetch(resolvedUrl, { cache: 'no-store' })
+  const response = await fetch(resolvedUrl, {
+    cache: 'no-store',
+    signal: AbortSignal.timeout(5000),
+  })
   if (!response.ok) {
     throw new Error(
       `Failed to fetch app config (${response.status} ${response.statusText})`

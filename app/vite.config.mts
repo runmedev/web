@@ -3,19 +3,21 @@ import react from "@vitejs/plugin-react";
 import { execFileSync } from "node:child_process";
 import { createHash } from "node:crypto";
 import { readFile, stat } from "node:fs/promises";
-import path from "node:path";
 import { createRequire } from "node:module";
-const require = createRequire(import.meta.url);
+import path from "node:path";
 import type { Plugin } from "vite";
 import { defineConfig } from "vite";
 import svgr from "vite-plugin-svgr";
+
+import { localExcalidraw } from "./build/localExcalidraw";
+
+const require = createRequire(import.meta.url);
 
 const backendProxyTarget =
   process.env.VITE_BACKEND_PROXY_TARGET ??
   process.env.CUJ_BACKEND_URL ??
   "http://127.0.0.1:9977";
-const LOCAL_SERVICE_ACCOUNT_KEY_ENDPOINT =
-  "/__runme-dev/service-account-key";
+const LOCAL_SERVICE_ACCOUNT_KEY_ENDPOINT = "/__runme-dev/service-account-key";
 const LOCAL_IMAGE_ENDPOINT = "/__runme-dev/local-image";
 const MAX_LOCAL_KEY_BYTES = 1024 * 1024;
 const MAX_LOCAL_IMAGE_BYTES = 10 * 1024 * 1024;
@@ -70,10 +72,7 @@ function localServiceAccountKeyPlugin() {
         LOCAL_SERVICE_ACCOUNT_KEY_ENDPOINT,
         async (req, res) => {
           try {
-            const requestUrl = new URL(
-              req.url ?? "",
-              "http://localhost",
-            );
+            const requestUrl = new URL(req.url ?? "", "http://localhost");
             const rawPath = requestUrl.searchParams.get("path") ?? "";
             if (!rawPath || !path.isAbsolute(rawPath)) {
               res.statusCode = 400;
@@ -100,13 +99,13 @@ function localServiceAccountKeyPlugin() {
                 name: path.basename(rawPath),
                 path: rawPath,
                 text,
-              }),
+              })
             );
           } catch (error) {
             res.statusCode = 500;
             res.end(`Failed to read service account key: ${String(error)}`);
           }
-        },
+        }
       );
     },
   };
@@ -171,33 +170,31 @@ function pwaServiceWorkerPlugin(): Plugin {
       const precacheUrls = [
         ...new Set([...PWA_CORE_ASSETS, ...generatedAssets]),
       ].sort();
-      const buildHash = createHash("sha256").update(
-        precacheUrls.join("\n"),
-      );
+      const buildHash = createHash("sha256").update(precacheUrls.join("\n"));
       for (const fileName of Object.keys(bundle).sort()) {
         const output = bundle[fileName];
         buildHash.update(fileName);
-        buildHash.update(
-          output.type === "asset" ? output.source : output.code,
-        );
+        buildHash.update(output.type === "asset" ? output.source : output.code);
       }
       for (const fileName of PWA_PUBLIC_ASSET_FILES) {
         buildHash.update(fileName);
         buildHash.update(
-          await readFile(new URL(`./assets/${fileName}`, import.meta.url)),
+          await readFile(new URL(`./assets/${fileName}`, import.meta.url))
         );
       }
       const buildId = buildHash.digest("hex").slice(0, 12);
       const template = await readFile(
         new URL("./src/pwa/service-worker.js", import.meta.url),
-        "utf8",
+        "utf8"
       );
       const source = template
         .replace(PWA_PRECACHE_TOKEN, JSON.stringify(precacheUrls, null, 2))
         .replace(PWA_BUILD_TOKEN, buildId);
 
       if (source === template || source.includes(PWA_PRECACHE_TOKEN)) {
-        this.error("PWA service worker template is missing its precache token.");
+        this.error(
+          "PWA service worker template is missing its precache token."
+        );
       }
       if (source.includes(PWA_BUILD_TOKEN)) {
         this.error("PWA service worker template is missing its build token.");
@@ -220,19 +217,34 @@ export default defineConfig({
   define: {
     "import.meta.env.VITE_RUNME_VERSION_WEB_REPO":
       JSON.stringify(webRepository),
-    "import.meta.env.VITE_RUNME_VERSION_WEB_COMMIT":
-      JSON.stringify(webCommit ?? ""),
+    "import.meta.env.VITE_RUNME_VERSION_WEB_COMMIT": JSON.stringify(
+      webCommit ?? ""
+    ),
   },
   // The DOM conditional export in this parser dependency cannot run in workers.
   // Its portable entity table works in both tabs and SharedWorkers.
-  resolve: { alias: { "decode-named-character-reference": require.resolve("decode-named-character-reference") } },
+  resolve: {
+    alias: {
+      "decode-named-character-reference": require.resolve(
+        "decode-named-character-reference"
+      ),
+    },
+  },
   // A stable URL/name avoids a second owner after a page-bundle deployment.
-  worker: { format: "es", rollupOptions: { output: {
-    entryFileNames: chunk => chunk.name === "storageOwner.worker" ? "storage-owner.js" : "assets/[name]-[hash].js",
-  } } },
+  worker: {
+    format: "es",
+    rollupOptions: {
+      output: {
+        entryFileNames: (chunk) =>
+          chunk.name === "storageOwner.worker"
+            ? "storage-owner.js"
+            : "assets/[name]-[hash].js",
+      },
+    },
+  },
   publicDir: "assets",
   optimizeDeps: {
-    exclude: ["@runmedev/renderers"],
+    exclude: ["@runmedev/renderers", "@excalidraw/excalidraw"],
   },
   plugins: [
     react(),
@@ -247,6 +259,7 @@ export default defineConfig({
         ref: true,
       },
     }),
+    localExcalidraw(),
     pwaServiceWorkerPlugin(),
   ],
   server: {

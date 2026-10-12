@@ -537,7 +537,7 @@ describe('createAppJsGlobals notebook reference helpers', () => {
     })
   })
 
-  it('lists commit-pinned documentation and fetches remote Markdown', async () => {
+  it('lists commit-pinned documentation and reads bundled Markdown', async () => {
     const fetchMock = vi.fn(async () => ({
       ok: true,
       status: 200,
@@ -560,14 +560,11 @@ describe('createAppJsGlobals notebook reference helpers', () => {
 
     const document = await globals.documents.get(gettingStarted.uri)
 
-    expect(fetchMock).toHaveBeenCalledWith(
-      gettingStarted.rawUri,
-      expect.any(Object)
-    )
+    expect(fetchMock).not.toHaveBeenCalled()
     expect(document).toMatchObject({
       uri: gettingStarted.uri,
       mimeType: 'text/markdown',
-      content: '# Getting Started',
+      content: expect.stringContaining('# Getting Started'),
       readOnly: true,
     })
 
@@ -576,7 +573,7 @@ describe('createAppJsGlobals notebook reference helpers', () => {
       description:
         'Use this guide when opening Runme for the first time or when an agent needs the shortest path from an unopened notebook to a successful cell execution. It covers prerequisites, opening a notebook, selecting an execution path, running a cell, and checking its output. For detailed runner configuration, use one of the runner-specific guides.',
     })
-    await expect(globals.documentation.get('getting-started')).resolves.toBe(
+    await expect(globals.documentation.get('getting-started')).resolves.toContain(
       '# Getting Started'
     )
     expect(globals.documentation.help()).toContain(

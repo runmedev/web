@@ -324,7 +324,7 @@ attempt, then starts the flow configured by `googleDrive.authFlow` and
 
 To change Google accounts, right-click the Google Drive status icon and select
 **Logout**. This clears the app's cached Drive access and refresh credentials,
-clears the in-memory Google API token, and attempts to revoke the access token
+clears the in-memory Drive token, and, when Google sign-in is enabled, attempts to revoke the access token
 with Google. The next click on the Drive status icon explicitly opens Google's
 account chooser. This signs out of Drive in Runme without signing out of the
 Google account in the rest of the browser.

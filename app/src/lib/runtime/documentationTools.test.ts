@@ -43,7 +43,7 @@ describe('documentation WebMCP tools', () => {
 
     await expect(
       getDocumentationForAgents('getting-started', versionInfo, fetchImpl)
-    ).resolves.toBe('# Getting Started')
+    ).resolves.toContain('# Getting Started')
   })
 
   it('rejects missing names before fetching', async () => {

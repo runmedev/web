@@ -9,6 +9,7 @@ import {
 const validOptions = (
   overrides: Partial<GoogleAnalyticsClientOptions> = {}
 ): GoogleAnalyticsClientOptions => ({
+  enabled: () => true,
   measurementId: 'G-TEST123',
   hostname: 'web.runme.dev',
   origin: 'https://web.runme.dev',
@@ -37,6 +38,7 @@ describe('classifyNotebookAnalyticsSource', () => {
 
 describe('GoogleAnalyticsClient', () => {
   it.each([
+    ['deployment disabled', { enabled: () => false }],
     ['missing ID', { measurementId: undefined }],
     ['invalid ID', { measurementId: '123456789' }],
     ['non-production host', { hostname: 'localhost' }],
