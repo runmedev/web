@@ -244,7 +244,7 @@ export default defineConfig({
   },
   publicDir: "assets",
   optimizeDeps: {
-    exclude: ["@runmedev/renderers", "@excalidraw/excalidraw"],
+    exclude: ["@runmedev/renderers"],
   },
   plugins: [
     react(),

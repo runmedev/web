@@ -6,6 +6,14 @@ import type { Plugin } from 'vite'
 const require = createRequire(import.meta.url)
 export const EXCALIDRAW_ASSET_BASE = '/assets/excalidraw/0.18.1/'
 
+/** Use one rewrite in Rollup production builds and esbuild's dev prebundle. */
+function localizeFontFallback(code: string): string {
+  return code.replace(
+    /`https:\/\/esm\.sh\/.*?\/dist\/prod\/`/g,
+    `new URL(${JSON.stringify(EXCALIDRAW_ASSET_BASE)}, window.location.origin).href`
+  )
+}
+
 /** Emit the pinned package's dynamically resolved fonts alongside Vite assets.
  * Excalidraw 0.18.1 appends a CDN fallback even with EXCALIDRAW_ASSET_PATH set.
  * Redirect that fallback locally too, including missing-font and export paths.
@@ -16,6 +24,33 @@ export function localExcalidraw(): Plugin {
   return {
     name: 'runme-local-excalidraw',
     enforce: 'pre',
+    config() {
+      return {
+        optimizeDeps: {
+          esbuildOptions: {
+            plugins: [
+              {
+                name: 'runme-local-excalidraw-fonts',
+                setup(build) {
+                  // Keep normal dependency prebundling: Excalidraw imports
+                  // CommonJS packages that browsers cannot consume directly.
+                  build.onLoad(
+                    { filter: /\/@excalidraw\/excalidraw\/dist\/.*\.js$/ },
+                    async (args) => ({
+                      contents: localizeFontFallback(
+                        await readFile(args.path, 'utf8')
+                      ),
+                      loader: 'js',
+                      resolveDir: path.dirname(args.path),
+                    })
+                  )
+                },
+              },
+            ],
+          },
+        },
+      }
+    },
     configResolved(config) {
       building = config.command === 'build'
     },
@@ -61,13 +96,10 @@ export function localExcalidraw(): Plugin {
     },
     transform(code, id) {
       if (!id.includes('@excalidraw/excalidraw/dist/')) return
-      const fallback = /`https:\/\/esm\.sh\/.*?\/dist\/prod\/`/g
-      if (!fallback.test(code)) return
+      const localized = localizeFontFallback(code)
+      if (localized === code) return
       return {
-        code: code.replace(
-          fallback,
-          `new URL(${JSON.stringify(EXCALIDRAW_ASSET_BASE)}, window.location.origin).href`
-        ),
+        code: localized,
         map: null,
       }
     },

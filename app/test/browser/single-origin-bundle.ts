@@ -5,11 +5,14 @@ import { fileURLToPath } from 'node:url'
 import { chromium } from 'playwright-core'
 
 // A dedicated test browser is recommended; do not use a personal browser profile.
-const base = process.env.RUNME_TEST_URL ?? 'http://127.0.0.1:5197'
-const output = path.resolve('test/browser/test-output/single-origin-bundle')
 
 /** Exercise the actual production WebMCP tools without adding a test API to the app. */
-export async function runSingleOriginBundle() {
+export async function runSingleOriginBundle(development = false) {
+  const base = process.env.RUNME_TEST_URL ?? 'http://127.0.0.1:5197'
+  const output = path.resolve(
+    'test/browser/test-output/single-origin-bundle',
+    development ? 'development' : '.'
+  )
   await mkdir(output, { recursive: true })
   // Detect dormant CDN fallbacks too: successful local loads would hide them.
   for (const file of await readdir('dist')) {
@@ -193,48 +196,52 @@ export async function runSingleOriginBundle() {
         else assert(bytes.toString().includes('<svg'), 'SVG export is invalid')
       }
       await page.keyboard.press('Escape')
-      // Wait for actual precache completion, then prove help and saved data survive offline reload.
-      await page.evaluate(async () => {
-        await Promise.race([
-          navigator.serviceWorker.ready,
-          new Promise((_, reject) =>
-            setTimeout(
-              async () =>
-                reject(
-                  new Error(
-                    'Service worker not ready: ' +
-                      JSON.stringify(
-                        (await navigator.serviceWorker.getRegistrations()).map(
-                          (r) => ({
+      // Development has no service worker. Exercise its module graph and exports
+      // above, and reserve offline assertions for the production artifact.
+      if (!development) {
+        // Wait for actual precache completion, then prove help and saved data survive offline reload.
+        await page.evaluate(async () => {
+          await Promise.race([
+            navigator.serviceWorker.ready,
+            new Promise((_, reject) =>
+              setTimeout(
+                async () =>
+                  reject(
+                    new Error(
+                      'Service worker not ready: ' +
+                        JSON.stringify(
+                          (
+                            await navigator.serviceWorker.getRegistrations()
+                          ).map((r) => ({
                             scope: r.scope,
                             installing: r.installing?.state,
                             waiting: r.waiting?.state,
                             active: r.active?.state,
-                          })
+                          }))
                         )
-                      )
-                  )
-                ),
-              20000
-            )
-          ),
-        ])
-      })
-      await context.setOffline(true)
-      await page.reload({ waitUntil: 'domcontentloaded' })
-      console.log(failure, 'offline reloaded', await page.title())
-      await page.waitForFunction(
-        () => (window as any).__bundleTools?.has('ExecuteCode'),
-        undefined,
-        { timeout: 15000 }
-      )
-      await execute(
-        `const persisted=await documents.get(${JSON.stringify(notebookUri)}); if(!persisted.content.includes('const answer: number = 42')) throw new Error('Durable local edit lost'); await notebooks.show(${JSON.stringify(notebookUri)}); const help=await documentation.get('getting-started');if(!help.includes('# Getting Started')) throw new Error('Offline help missing');`
-      )
-      await page.screenshot({
-        path: path.join(output, `${failure}-offline.png`),
-      })
-      await context.setOffline(false)
+                    )
+                  ),
+                20000
+              )
+            ),
+          ])
+        })
+        await context.setOffline(true)
+        await page.reload({ waitUntil: 'domcontentloaded' })
+        console.log(failure, 'offline reloaded', await page.title())
+        await page.waitForFunction(
+          () => (window as any).__bundleTools?.has('ExecuteCode'),
+          undefined,
+          { timeout: 15000 }
+        )
+        await execute(
+          `const persisted=await documents.get(${JSON.stringify(notebookUri)}); if(!persisted.content.includes('const answer: number = 42')) throw new Error('Durable local edit lost'); await notebooks.show(${JSON.stringify(notebookUri)}); const help=await documentation.get('getting-started');if(!help.includes('# Getting Started')) throw new Error('Offline help missing');`
+        )
+        await page.screenshot({
+          path: path.join(output, `${failure}-offline.png`),
+        })
+        await context.setOffline(false)
+      }
       assert.deepEqual(
         failedAssets,
         [],

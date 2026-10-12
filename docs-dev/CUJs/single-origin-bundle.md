@@ -27,5 +27,9 @@ request. Reload offline and verify the durable notebook bytes and bundled help. 
 Verify missing fonts stay local. Browser-local writes must remain durable.
 
 The canonical CUJ orchestrator also runs `test-scenario-single-origin-bundle.ts`
-against its own production preview. Network reports, screenshots, exported
-images and short videos use the existing CUJ artifact publication pipeline.
+against its own production preview, then a development server with a forced
+dependency prebundle. Both modes must render and export without external assets;
+offline reload is checked only in production, where the service worker runs.
+Development evidence is saved in the `development` subdirectory. Network reports,
+screenshots, exported images and short videos use the existing CUJ artifact
+publication pipeline.
