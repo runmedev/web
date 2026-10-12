@@ -1,4 +1,8 @@
-import { vi } from "vitest";
+import { beforeEach, vi } from "vitest";
+import { configureExternalServices } from "../src/lib/externalServices";
+
+// Existing scenarios model an opted-in deployment; restricted-mode tests override it.
+beforeEach(() => configureExternalServices({ googleSignIn: true, analytics: true, remoteContent: true }));
 
 // Excalidraw's browser bundle depends on canvas and extensionless ESM imports
 // that are unavailable in Vitest's Node environment. Tests that need the real

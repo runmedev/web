@@ -130,6 +130,7 @@ jobs:
           set -euo pipefail
           pnpm run build:renderers
           pnpm run build:console
+          pnpm run build:app
 
       # The browser orchestrator does not run Vitest. Keep the bounded-read
       # source guard and payload/recovery regressions in the required CI path.

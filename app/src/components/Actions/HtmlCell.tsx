@@ -1,3 +1,4 @@
+import { localHtmlContent } from '../../lib/externalServices'
 import {
   type ChangeEvent,
   memo,
@@ -132,7 +133,7 @@ const HtmlCell = memo(
         <iframe
           title={`html-preview-${cell?.refId ?? 'cell'}`}
           sandbox=""
-          srcDoc={value}
+          srcDoc={localHtmlContent(value)}
           className="h-[420px] w-full rounded-b-nb-md bg-white"
           data-testid="html-preview-frame"
         />

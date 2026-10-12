@@ -1,4 +1,8 @@
 import {
+  getExternalServices,
+  requireGoogleSignIn,
+} from '../lib/externalServices'
+import {
   ReactNode,
   createContext,
   useCallback,
@@ -858,7 +862,6 @@ export function GoogleAuthProvider({ children }: { children: ReactNode }) {
               serviceAccount.trim().toLowerCase()
           ) {
             setAccessToken('')
-            window.gapi?.client?.setToken(null)
           }
           errors.push({
             target: 'drive',
@@ -1113,6 +1116,7 @@ export function GoogleAuthProvider({ children }: { children: ReactNode }) {
       options: GetServiceAccountCredentialsOptions,
       mode: GoogleRedirectUxMode
     ) => {
+      requireGoogleSignIn()
       const authOperation = captureAuthOperation()
       const { clientId, authFlow } = googleClientManager.getOAuthClient()
       if (!clientId?.trim()) {
@@ -1441,6 +1445,7 @@ export function GoogleAuthProvider({ children }: { children: ReactNode }) {
 
   const startPkceRedirect = useCallback(
     async (mode: GoogleRedirectUxMode, promptMode?: GoogleOAuthPrompt) => {
+      requireGoogleSignIn()
       const authOperation = captureAuthOperation()
       const { clientId } = googleClientManager.getOAuthClient()
       if (!clientId?.trim()) {
@@ -1487,6 +1492,7 @@ export function GoogleAuthProvider({ children }: { children: ReactNode }) {
       promptMode: GoogleOAuthPrompt = 'none',
       mode: GoogleRedirectUxMode = 'new_tab'
     ) => {
+      requireGoogleSignIn()
       const { clientId } = googleClientManager.getOAuthClient()
       if (!clientId?.trim()) {
         throw new Error('Google OAuth client is not configured.')
@@ -1518,6 +1524,7 @@ export function GoogleAuthProvider({ children }: { children: ReactNode }) {
   )
 
   const refreshAccessToken = useCallback(async (): Promise<string | null> => {
+    if (!getExternalServices().googleSignIn) return null
     const refreshToken = tokenInfoRef.current?.refreshToken?.trim()
     if (!refreshToken) {
       return null
@@ -1788,6 +1795,7 @@ export function GoogleAuthProvider({ children }: { children: ReactNode }) {
 
   useEffect(() => {
     callbackErrorRef.current = null
+    if (!getExternalServices().googleSignIn) return
     const pending = handleRedirectCallbackIfPresent().catch((error) => {
       if (error instanceof StaleGoogleAuthOperationError) {
         return
@@ -1819,6 +1827,7 @@ export function GoogleAuthProvider({ children }: { children: ReactNode }) {
   // function so callers share the same pending promise, and we stash the promise
   // itself in scriptPromiseRef so multiple callers can await the same work.
   const ensureScriptLoaded = useCallback(() => {
+    requireGoogleSignIn()
     if (window.google?.accounts?.oauth2?.initTokenClient) {
       return Promise.resolve()
     }
@@ -1985,6 +1994,7 @@ export function GoogleAuthProvider({ children }: { children: ReactNode }) {
       serviceAccount: string,
       options?: GetServiceAccountCredentialsOptions
     ): Promise<ServiceAccountCredentialStatus> => {
+      requireGoogleSignIn()
       const resolvedOptions = options ?? {}
       const mode =
         resolvedOptions.mode ?? googleClientManager.getOAuthClient().authUxMode
@@ -2066,13 +2076,16 @@ export function GoogleAuthProvider({ children }: { children: ReactNode }) {
     persistStoredDriveAccount(null)
     clearImpersonatedServiceAccountCredential(['drive'])
     setAccessToken('')
-    window.gapi?.client.setToken(null)
 
     if (oauthClient.authFlow !== 'service_account') {
       requestAccountSelectionNext()
     }
 
-    if (!accessToken || oauthClient.authFlow === 'service_account') {
+    if (
+      !getExternalServices().googleSignIn ||
+      !accessToken ||
+      oauthClient.authFlow === 'service_account'
+    ) {
       return
     }
 

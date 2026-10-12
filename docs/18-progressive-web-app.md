@@ -46,7 +46,7 @@ connectivity:
 - Google Drive authorization, search, opening uncached Drive files, and sync
 - OIDC sign-in and token refresh
 - remote Runme runners, agents, Jupyter servers, and other backend APIs
-- documentation or external resources that have not already been cached
+- user-supplied remote documentation and external resources that have not already been cached
 
 Edits to a previously opened Drive-backed notebook can remain local while
 offline and synchronize after connectivity and authorization recover. Check
@@ -62,3 +62,44 @@ or reopen the app after a deployment to begin using the new version.
 The development server does not register the service worker. Use a production
 build with `pnpm -C app run preview` when testing installation or offline
 behavior locally.
+
+## Serving assets from one origin
+
+Publish the entire `app/dist` directory to the host serving the app. Vite emits
+Monaco and its language workers, application fonts, and built-in Markdown help.
+The build also emits the pinned Excalidraw package's font tree. Excalidraw's
+fallback font URL is rewritten to that same local tree; missing fonts do not
+contact a CDN. All emitted files are included in the service-worker inventory.
+
+The first load needs access to the app host, but no asset CDN. Subsequent offline
+loads require a completed service-worker installation on a secure origin.
+Bundling does not make browser APIs that require HTTPS available on an ordinary
+HTTP origin.
+
+External integrations are disabled by default. Public deployments can opt in
+through their same-origin `configs/app-configs.yaml`:
+
+```yaml
+externalServices:
+  googleSignIn: true
+  analytics: true
+  remoteContent: true
+```
+
+Omit these fields or set them to `false` in restricted deployments. These flags
+are read before optional integrations start; saved browser preferences cannot
+override an explicit deployment disable. Google sign-in controls interactive
+Google OAuth and its SDK, not a separately configured workload-identity provider.
+Analytics also requires its existing measurement ID, hostname and privacy checks.
+`remoteContent` permits externally hosted notebook images/media, diagram embeds
+and HTML-frame resources. Disabled external resources show placeholders or remain
+blocked inside isolated HTML frames; local, embedded and attached content works.
+
+Drive uses one REST client in browsers, workers and fake-server tests. A custom
+`googleDrive.baseUrl` changes the endpoint, not the client implementation. Drive
+and credential-provider calls still need their configured API endpoints, as do
+runners, agents and Jupyter. They are not static assets and are not bundled.
+
+Built-in help is read from the running bundle, including through WebMCP. GitHub
+permalinks still identify its source revision. Explicitly opened Markdown from
+another repository/revision remains a network operation.

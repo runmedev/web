@@ -26,7 +26,7 @@ const versionInfo: RunmeVersionInfo = {
 }
 
 describe('documentation catalog', () => {
-  it('uses commit-pinned GitHub permalinks without bundling document content', () => {
+  it('uses commit-pinned GitHub permalinks with separate bundled document content', () => {
     const documents = listDocumentation(versionInfo)
 
     expect(documents.length).toBeGreaterThan(10)
@@ -170,9 +170,8 @@ description: A description for discovery.
       fetchImpl
     )
 
-    const entry = getDocumentationEntry('webmcp-external-control', versionInfo)
-    expect(fetchImpl).toHaveBeenCalledWith(entry.rawUri, expect.any(Object))
-    expect(content).toBe('# WebMCP External Control')
+    expect(fetchImpl).not.toHaveBeenCalled()
+    expect(content).toContain('# WebMCP External Control')
   })
 
   it('rejects unknown documentation names with the available index', () => {
@@ -180,4 +179,29 @@ description: A description for discovery.
       'Available names: getting-started'
     )
   })
+})
+
+it('opens every current-build help permalink without network access', async () => {
+  const blocked = vi.fn(() => Promise.reject(new Error('Network disabled'))) as typeof fetch
+  for (const entry of listDocumentation()) {
+    const doc = await fetchRemoteMarkdownDocument(entry.uri, blocked)
+    expect(doc.content).toContain(`# ${entry.title}`)
+    expect(doc.content).toMatch(/^---/)
+    expect(doc.version?.revisionId).toBe(entry.revision)
+  }
+  expect(blocked).not.toHaveBeenCalled()
+})
+
+it('keeps anchored and query-qualified current-build help links local', async () => {
+  const blocked = vi.fn(() => Promise.reject(new Error('Network disabled'))) as typeof fetch
+  const entry = getGettingStartedDocument()
+  for (const base of [entry.uri, entry.rawUri]) {
+    const uri = `${base}?source=help#open-a-notebook`
+    const doc = await fetchRemoteMarkdownDocument(uri, blocked)
+    expect(doc.uri).toBe(uri)
+    expect(doc.content).toContain('# Getting Started')
+    expect(doc.content).toMatch(/^---/)
+    expect(doc.version?.revisionId).toBe(entry.revision)
+  }
+  expect(blocked).not.toHaveBeenCalled()
 })

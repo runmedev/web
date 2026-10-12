@@ -30,7 +30,7 @@ describe('secret-free Google OIDC login', () => {
     vi.stubGlobal('fetch', fetchMock)
     const { setAppConfigFromYaml } = await import('../lib/appConfig')
     config = setAppConfigFromYaml(
-      localAppConfigYaml,
+      localAppConfigYaml.replace('googleSignIn: false', 'googleSignIn: true'),
       'http://localhost/configs/app-configs.yaml'
     ).oidc!
     login = await import('./implicitLogin')

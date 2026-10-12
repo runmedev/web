@@ -4,48 +4,15 @@ import { afterEach, describe, expect, it, vi } from 'vitest'
 import { clearGoogleDriveRuntime } from '../lib/googleDriveRuntime'
 import { DriveNotebookStore } from './drive'
 
-const originalGapi = window.gapi
-
 afterEach(() => {
   clearGoogleDriveRuntime()
   vi.restoreAllMocks()
-  window.gapi = originalGapi
 })
 
-/** Installs an authenticated mock GAPI Drive client for one browser test. */
-function installGapi(filesUpdate = vi.fn()) {
-  window.gapi = {
-    load: (_name, options) => options.callback(),
-    client: {
-      load: vi.fn().mockResolvedValue(undefined),
-      setToken: vi.fn(),
-      getToken: () => ({ access_token: 'access-token' }),
-      drive: {
-        files: {
-          create: vi.fn(),
-          update: filesUpdate,
-          get: vi.fn(),
-          list: vi.fn(),
-        },
-        drives: { get: vi.fn() },
-        revisions: { get: vi.fn(), list: vi.fn() },
-      },
-      request: vi.fn(),
-    },
-  }
-}
+/** Installs an authenticated mock Default Drive REST client for one browser test. */
 
 describe('GAPI Drive client', () => {
   it('sends rename metadata through the REST request path', async () => {
-    const filesUpdate = vi.fn().mockResolvedValue({
-      result: {
-        id: 'file123',
-        name: 'original.json',
-        mimeType: 'application/json',
-      },
-    })
-
-    installGapi(filesUpdate)
     const fetchMock = vi
       .spyOn(globalThis, 'fetch')
       .mockImplementation(async (input, init) => {
@@ -82,11 +49,9 @@ describe('GAPI Drive client', () => {
     })
 
     expect(fetchMock).toHaveBeenCalledTimes(1)
-    expect(filesUpdate).not.toHaveBeenCalled()
   })
 
   it('rejects a rename response that kept the old name', async () => {
-    installGapi()
     const fetchMock = vi.spyOn(globalThis, 'fetch').mockResolvedValue(
       new Response(
         JSON.stringify({
@@ -114,29 +79,6 @@ describe('GAPI Drive client', () => {
   })
 
   it('decodes UTF-8 file and revision content without emoji mojibake', async () => {
-    const mojibake = '{"text":"ðð½"}'
-    const filesGet = vi.fn().mockResolvedValue({ body: mojibake })
-    const revisionsGet = vi.fn().mockResolvedValue({ body: mojibake })
-
-    window.gapi = {
-      load: (_name, options) => options.callback(),
-      client: {
-        load: vi.fn().mockResolvedValue(undefined),
-        setToken: vi.fn(),
-        getToken: () => ({ access_token: 'access-token' }),
-        drive: {
-          files: {
-            create: vi.fn(),
-            update: vi.fn(),
-            get: filesGet,
-            list: vi.fn(),
-          },
-          drives: { get: vi.fn() },
-          revisions: { get: revisionsGet, list: vi.fn() },
-        },
-        request: vi.fn(),
-      },
-    }
     const fetchMock = vi.spyOn(globalThis, 'fetch').mockImplementation(
       async () =>
         new Response('{"text":"👍🏽"}', {
@@ -156,8 +98,7 @@ describe('GAPI Drive client', () => {
         'revision456'
       )
     ).resolves.toBe('{"text":"👍🏽"}')
-    expect(filesGet).not.toHaveBeenCalled()
-    expect(revisionsGet).not.toHaveBeenCalled()
+
     expect(fetchMock).toHaveBeenCalledWith(
       'https://www.googleapis.com/drive/v3/files/file123?supportsAllDrives=true&alt=media',
       expect.objectContaining({
@@ -178,25 +119,6 @@ describe('GAPI Drive client', () => {
   })
 
   it('authorizes protected parents for create and move requests', async () => {
-    window.gapi = {
-      load: (_name, options) => options.callback(),
-      client: {
-        load: vi.fn().mockResolvedValue(undefined),
-        setToken: vi.fn(),
-        getToken: () => ({ access_token: 'access-token' }),
-        drive: {
-          files: {
-            create: vi.fn(),
-            update: vi.fn(),
-            get: vi.fn(),
-            list: vi.fn(),
-          },
-          drives: { get: vi.fn() },
-          revisions: { get: vi.fn(), list: vi.fn() },
-        },
-        request: vi.fn(),
-      },
-    }
     const fetchMock = vi
       .spyOn(globalThis, 'fetch')
       .mockImplementation(async (input, init) => {
@@ -248,4 +170,21 @@ describe('GAPI Drive client', () => {
 
     expect(fetchMock).toHaveBeenCalledTimes(2)
   })
+})
+
+it('uses current tokens on the default production endpoint without loading any SDK', async () => {
+  const scriptCount = document.scripts.length
+  let token = 'first'
+  const tokens: string[] = []
+  vi.spyOn(globalThis, 'fetch').mockImplementation(async (input, init) => {
+    expect(new URL(String(input)).origin).toBe('https://www.googleapis.com')
+    tokens.push(new Headers(init?.headers).get('Authorization')!)
+    return new Response('hello', { headers: { 'Content-Type': 'text/plain' } })
+  })
+  const store = new DriveNotebookStore(async () => token)
+  await store.loadContent('https://drive.google.com/file/d/file123/view')
+  token = 'renewed'
+  await store.loadContent('https://drive.google.com/file/d/file123/view')
+  expect(tokens).toEqual(['Bearer first', 'Bearer renewed'])
+  expect(document.scripts.length).toBe(scriptCount)
 })
