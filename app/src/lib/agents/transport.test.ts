@@ -4,6 +4,38 @@ import { createAgentTransport, readAgentEvents } from './transport'
 
 afterEach(() => vi.unstubAllGlobals())
 describe('agent transport', () => {
+  it('encodes saved agent IDs, does not retry updates, and suppresses upstream error bodies', async () => {
+    const fetch = vi.fn(
+      async () => new Response('secret diagnostic', { status: 403 })
+    )
+    vi.stubGlobal('fetch', fetch)
+    const api = createAgentTransport({ baseUrl: 'https://api.openai.com/v1' })
+    await expect(
+      api.updateAgent(
+        'agent_a/b',
+        { instructions: 'Act carefully.' },
+        new AbortController().signal
+      )
+    ).rejects.toThrow(/^Agents API returned HTTP 403/)
+    expect((fetch.mock.calls[0] as unknown as [string, RequestInit])[0]).toBe(
+      'https://api.openai.com/v1/agents/agent_a%2Fb'
+    )
+    expect(fetch).toHaveBeenCalledTimes(1)
+  })
+  it('rejects an update response for the wrong agent', async () => {
+    vi.stubGlobal(
+      'fetch',
+      vi.fn(async () => new Response(JSON.stringify({ id: 'agent_other' })))
+    )
+    const api = createAgentTransport({ baseUrl: 'https://api.openai.com/v1' })
+    await expect(
+      api.updateAgent(
+        'agent_test',
+        { instructions: 'Act carefully.' },
+        new AbortController().signal
+      )
+    ).rejects.toThrow('Invalid agent update response')
+  })
   it('creates a session at the collection endpoint and preserves its executor URL', async () => {
     const session = {
       id: 'sess_new',

@@ -126,6 +126,28 @@ export function createAgentsApi(display?: Display) {
     return monitor
   }
   return {
+    /** Replace saved instructions using the current vault-backed connection. */
+    updateAgent: (
+      agentId: string,
+      parameters: { instructions: string },
+      options: { signal?: AbortSignal } = {}
+    ) => {
+      if (typeof agentId !== 'string' || !agentId.trim().startsWith('agent_'))
+        throw new Error(
+          'agentId must be a saved agent ID starting with agent_.'
+        )
+      if (
+        typeof parameters?.instructions !== 'string' ||
+        !parameters.instructions.trim()
+      )
+        throw new Error('instructions must be non-empty.')
+      // Only this field is supported; never accidentally replace tools or model.
+      return getConnection().updateAgent(
+        agentId.trim(),
+        { instructions: parameters.instructions },
+        options.signal ?? AbortSignal.timeout(30000)
+      )
+    },
     /** Submit once without a widget; resolving means accepted, not that the agent finished. */
     sendMessage: async (
       sessionId: string,
@@ -228,6 +250,6 @@ export function createAgentsApi(display?: Display) {
     newer: (id: string) => requireMonitor(id).newer(),
     latest: (id: string) => requireMonitor(id).latest(),
     help: () =>
-      'agents.setKey(keyvault.getKey(name)) [browser JS; OpenAI API]; await agents.createSession(parameters, { signal? }) [browser JS; creates once, 30s default timeout; check existing sessions before retrying an uncertain failure]; await agents.sendMessage(sessionId, text, { idempotencyKey?, signal? }) [browser JS; submits once, does not wait for a reply]; await agents.listItems(sessionId, { limit?: 1..100, after?, signal? }) [browser JS; newest-first page]; agents.configure({ baseUrl, getHeaders? }) [browser JS only; memory-only auth]; agents.monitor(sessionId, { pageSize?: 1..100 }) [notebook JS cell]; agents.get(id); agents.pause(id); await agents.resume(id); await agents.older(id); await agents.newer(id); agents.latest(id). Pause stops observation, not the agent. Saved widgets require Connect.',
+      'agents.setKey(keyvault.getKey(name)) [browser JS; OpenAI API]; await agents.updateAgent(agentId, { instructions }, { signal? }) [browser JS; replaces saved instructions for new sessions only]; await agents.createSession(parameters, { signal? }) [browser JS; creates once, 30s default timeout; check existing sessions before retrying an uncertain failure]; await agents.sendMessage(sessionId, text, { idempotencyKey?, signal? }) [browser JS; submits once, does not wait for a reply]; await agents.listItems(sessionId, { limit?: 1..100, after?, signal? }) [browser JS; newest-first page]; agents.configure({ baseUrl, getHeaders? }) [browser JS only; memory-only auth]; agents.monitor(sessionId, { pageSize?: 1..100 }) [notebook JS cell]; agents.get(id); agents.pause(id); await agents.resume(id); await agents.older(id); await agents.newer(id); agents.latest(id). Pause stops observation, not the agent. Saved widgets require Connect.',
   }
 }

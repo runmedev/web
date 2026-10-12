@@ -15,6 +15,52 @@ afterEach(() => {
   vi.unstubAllGlobals()
 })
 describe('agents runtime', () => {
+  it('updates only saved instructions using fresh vault credentials and refuses a locked vault', async () => {
+    const { webcrypto } = await import('node:crypto')
+    const { keyVault } = await import('../keyvault/store')
+    vi.stubGlobal('crypto', webcrypto)
+    keyVault.refresh()
+    await keyVault.unlock('update test passphrase', true)
+    await keyVault.saveKey('update-test', 'initial-key')
+    const api = createAgentsApi()
+    api.setKey(keyVault.getKey('update-test'))
+    const fetch = vi.fn(
+      async () => new Response(JSON.stringify({ id: 'agent_test' }))
+    )
+    vi.stubGlobal('fetch', fetch)
+    await keyVault.saveKey('update-test', 'rotated-key', 'update-test')
+    const signal = new AbortController().signal
+    const parameters = {
+      instructions: 'Operate Olympus.\nKeep evidence.',
+      model: 'do-not-send',
+    }
+    await api.updateAgent('agent_test', parameters, { signal })
+    const [url, init] = fetch.mock.calls[0] as unknown as [string, RequestInit]
+    expect(url).toBe('https://api.openai.com/v1/agents/agent_test')
+    expect(init.method).toBe('POST')
+    expect(init.signal).toBe(signal)
+    expect(init.redirect).toBe('error')
+    expect(JSON.parse(init.body as string)).toEqual({
+      instructions: parameters.instructions,
+    })
+    expect(new Headers(init.headers).get('Authorization')).toBe(
+      'Bearer rotated-key'
+    )
+    expect(new Headers(init.headers).get('OpenAI-Beta')).toBe('agents=v1')
+    expect(JSON.stringify(localStorage)).not.toContain(parameters.instructions)
+    expect(() => api.updateAgent('sess_test', parameters)).toThrow('agentId')
+    expect(() => api.updateAgent('agent_test', { instructions: ' ' })).toThrow(
+      'non-empty'
+    )
+    expect(() =>
+      callAgentsBridge(api, 'agents.updateAgent', ['agent_test', parameters])
+    ).toThrow('Unsupported')
+    keyVault.lock()
+    await expect(api.updateAgent('agent_test', parameters)).rejects.toThrow(
+      'Unlock Key Vault'
+    )
+    expect(fetch).toHaveBeenCalledTimes(1)
+  })
   it('sends and reads a page without mounting a widget, using the current vault key', async () => {
     const { webcrypto } = await import('node:crypto')
     const { keyVault } = await import('../keyvault/store')

@@ -28,6 +28,7 @@ function setup(overrides: Partial<AgentTransport> = {}) {
   const queued: AgentEvent[] = []
   const close = vi.fn(() => deliver?.({ done: true, value: undefined }))
   const transport: AgentTransport = {
+    updateAgent: vi.fn(async () => ({ id: 'agent_test' })),
     createSession: vi.fn(async () => ({ id: 'sess_test' })),
     sendMessage: vi.fn(async () => {}),
     session: vi.fn(async () => ({ status: 'idle' })),
