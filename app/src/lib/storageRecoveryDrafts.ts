@@ -17,7 +17,6 @@ export async function prepareNotebookStorageRestart(): Promise<() => void> {
     .getOpenNotebooks()
     .map((entry) => controller.getNotebookData(entry.uri))
     .filter((model) => model?.getSnapshot().loaded)
-    .filter((model) => !model!.isReadOnly())
   if (
     models.some(
       (model) =>
@@ -34,6 +33,7 @@ export async function prepareNotebookStorageRestart(): Promise<() => void> {
     models.forEach((model) => model!.setReleasePending(false))
   try {
     for (const model of models) {
+      if (model!.isReadOnly()) continue
       const snapshot = model!.getSnapshot()
       const draft = {
         uri: snapshot.uri,

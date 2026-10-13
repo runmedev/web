@@ -83,3 +83,13 @@ describe('restart editor preservation', () => {
     expect(m.setReleasePending).not.toHaveBeenCalled()
   })
 })
+
+it('also blocks restart for running cells in read-only notebooks', async () => {
+  const m = model()
+  m.isReadOnly = () => true
+  m.hasActiveExecutions = () => true
+  await expect(prepareNotebookStorageRestart()).rejects.toThrow(
+    'Stop running cells'
+  )
+  expect(m.setReleasePending).not.toHaveBeenCalled()
+})
