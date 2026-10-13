@@ -6,7 +6,7 @@ export type StorageRecoveryState = {
 let state: StorageRecoveryState = { phase: 'healthy', message: '' }
 const listeners = new Set<() => void>()
 let restart: (() => void) | undefined
-let prepare: (() => Promise<() => void>) | undefined
+let prepare: ((signal: AbortSignal) => Promise<() => void>) | undefined
 
 export const storageRecovery = {
   getSnapshot: () => state,
@@ -33,18 +33,18 @@ export const storageRecovery = {
   registerRestart(callback: () => void) {
     restart = callback
   },
-  registerPreparation(callback: () => Promise<() => void>) {
+  registerPreparation(callback: (signal: AbortSignal) => Promise<() => void>) {
     prepare = callback
     return () => {
       if (prepare === callback) prepare = undefined
     }
   },
-  async prepare() {
+  async prepare(signal: AbortSignal) {
     if (!prepare)
       throw new Error(
         'Notebook recovery is not ready. Wait for the notebook window to load.'
       )
-    return prepare()
+    return prepare(signal)
   },
   restart() {
     if (!restart) return

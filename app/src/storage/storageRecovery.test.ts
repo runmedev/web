@@ -276,3 +276,26 @@ it('retains the actionable blocked reason while stale requests continue to fail'
     'Navigate older tabs away first.'
   )
 })
+
+it('aborts preparation when the host cancels a round, without acknowledging or reloading', async () => {
+  const send = vi.fn<(message: RecoveryMessage) => void>()
+  const reload = vi.fn()
+  let signal!: AbortSignal
+  const client = new StorageRecoveryClient(send, reload, async (incoming) => {
+    signal = incoming
+    await new Promise<void>((_resolve, reject) =>
+      incoming.addEventListener('abort', () => reject(incoming.reason), {
+        once: true,
+      })
+    )
+    return vi.fn()
+  })
+  const preparing = client.receive(recoveryMessage('prepare', 'hung-round'))
+  await client.receive(
+    recoveryMessage('blocked', 'hung-round', 'Timed out waiting for tabs')
+  )
+  await preparing
+  expect(signal.aborted).toBe(true)
+  expect(send).not.toHaveBeenCalled()
+  expect(reload).not.toHaveBeenCalled()
+})

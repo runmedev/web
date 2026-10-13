@@ -93,3 +93,39 @@ it('also blocks restart for running cells in read-only notebooks', async () => {
   )
   expect(m.setReleasePending).not.toHaveBeenCalled()
 })
+
+it('cancels a hung flush promptly and does not unlock a later recovery round', async () => {
+  const m = model()
+  let finish!: () => void
+  m.flushPendingPersist.mockImplementationOnce(
+    () =>
+      new Promise<void>((resolve) => {
+        finish = resolve
+      })
+  )
+  const controller = new AbortController()
+  const preparation = prepareNotebookStorageRestart(controller.signal)
+  const rejected = expect(preparation).rejects.toThrow('Could not preserve')
+  expect(readRecoveryDrafts()).toHaveLength(1)
+  controller.abort()
+  expect(m.setReleasePending).toHaveBeenLastCalledWith(false)
+  await rejected
+  const releaseNew = await prepareNotebookStorageRestart()
+  expect(m.setReleasePending).toHaveBeenLastCalledWith(true)
+  const callsBeforeOldFlush = m.setReleasePending.mock.calls.length
+  finish()
+  await Promise.resolve()
+  await Promise.resolve()
+  expect(m.setReleasePending).toHaveBeenCalledTimes(callsBeforeOldFlush)
+  releaseNew()
+  expect(m.setReleasePending).toHaveBeenLastCalledWith(false)
+})
+
+it.each(['[null]', '[{"uri":"local://file/a"}]', '{}'])(
+  'rejects malformed recovery metadata without clearing its bytes: %s',
+  (raw) => {
+    sessionStorage.setItem('runme/storage-recovery-drafts/v1', raw)
+    expect(() => readRecoveryDrafts()).toThrow('malformed')
+    expect(sessionStorage.getItem('runme/storage-recovery-drafts/v1')).toBe(raw)
+  }
+)

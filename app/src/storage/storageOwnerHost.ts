@@ -159,9 +159,6 @@ export class StorageOwnerHost {
       port.postMessage(recoveryMessage('draining', round.id))
     if (!round.draining) {
       round.draining = true
-      clearTimeout(round.timer)
-      for (const port of this.ports.keys())
-        port.postMessage(recoveryMessage('draining', round.id))
       this.draining = (async () => {
         await this.store.ready
         await Promise.allSettled([

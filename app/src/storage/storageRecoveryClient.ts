@@ -10,10 +10,12 @@ export class StorageRecoveryClient {
   private release?: () => void
   private timer?: ReturnType<typeof setTimeout>
   private preparingId?: string
+  private preparation?: AbortController
   constructor(
     private readonly send: (message: RecoveryMessage) => void,
     private readonly reload: () => void,
-    private readonly prepare = () => storageRecovery.prepare()
+    private readonly prepare = (signal: AbortSignal) =>
+      storageRecovery.prepare(signal)
   ) {}
 
   restart(): void {
@@ -48,17 +50,20 @@ export class StorageRecoveryClient {
         return
       }
       if (this.round !== message.id) {
+        this.preparation?.abort()
         this.release?.()
         this.release = undefined
       }
       this.round = message.id
       this.preparingId = message.id
+      const preparation = new AbortController()
+      this.preparation = preparation
       storageRecovery.set({
         phase: 'preparing',
         message: 'Preserving editor contents in every connected Runme tab…',
       })
       try {
-        const release = await this.prepare()
+        const release = await this.prepare(preparation.signal)
         if (this.round !== message.id) {
           release()
           return
@@ -95,6 +100,8 @@ export class StorageRecoveryClient {
   private fail(message: string): void {
     clearTimeout(this.timer)
     this.round = undefined
+    this.preparation?.abort()
+    this.preparation = undefined
     this.release?.()
     this.release = undefined
     storageRecovery.set({ phase: 'blocked', message })
