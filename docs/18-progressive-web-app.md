@@ -82,16 +82,16 @@ same-origin `configs/app-configs.yaml`:
 
 ```yaml
 externalServices:
-  googleSignIn: true
   analytics: true
   remoteContent: true
 ```
 
-Set `googleSignIn: false` explicitly in restricted deployments; leave analytics
-and remote content omitted or false. These flags
+In restricted deployments, leave analytics and remote content omitted or false.
+These flags
 are read before optional integrations start; saved browser preferences cannot
-override an explicit deployment disable. Google sign-in controls interactive
-Google OAuth and its SDK, not a separately configured workload-identity provider.
+override an explicit deployment disable. Google sign-in has no enable/disable
+setting: its SDK loads on demand and authentication does not block app rendering.
+Headless deployments using workload identity do not need the Google sign-in SDK.
 Analytics also requires its existing measurement ID, hostname and privacy checks.
 `remoteContent` permits externally hosted notebook images/media, diagram embeds
 and HTML-frame resources. Disabled external resources show placeholders or remain

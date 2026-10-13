@@ -378,7 +378,6 @@ function createDefaultOidcGoogleRuntimeConfig(): OidcGoogleRuntimeConfig {
 function createDefaultRuntimeAppConfig(): RuntimeAppConfig {
   return {
     externalServices: {
-      googleSignIn: true,
       analytics: false,
       remoteContent: false,
     },
@@ -416,9 +415,6 @@ export class RuntimeAppConfigSchema {
 
     const external = asRecord(root.externalServices)
     parsed.externalServices = {
-      // Existing deployments omit this new field and must retain sign-in.
-      googleSignIn:
-        external?.googleSignIn === undefined || external.googleSignIn === true,
       analytics: external?.analytics === true,
       remoteContent: external?.remoteContent === true,
     }

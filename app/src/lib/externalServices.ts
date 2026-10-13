@@ -1,14 +1,11 @@
-/** Deployment choices, deliberately not persisted in browser preferences.
- * Google sign-in stays available on existing deployments. Restricted deployments
- * explicitly disable it before authentication initializes; the SDK loads lazily.
+/** Optional content and telemetry choices, not persisted in browser preferences.
+ * Authentication remains available and loads its SDK only when needed.
  */
 export interface ExternalServices {
-  googleSignIn: boolean
   analytics: boolean
   remoteContent: boolean
 }
 let settings: ExternalServices = {
-  googleSignIn: true,
   analytics: false,
   remoteContent: false,
 }
@@ -20,14 +17,6 @@ export function configureExternalServices(value: ExternalServices): void {
 /** Read deployment choices without consulting local preferences. */
 export function getExternalServices(): Readonly<ExternalServices> {
   return settings
-}
-
-/** Fail locally rather than opening a Google popup or loading a remote SDK. */
-export function requireGoogleSignIn(): void {
-  if (!settings.googleSignIn)
-    throw new Error(
-      'Google sign-in is disabled by this deployment. Configure a credential provider for unattended Drive access.'
-    )
 }
 
 /** Notebook-provided assets remain optional; local/blob/data assets work offline. */

@@ -23,8 +23,7 @@ googleDrive:
   # Supported values for authUxMode: popup, redirect, new_tab.
   authUxMode: 'new_tab'
 
-# Google sign-in stays available; restricted deployments explicitly disable it.
+# Optional content and telemetry integrations.
 externalServices:
-  googleSignIn: true
   analytics: false
   remoteContent: false

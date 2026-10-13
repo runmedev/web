@@ -6,50 +6,37 @@ import {
   configureExternalServices,
   getExternalServices,
   localHtmlContent,
-  requireGoogleSignIn,
 } from './externalServices'
 
 afterEach(() => vi.restoreAllMocks())
 
 describe('restricted deployment', () => {
-  it.each([
-    {},
-    { externalServices: {} },
-    { externalServices: { analytics: false } },
-  ])('preserves Google sign-in for existing config %j', (config) => {
-    applyAppConfig(config, '/configs/app-configs.yaml')
+  it('ignores the removed Google sign-in setting in older deployment files', () => {
+    applyAppConfig(
+      { externalServices: { googleSignIn: false } },
+      '/configs/app-configs.yaml'
+    )
     expect(getExternalServices()).toEqual({
-      googleSignIn: true,
       analytics: false,
       remoteContent: false,
     })
-    expect(() => requireGoogleSignIn()).not.toThrow()
   })
 
-  it.each([false, 'true'])(
-    'honors an explicit disable or invalid value %j even when local settings are preferred',
-    (googleSignIn) => {
-      configureExternalServices({
-        googleSignIn: true,
-        analytics: true,
-        remoteContent: true,
-      })
-      applyAppConfig(
-        { externalServices: { googleSignIn, analytics: false } },
-        '/configs/app-configs.yaml',
-        { preserveLocalConfiguration: true }
-      )
-      expect(getExternalServices()).toEqual({
-        googleSignIn: false,
-        analytics: false,
-        remoteContent: false,
-      })
-      expect(() => requireGoogleSignIn()).toThrow('disabled by this deployment')
-    }
-  )
+  it('requires explicit content and analytics opt-ins even when local settings are preferred', () => {
+    configureExternalServices({ analytics: true, remoteContent: true })
+    applyAppConfig(
+      { externalServices: { analytics: 'true', remoteContent: false } },
+      '/configs/app-configs.yaml',
+      { preserveLocalConfiguration: true }
+    )
+    expect(getExternalServices()).toEqual({
+      analytics: false,
+      remoteContent: false,
+    })
+  })
+
   it('allows local images but rejects remote and executable URL schemes', () => {
     configureExternalServices({
-      googleSignIn: false,
       analytics: false,
       remoteContent: false,
     })

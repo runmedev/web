@@ -1,4 +1,3 @@
-import { configureExternalServices } from '../lib/externalServices'
 // @vitest-environment jsdom
 import { useEffect } from 'react'
 import { act, render, waitFor } from '@testing-library/react'
@@ -135,25 +134,16 @@ describe('GoogleAuthProvider implicit redirect flow', () => {
   })
 
   it.each(['popup', 'redirect', 'new_tab'] as const)(
-    'does not contact Google when sign-in is disabled (%s)',
+    'does not load Google assets or open OAuth during startup (%s)',
     async (mode) => {
-      configureExternalServices({
-        googleSignIn: false,
-        analytics: false,
-        remoteContent: false,
-      })
       googleClientManager.setOAuthClient({
         authFlow: 'implicit',
         authUxMode: mode,
       })
       const open = vi.spyOn(window, 'open').mockReturnValue(null)
       const scripts = document.scripts.length
-      const auth = await renderWithGoogleAuthProvider()
+      await renderWithGoogleAuthProvider()
       const fetchMock = vi.mocked(fetch)
-      fetchMock.mockClear()
-      await expect(
-        auth.ensureAccessToken({ interactive: true })
-      ).rejects.toThrow('disabled by this deployment')
       expect(open).not.toHaveBeenCalled()
       expect(fetchMock).not.toHaveBeenCalled()
       expect(document.scripts.length).toBe(scripts)
@@ -175,29 +165,6 @@ describe('GoogleAuthProvider implicit redirect flow', () => {
     expect(window.localStorage.getItem(IMPLICIT_PROMPT_MODE_KEY)).toBe('none')
     // Implicit redirect should not mint a PKCE verifier.
     expect(window.localStorage.getItem(PKCE_CODE_VERIFIER_KEY)).toBeNull()
-  })
-
-  it('reports disabled callback completion instead of silently hanging', async () => {
-    configureExternalServices({
-      googleSignIn: false,
-      analytics: false,
-      remoteContent: false,
-    })
-    window.history.replaceState(
-      null,
-      '',
-      '/gdrive/callback#access_token=test-only-token&state=test-state'
-    )
-    const scripts = document.scripts.length
-    await renderWithGoogleAuthProvider()
-    await waitFor(() => {
-      expect(window.sessionStorage.getItem(PKCE_ERROR_KEY)).toContain(
-        'disabled by this deployment'
-      )
-    })
-    expect(fetch).not.toHaveBeenCalled()
-    expect(document.scripts.length).toBe(scripts)
-    expect(window.localStorage.getItem(STORAGE_KEY)).toBeNull()
   })
 
   it('authorizes keyless service-account credentials for Drive and Runme', async () => {
