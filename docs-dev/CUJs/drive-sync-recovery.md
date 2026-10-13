@@ -337,3 +337,31 @@ Reopen it and verify its cells are editable, edits and a rerun survive reopening
 and the Drive file/local URI are unchanged. Repeat while offline, then restore
 connectivity and reopen. Never perform this destructive setup on a user's
 unsynced notebook.
+
+## Storage worker restart
+
+`storageRecovery.test.ts` covers two-port acknowledgement, mismatched data protocol,
+active-write draining, failed editor preservation, unresponsive legacy tabs, late
+attachments, and late preparation after abort. `storageRecoveryDrafts.test.ts`
+checks reload-safe notebook copies, retained prior copies, quota failures, and
+running-cell refusal. `StorageRecoveryBanner.test.tsx` covers failures before
+React mounts and matching controls in both notebook and storage-status views.
+
+On an isolated test origin, reproduce a storage protocol mismatch and verify
+**Restart Runme** appears above the notebook and inside Google Drive Sync Status.
+With two tabs open, make an edit, click the button, and verify both tabs reload
+without closing the browser, notebook storage works again, and recovery JSON
+contains the editor content. Block one tab's acknowledgement: neither tab should
+reload. Block a storage/network write: restart must wait for the write to settle.
+Repeat against an older worker without the recovery protocol: show the actionable
+fallback and retain editor content rather than silently reloading in a loop.
+
+The emitted-worker/browser check is `test/browser/storage-owner-recovery.ts`.
+Against a production preview on port 5194, compile it with the same `tsc` flags
+above and run `node test/browser/.generated/storage-owner-recovery.js`. It asserts
+that two pages reload, the old SharedWorker target terminates, recovery copies
+survive, durable notebook bytes are unchanged, and a new owner accepts requests.
+A frontend worker fixture then verifies the actual notebook and status-page
+buttons and legacy fallback. Screenshots and JSON results are written under
+`test/browser/test-output/storage-*recovery*`. Use an isolated Chromium for Testing
+binary via `CHROMIUM_PATH`; the test never uses an existing browser profile.

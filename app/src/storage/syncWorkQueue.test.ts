@@ -478,3 +478,24 @@ describe('parallel file claims', () => {
     }
   )
 })
+
+it('drains actual in-flight work after closing instead of releasing it early', async () => {
+  const queue = new SyncWorkQueue()
+  let finish!: () => void
+  const run = vi.fn(
+    () =>
+      new Promise<void>((resolve) => {
+        finish = resolve
+      })
+  )
+  const pending = queue.run('in-flight', run)
+  await vi.waitFor(() => expect(run).toHaveBeenCalledOnce())
+  queue.close()
+  const drained = vi.fn()
+  const drain = queue.drain().then(drained)
+  await Promise.resolve()
+  expect(drained).not.toHaveBeenCalled()
+  finish()
+  await Promise.all([pending, drain])
+  expect(drained).toHaveBeenCalledOnce()
+})
