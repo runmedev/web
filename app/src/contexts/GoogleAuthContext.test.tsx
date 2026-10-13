@@ -1,4 +1,3 @@
-import { configureExternalServices } from '../lib/externalServices'
 // @vitest-environment jsdom
 import { useEffect } from 'react'
 import { act, render, waitFor } from '@testing-library/react'
@@ -135,25 +134,16 @@ describe('GoogleAuthProvider implicit redirect flow', () => {
   })
 
   it.each(['popup', 'redirect', 'new_tab'] as const)(
-    'does not contact Google when sign-in is disabled (%s)',
+    'does not load Google assets or open OAuth during startup (%s)',
     async (mode) => {
-      configureExternalServices({
-        googleSignIn: false,
-        analytics: false,
-        remoteContent: false,
-      })
       googleClientManager.setOAuthClient({
         authFlow: 'implicit',
         authUxMode: mode,
       })
       const open = vi.spyOn(window, 'open').mockReturnValue(null)
       const scripts = document.scripts.length
-      const auth = await renderWithGoogleAuthProvider()
+      await renderWithGoogleAuthProvider()
       const fetchMock = vi.mocked(fetch)
-      fetchMock.mockClear()
-      await expect(
-        auth.ensureAccessToken({ interactive: true })
-      ).rejects.toThrow('disabled by this deployment')
       expect(open).not.toHaveBeenCalled()
       expect(fetchMock).not.toHaveBeenCalled()
       expect(document.scripts.length).toBe(scripts)

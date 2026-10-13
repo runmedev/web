@@ -6,33 +6,37 @@ import {
   configureExternalServices,
   getExternalServices,
   localHtmlContent,
-  requireGoogleSignIn,
 } from './externalServices'
 
 afterEach(() => vi.restoreAllMocks())
 
 describe('restricted deployment', () => {
-  it('requires explicit boolean opt-ins, even when local settings are preferred', () => {
-    configureExternalServices({
-      googleSignIn: true,
-      analytics: true,
-      remoteContent: true,
-    })
+  it('ignores the removed Google sign-in setting in older deployment files', () => {
     applyAppConfig(
-      { externalServices: { googleSignIn: 'true', analytics: false } },
+      { externalServices: { googleSignIn: false } },
+      '/configs/app-configs.yaml'
+    )
+    expect(getExternalServices()).toEqual({
+      analytics: false,
+      remoteContent: false,
+    })
+  })
+
+  it('requires explicit content and analytics opt-ins even when local settings are preferred', () => {
+    configureExternalServices({ analytics: true, remoteContent: true })
+    applyAppConfig(
+      { externalServices: { analytics: 'true', remoteContent: false } },
       '/configs/app-configs.yaml',
       { preserveLocalConfiguration: true }
     )
     expect(getExternalServices()).toEqual({
-      googleSignIn: false,
       analytics: false,
       remoteContent: false,
     })
-    expect(() => requireGoogleSignIn()).toThrow('disabled by this deployment')
   })
+
   it('allows local images but rejects remote and executable URL schemes', () => {
     configureExternalServices({
-      googleSignIn: false,
       analytics: false,
       remoteContent: false,
     })

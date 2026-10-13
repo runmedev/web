@@ -144,7 +144,9 @@ This module defines:
 
 ## Deployment-controlled external services
 
-`externalServices.googleSignIn`, `.analytics`, and `.remoteContent` are explicit
-boolean opt-ins. They default to false and are applied independently of the
-legacy local-preference switch. The same bundle can run in a restricted
+`externalServices.analytics` and `.remoteContent` default to false.
+Google authentication is always available, loads its SDK on demand, and stays
+off the rendering critical path; it has no deployment enable/disable setting.
+The content and analytics settings are applied independently
+of the legacy local-preference switch. The same bundle can run in a restricted
 deployment or a public deployment; see the PWA guide for configuration.

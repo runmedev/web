@@ -23,8 +23,7 @@ googleDrive:
   # Supported values for authUxMode: popup, redirect, new_tab.
   authUxMode: 'new_tab'
 
-# Optional network integrations. Public deployments may explicitly opt in.
+# Optional content and telemetry integrations.
 externalServices:
-  googleSignIn: false
   analytics: false
   remoteContent: false

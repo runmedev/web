@@ -1,32 +1,22 @@
-/** Deployment choices, deliberately not persisted in browser preferences.
- * Start disabled so stale credentials or a missing config cannot load scripts.
+/** Optional content and telemetry choices, not persisted in browser preferences.
+ * Authentication remains available and loads its SDK only when needed.
  */
 export interface ExternalServices {
-  googleSignIn: boolean
   analytics: boolean
   remoteContent: boolean
 }
 let settings: ExternalServices = {
-  googleSignIn: false,
   analytics: false,
   remoteContent: false,
 }
 
-/** Apply the server's explicit opt-ins before initializing optional services. */
+/** Apply the server's choices before initializing optional services. */
 export function configureExternalServices(value: ExternalServices): void {
   settings = { ...value }
 }
-/** Read the current server-provided opt-ins without consulting local preferences. */
+/** Read deployment choices without consulting local preferences. */
 export function getExternalServices(): Readonly<ExternalServices> {
   return settings
-}
-
-/** Fail locally rather than opening a Google popup or loading a remote SDK. */
-export function requireGoogleSignIn(): void {
-  if (!settings.googleSignIn)
-    throw new Error(
-      'Google sign-in is disabled by this deployment. Configure a credential provider for unattended Drive access.'
-    )
 }
 
 /** Notebook-provided assets remain optional; local/blob/data assets work offline. */
