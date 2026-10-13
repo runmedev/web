@@ -37,6 +37,7 @@ export class SyncWorkQueue {
   private interactiveBurst = 0
   private timer?: ReturnType<typeof setTimeout>
   private stopped = false
+  private idleWaiters = new Set<() => void>()
   private readonly metrics = new SyncQueueMetrics()
 
   constructor(
@@ -110,6 +111,12 @@ export class SyncWorkQueue {
     for (const key of this.items.keys())
       if (!this.processing.has(key)) this.items.delete(key)
     this.recordDepth()
+  }
+
+  /** Wait for actual completion after close; abandoning active writes could create two owners. */
+  drain(): Promise<void> {
+    if (!this.processing.size) return Promise.resolve()
+    return new Promise((resolve) => this.idleWaiters.add(resolve))
   }
 
   /** Waiting keys exclude the active attempt, including while it awaits a lock. */
@@ -287,6 +294,10 @@ export class SyncWorkQueue {
     } finally {
       this.processing.delete(key)
       this.claimedGroups.delete(item.group)
+      if (!this.processing.size) {
+        this.idleWaiters.forEach((resolve) => resolve())
+        this.idleWaiters.clear()
+      }
       // Notify only after releasing the claim. Observer failures cannot strand
       // capacity or produce an unhandled rejection from a background attempt.
       try {

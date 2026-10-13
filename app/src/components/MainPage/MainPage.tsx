@@ -1,19 +1,37 @@
-import Actions from "../Actions/Actions";
-import { SidePanelContent, SidePanelToolbar } from "../SidePanel/SidePanel";
-import { useSidePanel } from "../../contexts/SidePanelContext";
-import { CommentsPanelProvider } from "../../contexts/CommentsPanelContext";
-import { CurrentDocInitializer } from "../CurrentDocInitializer";
-import { DocumentationInitializer } from "../Documentation/DocumentationInitializer";
-import { OnboardingInitializer } from "../Onboarding/OnboardingInitializer";
-import TourGuideOverlay from "../TourGuide/TourGuideOverlay";
-import TourUiStateBridge from "../TourGuide/TourUiStateBridge";
+import Actions from '../Actions/Actions'
+import { SidePanelContent, SidePanelToolbar } from '../SidePanel/SidePanel'
+import { useSidePanel } from '../../contexts/SidePanelContext'
+import { CommentsPanelProvider } from '../../contexts/CommentsPanelContext'
+import { CurrentDocInitializer } from '../CurrentDocInitializer'
+import { DocumentationInitializer } from '../Documentation/DocumentationInitializer'
+import { OnboardingInitializer } from '../Onboarding/OnboardingInitializer'
+import TourGuideOverlay from '../TourGuide/TourGuideOverlay'
+import TourUiStateBridge from '../TourGuide/TourUiStateBridge'
+import { useEffect, useSyncExternalStore } from 'react'
+import StorageRecoveryBanner from '../StorageRecoveryBanner'
+import { storageRecovery } from '../../storage/storageRecovery'
+import { prepareNotebookStorageRestart } from '../../lib/storageRecoveryDrafts'
+import { useCurrentDoc } from '../../contexts/CurrentDocContext'
+import { isDriveSyncStatusUri } from '../../lib/workspaceDocuments/workspaceDocumentTypes'
 
-const SIDE_PANEL_WIDTH = 360;
-const TOOLBAR_WIDTH = 48; // ~12 tailwind units (12 * 4px)
+const SIDE_PANEL_WIDTH = 360
+const TOOLBAR_WIDTH = 48 // ~12 tailwind units (12 * 4px)
 
 export default function MainPage() {
-  const { activePanel } = useSidePanel();
-  const sidePanelVisible = Boolean(activePanel);
+  const { getCurrentDoc } = useCurrentDoc()
+  const recovery = useSyncExternalStore(
+    storageRecovery.subscribe,
+    storageRecovery.getSnapshot,
+    storageRecovery.getSnapshot
+  )
+  useEffect(
+    () => storageRecovery.registerPreparation(prepareNotebookStorageRestart),
+    []
+  )
+  const restarting =
+    recovery.phase === 'preparing' || recovery.phase === 'restarting'
+  const { activePanel } = useSidePanel()
+  const sidePanelVisible = Boolean(activePanel)
 
   return (
     <CommentsPanelProvider>
@@ -34,7 +52,7 @@ export default function MainPage() {
           <div
             id="sidepanel-column"
             className={`h-full transition-[width] duration-200 ease-in-out overflow-hidden bg-nb-surface ${
-              sidePanelVisible ? "border-r border-nb-border" : ""
+              sidePanelVisible ? 'border-r border-nb-border' : ''
             }`}
             style={{
               width: sidePanelVisible ? SIDE_PANEL_WIDTH : 0,
@@ -45,11 +63,15 @@ export default function MainPage() {
           <div
             id="content-area"
             className={`flex h-full flex-1 min-w-0 flex-col ${
-              sidePanelVisible ? "py-2 pr-2 pl-0" : "p-2"
+              sidePanelVisible ? 'py-2 pr-2 pl-0' : 'p-2'
             }`}
           >
+            {!isDriveSyncStatusUri(getCurrentDoc()) && (
+              <StorageRecoveryBanner location="notebook" />
+            )}
             <div
               id="notebook-pane"
+              inert={restarting}
               className="flex-1 min-h-0 overflow-hidden rounded-nb-md border border-nb-border-strong bg-white"
             >
               <Actions />
@@ -58,5 +80,5 @@ export default function MainPage() {
         </div>
       </div>
     </CommentsPanelProvider>
-  );
+  )
 }

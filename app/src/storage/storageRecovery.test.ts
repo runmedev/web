@@ -1,0 +1,278 @@
+// @vitest-environment node
+import { MessageChannel } from 'node:worker_threads'
+import { afterEach, describe, expect, it, vi } from 'vitest'
+
+import type LocalNotebooks from './local'
+import { StorageOwnerClient } from './storageOwnerClient'
+import { StorageOwnerHost } from './storageOwnerHost'
+import { storageRecovery } from './storageRecovery'
+import { StorageRecoveryClient } from './storageRecoveryClient'
+import {
+  type RecoveryMessage,
+  recoveryMessage,
+} from './storageRecoveryProtocol'
+
+const clients: StorageOwnerClient[] = []
+const ports: MessagePort[] = []
+afterEach(() => {
+  clients.splice(0).forEach((client) => client.close())
+  ports.splice(0).forEach((port) => port.close())
+  vi.useRealTimers()
+  storageRecovery.set({ phase: 'healthy', message: '' })
+})
+function setup() {
+  const store = {
+    setDriveSyncAvailable: vi.fn(),
+    reconcileDriveBackedFiles: vi.fn(async () => []),
+    save: vi.fn(async () => {}),
+    drainForStorageRestart: vi.fn(async () => {}),
+  }
+  const shutdown = vi.fn()
+  return {
+    store,
+    shutdown,
+    host: new StorageOwnerHost(store as unknown as LocalNotebooks, shutdown),
+  }
+}
+function connect(host: StorageOwnerHost, prepare = vi.fn(async () => vi.fn())) {
+  const channel = new MessageChannel()
+  const hostPort = channel.port1 as unknown as MessagePort
+  const pagePort = channel.port2 as unknown as MessagePort
+  ports.push(hostPort, pagePort)
+  host.attach(hostPort)
+  const client = new StorageOwnerClient(pagePort, async () => 'token')
+  const reload = vi.fn()
+  client.recovery = new StorageRecoveryClient(
+    (message) => pagePort.postMessage(message),
+    reload,
+    prepare
+  )
+  clients.push(client)
+  return { client, reload, prepare, pagePort }
+}
+
+describe('coordinated storage restart', () => {
+  it('waits for all tabs and active commits before shutting down and reloading', async () => {
+    const { host, store, shutdown } = setup()
+    let finishSave!: () => void
+    store.save.mockImplementation(
+      () =>
+        new Promise<void>((resolve) => {
+          finishSave = resolve
+        })
+    )
+    const first = connect(host)
+    let preserveSecond!: () => void
+    const second = connect(
+      host,
+      vi.fn(
+        () =>
+          new Promise<() => void>((resolve) => {
+            preserveSecond = () => resolve(vi.fn())
+          })
+      )
+    )
+    const saving = first.client.request('save', ['a', {}])
+    await vi.waitFor(() => expect(store.save).toHaveBeenCalled())
+    first.client.recovery!.restart()
+    await vi.waitFor(() => expect(second.prepare).toHaveBeenCalled())
+    expect(shutdown).not.toHaveBeenCalled()
+    preserveSecond()
+    await vi.waitFor(() =>
+      expect(storageRecovery.getSnapshot().phase).toBe('restarting')
+    )
+    await expect(first.client.request('save', ['b', {}])).rejects.toThrow(
+      'restarting'
+    )
+    expect(store.save).toHaveBeenCalledTimes(1)
+    expect(shutdown).not.toHaveBeenCalled()
+    finishSave()
+    await saving
+    await vi.waitFor(() => expect(shutdown).toHaveBeenCalledTimes(1))
+    expect(store.drainForStorageRestart).toHaveBeenCalledTimes(1)
+    await vi.waitFor(() => {
+      expect(first.reload).toHaveBeenCalledOnce()
+      expect(second.reload).toHaveBeenCalledOnce()
+    })
+  })
+  it('accepts recovery even when the data protocol is incompatible', async () => {
+    const { host, shutdown, store } = setup()
+    const page = connect(host)
+    page.pagePort.postMessage({
+      type: 'request',
+      id: 'old-data',
+      version: 0,
+      method: 'save',
+      args: ['a', {}],
+    })
+    page.client.recovery!.restart()
+    await vi.waitFor(() => expect(shutdown).toHaveBeenCalledOnce())
+    expect(store.save).not.toHaveBeenCalled()
+  })
+  it('aborts without terminating the worker when one tab cannot preserve edits', async () => {
+    const { host, shutdown } = setup()
+    const release = vi.fn()
+    const first = connect(
+      host,
+      vi.fn(async () => release)
+    )
+    connect(
+      host,
+      vi.fn(async () => {
+        throw new Error('Recovery quota exceeded')
+      })
+    )
+    first.client.recovery!.restart()
+    await vi.waitFor(() =>
+      expect(storageRecovery.getSnapshot().phase).toBe('blocked')
+    )
+    expect(shutdown).not.toHaveBeenCalled()
+    expect(first.reload).not.toHaveBeenCalled()
+    await vi.waitFor(() => expect(release).toHaveBeenCalled())
+  })
+  it('does not force termination when an older tab never acknowledges', async () => {
+    const { host, shutdown } = setup()
+    const first = connect(host)
+    const channel = new MessageChannel()
+    ports.push(
+      channel.port1 as unknown as MessagePort,
+      channel.port2 as unknown as MessagePort
+    )
+    host.attach(channel.port1 as unknown as MessagePort)
+    vi.useFakeTimers()
+    first.client.recovery!.restart()
+    await vi.waitFor(() => expect(first.prepare).toHaveBeenCalled())
+    await vi.advanceTimersByTimeAsync(30_000)
+    await vi.waitFor(() =>
+      expect(storageRecovery.getSnapshot().phase).toBe('blocked')
+    )
+    expect(shutdown).not.toHaveBeenCalled()
+  })
+  it('requires a tab arriving during draining to preserve its content', async () => {
+    const { host, shutdown, store } = setup()
+    let finishDrain!: () => void
+    store.drainForStorageRestart.mockImplementation(
+      () =>
+        new Promise<void>((resolve) => {
+          finishDrain = resolve
+        })
+    )
+    const first = connect(host)
+    first.client.recovery!.restart()
+    await vi.waitFor(() =>
+      expect(store.drainForStorageRestart).toHaveBeenCalled()
+    )
+    let ready!: () => void
+    const late = connect(
+      host,
+      vi.fn(
+        () =>
+          new Promise<() => void>((resolve) => {
+            ready = () => resolve(vi.fn())
+          })
+      )
+    )
+    await vi.waitFor(() => expect(late.prepare).toHaveBeenCalled())
+    finishDrain()
+    await new Promise((resolve) => setTimeout(resolve, 10))
+    expect(shutdown).not.toHaveBeenCalled()
+    ready()
+    await vi.waitFor(() => expect(shutdown).toHaveBeenCalledOnce())
+    await vi.waitFor(() => expect(late.reload).toHaveBeenCalledOnce())
+  })
+  it('shows an actionable fallback when the old worker ignores the restart protocol', async () => {
+    vi.useFakeTimers()
+    const reload = vi.fn()
+    const client = new StorageRecoveryClient(vi.fn(), reload)
+    client.restart()
+    await vi.advanceTimersByTimeAsync(10_000)
+    expect(storageRecovery.getSnapshot().message).toContain('does not support')
+    expect(reload).not.toHaveBeenCalled()
+  })
+  it('releases a late preparation after a coordinated abort', async () => {
+    const send = vi.fn<(message: RecoveryMessage) => void>()
+    let ready!: (release: () => void) => void
+    const release = vi.fn()
+    const client = new StorageRecoveryClient(
+      send,
+      vi.fn(),
+      () =>
+        new Promise((resolve) => {
+          ready = resolve
+        })
+    )
+    const pending = client.receive(recoveryMessage('prepare', 'round'))
+    await client.receive(
+      recoveryMessage('blocked', 'round', 'Other tab failed')
+    )
+    ready(release)
+    await pending
+    expect(release).toHaveBeenCalledOnce()
+    expect(send).not.toHaveBeenCalled()
+  })
+})
+
+it('coalesces simultaneous restart clicks without preparing the same tab twice', async () => {
+  const { host, shutdown } = setup()
+  const first = connect(host),
+    second = connect(host)
+  first.client.recovery!.restart()
+  second.client.recovery!.restart()
+  await vi.waitFor(() => expect(shutdown).toHaveBeenCalledOnce())
+  expect(first.prepare).toHaveBeenCalledOnce()
+  expect(second.prepare).toHaveBeenCalledOnce()
+})
+
+it('can retry after a late tab fails to preserve edits during draining', async () => {
+  const { host, store, shutdown } = setup()
+  let finish!: () => void
+  store.drainForStorageRestart.mockImplementation(
+    () =>
+      new Promise<void>((resolve) => {
+        finish = resolve
+      })
+  )
+  const first = connect(host)
+  first.client.recovery!.restart()
+  await vi.waitFor(() =>
+    expect(store.drainForStorageRestart).toHaveBeenCalled()
+  )
+  const prepare = vi
+    .fn(async () => vi.fn())
+    .mockRejectedValueOnce(new Error('quota'))
+  const late = connect(host, prepare)
+  await vi.waitFor(() =>
+    expect(storageRecovery.getSnapshot().phase).toBe('blocked')
+  )
+  finish()
+  expect(shutdown).not.toHaveBeenCalled()
+  late.client.recovery!.restart()
+  await vi.waitFor(() => expect(shutdown).toHaveBeenCalledOnce())
+  expect(store.drainForStorageRestart).toHaveBeenCalledOnce()
+})
+
+it('releases a stale-version disconnected tab before restarting', async () => {
+  const { host, shutdown } = setup()
+  const first = connect(host),
+    leaving = connect(host)
+  leaving.pagePort.postMessage({
+    type: 'request',
+    id: 'bye',
+    version: 0,
+    method: 'disconnect',
+    args: [],
+  })
+  first.client.recovery!.restart()
+  await vi.waitFor(() => expect(shutdown).toHaveBeenCalledOnce())
+})
+
+it('retains the actionable blocked reason while stale requests continue to fail', () => {
+  storageRecovery.set({
+    phase: 'blocked',
+    message: 'Navigate older tabs away first.',
+  })
+  storageRecovery.report(new Error('Storage worker version mismatch'))
+  expect(storageRecovery.getSnapshot().message).toBe(
+    'Navigate older tabs away first.'
+  )
+})
