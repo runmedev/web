@@ -177,6 +177,29 @@ describe('GoogleAuthProvider implicit redirect flow', () => {
     expect(window.localStorage.getItem(PKCE_CODE_VERIFIER_KEY)).toBeNull()
   })
 
+  it('reports disabled callback completion instead of silently hanging', async () => {
+    configureExternalServices({
+      googleSignIn: false,
+      analytics: false,
+      remoteContent: false,
+    })
+    window.history.replaceState(
+      null,
+      '',
+      '/gdrive/callback#access_token=test-only-token&state=test-state'
+    )
+    const scripts = document.scripts.length
+    await renderWithGoogleAuthProvider()
+    await waitFor(() => {
+      expect(window.sessionStorage.getItem(PKCE_ERROR_KEY)).toContain(
+        'disabled by this deployment'
+      )
+    })
+    expect(fetch).not.toHaveBeenCalled()
+    expect(document.scripts.length).toBe(scripts)
+    expect(window.localStorage.getItem(STORAGE_KEY)).toBeNull()
+  })
+
   it('authorizes keyless service-account credentials for Drive and Runme', async () => {
     saveAppLoginConfiguration({
       ...DEFAULT_APP_LOGIN_CONFIGURATION,

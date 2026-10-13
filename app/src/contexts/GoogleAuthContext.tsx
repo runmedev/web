@@ -1194,6 +1194,9 @@ export function GoogleAuthProvider({ children }: { children: ReactNode }) {
     if (window.location.pathname !== callbackPath) {
       return
     }
+    // Report a disabled callback through the normal error path. Silently
+    // skipping it leaves the callback page showing "Completing" indefinitely.
+    requireGoogleSignIn()
     const authOperation = captureAuthOperation()
 
     const params = new URLSearchParams(window.location.search)
@@ -1795,7 +1798,6 @@ export function GoogleAuthProvider({ children }: { children: ReactNode }) {
 
   useEffect(() => {
     callbackErrorRef.current = null
-    if (!getExternalServices().googleSignIn) return
     const pending = handleRedirectCallbackIfPresent().catch((error) => {
       if (error instanceof StaleGoogleAuthOperationError) {
         return
