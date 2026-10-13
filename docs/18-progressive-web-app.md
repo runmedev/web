@@ -76,8 +76,9 @@ loads require a completed service-worker installation on a secure origin.
 Bundling does not make browser APIs that require HTTPS available on an ordinary
 HTTP origin.
 
-External integrations are disabled by default. Public deployments can opt in
-through their same-origin `configs/app-configs.yaml`:
+Google sign-in is available by default and its SDK loads when needed. Analytics
+and remote content require opt-in. Configure these choices through the
+same-origin `configs/app-configs.yaml`:
 
 ```yaml
 externalServices:
@@ -86,7 +87,8 @@ externalServices:
   remoteContent: true
 ```
 
-Omit these fields or set them to `false` in restricted deployments. These flags
+Set `googleSignIn: false` explicitly in restricted deployments; leave analytics
+and remote content omitted or false. These flags
 are read before optional integrations start; saved browser preferences cannot
 override an explicit deployment disable. Google sign-in controls interactive
 Google OAuth and its SDK, not a separately configured workload-identity provider.

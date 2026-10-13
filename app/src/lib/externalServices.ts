@@ -1,5 +1,6 @@
 /** Deployment choices, deliberately not persisted in browser preferences.
- * Start disabled so stale credentials or a missing config cannot load scripts.
+ * Google sign-in stays available on existing deployments. Restricted deployments
+ * explicitly disable it before authentication initializes; the SDK loads lazily.
  */
 export interface ExternalServices {
   googleSignIn: boolean
@@ -7,16 +8,16 @@ export interface ExternalServices {
   remoteContent: boolean
 }
 let settings: ExternalServices = {
-  googleSignIn: false,
+  googleSignIn: true,
   analytics: false,
   remoteContent: false,
 }
 
-/** Apply the server's explicit opt-ins before initializing optional services. */
+/** Apply the server's choices before initializing optional services. */
 export function configureExternalServices(value: ExternalServices): void {
   settings = { ...value }
 }
-/** Read the current server-provided opt-ins without consulting local preferences. */
+/** Read deployment choices without consulting local preferences. */
 export function getExternalServices(): Readonly<ExternalServices> {
   return settings
 }

@@ -12,24 +12,41 @@ import {
 afterEach(() => vi.restoreAllMocks())
 
 describe('restricted deployment', () => {
-  it('requires explicit boolean opt-ins, even when local settings are preferred', () => {
-    configureExternalServices({
-      googleSignIn: true,
-      analytics: true,
-      remoteContent: true,
-    })
-    applyAppConfig(
-      { externalServices: { googleSignIn: 'true', analytics: false } },
-      '/configs/app-configs.yaml',
-      { preserveLocalConfiguration: true }
-    )
+  it.each([
+    {},
+    { externalServices: {} },
+    { externalServices: { analytics: false } },
+  ])('preserves Google sign-in for existing config %j', (config) => {
+    applyAppConfig(config, '/configs/app-configs.yaml')
     expect(getExternalServices()).toEqual({
-      googleSignIn: false,
+      googleSignIn: true,
       analytics: false,
       remoteContent: false,
     })
-    expect(() => requireGoogleSignIn()).toThrow('disabled by this deployment')
+    expect(() => requireGoogleSignIn()).not.toThrow()
   })
+
+  it.each([false, 'true'])(
+    'honors an explicit disable or invalid value %j even when local settings are preferred',
+    (googleSignIn) => {
+      configureExternalServices({
+        googleSignIn: true,
+        analytics: true,
+        remoteContent: true,
+      })
+      applyAppConfig(
+        { externalServices: { googleSignIn, analytics: false } },
+        '/configs/app-configs.yaml',
+        { preserveLocalConfiguration: true }
+      )
+      expect(getExternalServices()).toEqual({
+        googleSignIn: false,
+        analytics: false,
+        remoteContent: false,
+      })
+      expect(() => requireGoogleSignIn()).toThrow('disabled by this deployment')
+    }
+  )
   it('allows local images but rejects remote and executable URL schemes', () => {
     configureExternalServices({
       googleSignIn: false,

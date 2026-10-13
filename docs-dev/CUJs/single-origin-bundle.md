@@ -15,7 +15,8 @@ CHROMIUM_PATH=/path/to/chrome node test/browser/.generated/single-origin-bundle.
 ```
 
 Use a fresh temporary browser context, the production artifact, and the shipped
-configuration with external integrations disabled. The driver records request
+configuration without invoking Google sign-in. Sign-in stays available but must
+not introduce a startup asset dependency. The driver records request
 URLs and screenshots under `app/test/browser/test-output/single-origin-bundle`.
 It exercises public WebMCP tools through a test registration adapter; there is no
 application test endpoint or fake HTTP backend. DNS blocks external hosts even
