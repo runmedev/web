@@ -35,6 +35,7 @@ describe('agent monitor rendering', () => {
       pageSize: 50,
     }
     const model = new AgentMonitor(descriptor, () => ({
+      updateAgent: async () => ({ id: 'agent_test' }),
       createSession: async () => ({ id: 'sess_composer' }),
       sendMessage,
       session: async () => ({ status: 'idle' }),

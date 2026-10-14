@@ -29,6 +29,11 @@ export type AgentStream = {
   close(): void
 }
 export interface AgentTransport {
+  updateAgent(
+    id: string,
+    parameters: { instructions: string },
+    signal: AbortSignal
+  ): Promise<AgentObject>
   createSession(
     parameters: AgentSessionCreateParams,
     signal: AbortSignal

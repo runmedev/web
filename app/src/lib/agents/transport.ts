@@ -78,7 +78,8 @@ export function createAgentTransport(
     path: string,
     signal: AbortSignal,
     stream = false,
-    submission?: { body: AgentObject; id?: string }
+    submission?: { body: AgentObject; id?: string },
+    scope: 'sessions' | 'agent' = 'sessions'
   ) => {
     const headers = new Headers(await options.getHeaders?.())
     headers.set('OpenAI-Beta', 'agents=v1')
@@ -88,7 +89,7 @@ export function createAgentTransport(
       if (submission.id) headers.set('Idempotency-Key', submission.id)
     }
     const response = await fetch(
-      `${root}/agents/sessions${path ? `/${path}` : ''}`,
+      `${root}/agents${scope === 'sessions' ? '/sessions' : ''}${path ? `/${path}` : ''}`,
       {
         method: submission ? 'POST' : 'GET',
         body: submission ? JSON.stringify(submission.body) : undefined,
@@ -109,6 +110,27 @@ export function createAgentTransport(
   const json = async <T>(path: string, signal: AbortSignal): Promise<T> =>
     (await request(path, signal)).json()
   return {
+    // Update saved configuration only; existing sessions retain their instructions.
+    updateAgent: async (id, parameters, signal) => {
+      const response = await request(
+        encodeURIComponent(id),
+        signal,
+        false,
+        { body: parameters },
+        'agent'
+      )
+      const agent = await response.json().catch(() => {
+        // Fetch can be cancelled after headers arrive, while reading the body.
+        // Preserve that reason without reflecting malformed response contents.
+        signal.throwIfAborted()
+        return null
+      })
+      if (!agent || agent.id !== id)
+        throw new Error(
+          'Invalid agent update response. Check saved settings before retrying.'
+        )
+      return agent as AgentObject
+    },
     // A timeout can still leave a created session; never retry this POST automatically.
     createSession: async (parameters, signal) => {
       const response = await request('', signal, false, { body: parameters })
