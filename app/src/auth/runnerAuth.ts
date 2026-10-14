@@ -227,14 +227,17 @@ export async function configureRunnerAuth(
     throw new Error('Use a new runner name when changing its origin')
   const attempt = (configurationVersions.get(d.runnerName) ?? 0) + 1
   configurationVersions.set(d.runnerName, attempt)
+  // Import and persist the same snapshot even if the caller mutates its request
+  // while Web Crypto is importing the key asynchronously.
+  const privateKeyPkcs8Pem = input.privateKeyPkcs8Pem
   if (
-    typeof input.privateKeyPkcs8Pem !== 'string' ||
-    input.privateKeyPkcs8Pem.length > 16384
+    typeof privateKeyPkcs8Pem !== 'string' ||
+    privateKeyPkcs8Pem.length > 16384
   )
     throw new Error('Invalid runner signing key')
   let key: CryptoKey
   try {
-    key = await importPKCS8(input.privateKeyPkcs8Pem, 'ES256', {
+    key = await importPKCS8(privateKeyPkcs8Pem, 'ES256', {
       extractable: false,
     })
   } catch {
@@ -253,7 +256,7 @@ export async function configureRunnerAuth(
   const entry = {
     descriptor: d,
     key,
-    privateKeyPkcs8Pem: input.privateKeyPkcs8Pem,
+    privateKeyPkcs8Pem,
   }
   const next = new Map(entries).set(d.runnerName, entry)
   persist(next)

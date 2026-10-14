@@ -191,6 +191,17 @@ describe('workload runner credentials', () => {
     await expect(getRunnerIdToken('pod')).rejects.toThrow('provisioning')
   })
 
+  it('persists the imported key snapshot if the caller mutates its input during import', async () => {
+    const input = { ...base, privateKeyPkcs8Pem }
+    const configured = configureRunnerAuth(input)
+    input.privateKeyPkcs8Pem = 'changed during asynchronous import'
+    await configured
+    resetRunnerAuthForTests()
+    await expect(
+      jwtVerify(await getRunnerIdToken('pod'), publicKey)
+    ).resolves.toBeDefined()
+  })
+
   it('rejects persistence failure without replacing a working signer', async () => {
     const pair = await generateKeyPair('ES256', { extractable: true })
     const pem = await exportPKCS8(pair.privateKey)
