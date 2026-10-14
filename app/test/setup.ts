@@ -27,7 +27,11 @@ vi.mock("@excalidraw/excalidraw/index.css", () => ({}));
 const g = globalThis as any;
 
 if (!g.window) {
+  const events = new EventTarget();
   g.window = {
+    addEventListener: events.addEventListener.bind(events),
+    removeEventListener: events.removeEventListener.bind(events),
+    dispatchEvent: events.dispatchEvent.bind(events),
     location: {
       origin: "http://localhost",
     },
