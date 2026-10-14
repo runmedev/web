@@ -499,7 +499,7 @@ export default function AuthenticationSettingsPanel() {
         {runnerAuthStatuses.length > 0 && (
           <SettingsSection
             title="Runner signing identity"
-            description="Provisioned application credentials are kept in memory. Reload requires importing the key again."
+            description="Runner signing keys are saved in this site’s localStorage and restored after reload. Clear removes the saved key; short-lived tokens stay in memory."
           >
             <div id="runner-auth-status" className="text-sm text-nb-text">
               {runnerAuthStatuses.map((status) => (

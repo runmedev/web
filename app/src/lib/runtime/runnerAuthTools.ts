@@ -12,11 +12,11 @@ import {
 } from '../../auth/workloadIdentity'
 import { getRunnersManager } from './runnersManager'
 
-/** Configure the normal runner registry and its memory-only signer together. */
+/** Configure the normal runner registry and its durable signer together. */
 export async function configureRunner(input: ConfigureRunnerAuthRequest) {
   const status = await configureRunnerAuth(input)
   const endpoint = new URL(status.runnerBaseUrl!)
-  endpoint.protocol = 'wss:'
+  endpoint.protocol = endpoint.protocol === 'http:' ? 'ws:' : 'wss:'
   endpoint.pathname = '/ws'
   getRunnersManager().update(status.runnerName, endpoint.toString())
   if (getWorkloadIdentityConfig()?.runnerName === status.runnerName)
@@ -55,7 +55,7 @@ export function runnerAuthTools() {
       name: 'configureRunnerAuth',
       title: 'Configure Runner Authentication',
       description:
-        'Import a provisioned ES256 signing key for a runner. Sensitive privateKeyPkcs8Pem must come from a trusted local file, never notebook output. Returns redacted status only.',
+        'Import and persist a provisioned ES256 signing key in this Runme site’s localStorage. HTTPS or HTTP loopback origins are supported. Sensitive privateKeyPkcs8Pem must come from a trusted local file, never notebook output. Returns redacted status only.',
       inputSchema: {
         ...nameSchema,
         properties: {
@@ -92,7 +92,7 @@ export function runnerAuthTools() {
       name: 'clearRunnerAuth',
       title: 'Clear Runner Authentication',
       description:
-        'Clear this tab’s in-memory runner signing credential. Does not revoke runner trust or fall back to human credentials.',
+        'Remove the saved runner signing key and cached tokens from this Runme site. Does not revoke runner trust or fall back to human credentials.',
       inputSchema: nameSchema,
       run: (input: Record<string, unknown>) => {
         clearRunnerAuth(input as { runnerName: string })

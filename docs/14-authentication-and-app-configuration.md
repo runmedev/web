@@ -268,9 +268,10 @@ and grants `runme` the required roles. No browser-session identity is needed.
 Use an isolated browser profile for each workload. The shared storage owner
 rejects mixing workload credentials with another identity's queued Drive writes.
 Changing an existing profile from human Drive auth to workload auth requires a
-fresh profile. Signing keys and tokens stay in memory; nonsecret configuration
-is retained so reload requires provisioning again instead of falling back to a
-saved human login.
+fresh profile. The provisioned signing key and its runner configuration are saved
+in this Runme site’s localStorage and restored automatically after reload or
+browser restart. JWTs and Google access tokens remain in memory. The saved PEM
+is readable by trusted code on this origin; it is not encrypted by Key Vault.
 
 Provide a private JSON file matching this shape (the key is PEM **content**, not
 a path). Keep it out of notebook cells, console history, and recordings:
@@ -278,7 +279,7 @@ a path). Keep it out of notebook cells, console history, and recordings:
 ```json
 {
   "runnerName": "pod-runner",
-  "runnerBaseUrl": "https://localhost:9988",
+  "runnerBaseUrl": "http://localhost:9988",
   "issuer": "urn:runme:browser",
   "audience": "urn:runme:runner",
   "subject": "runme",
@@ -298,9 +299,16 @@ agent-browser webmcp invoke getRunnerAuthStatus --params '{"runnerName":"pod-run
 
 `configureRunnerAuth` also registers the runner's `/ws` endpoint. The same
 origin-bound JWT provider serves runner, parser, Jupyter, and Google token-broker
-requests. Status tools return no private keys or raw tokens. The configured HTTPS
-endpoint must already have browser-trusted transport; these steps do not install
-certificates. Repeat the import after reloading the browser.
+requests. HTTP is supported for `localhost`, IPv4 loopback (`127.0.0.0/8`), and
+IPv6 loopback (`[::1]`), using `ws://` for the runner connection. Other hosts
+require HTTPS with browser-trusted certificates and use `wss://`. Supply an
+origin without a path, query, or fragment. Status tools return no private keys
+or raw tokens. Provision once per Runme origin and browser profile.
+`clearRunnerAuth` removes the saved key and invalidates cached credentials in
+open tabs; the origin binding remains to prevent fallback to human auth. It does
+not revoke the runner’s public-key trust. If a storage write fails, the operation
+reports failure; a failed clear revokes this tab’s cached credentials but may
+leave the previously saved key on disk.
 When changing a runner's origin, configure a new runner name. Existing names
 retain their origin binding so the old address cannot fall back to human auth.
 
