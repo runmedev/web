@@ -119,7 +119,12 @@ export function createAgentTransport(
         { body: parameters },
         'agent'
       )
-      const agent = await response.json().catch(() => null)
+      const agent = await response.json().catch(() => {
+        // Fetch can be cancelled after headers arrive, while reading the body.
+        // Preserve that reason without reflecting malformed response contents.
+        signal.throwIfAborted()
+        return null
+      })
       if (!agent || agent.id !== id)
         throw new Error(
           'Invalid agent update response. Check saved settings before retrying.'

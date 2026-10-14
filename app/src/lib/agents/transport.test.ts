@@ -16,25 +16,54 @@ describe('agent transport', () => {
         { instructions: 'Act carefully.' },
         new AbortController().signal
       )
-    ).rejects.toThrow(/^Agents API returned HTTP 403/)
+    ).rejects.toThrow(
+      'Agents API returned HTTP 403. Check access and connection configuration.'
+    )
     expect((fetch.mock.calls[0] as unknown as [string, RequestInit])[0]).toBe(
       'https://api.openai.com/v1/agents/agent_a%2Fb'
     )
     expect(fetch).toHaveBeenCalledTimes(1)
   })
-  it('rejects an update response for the wrong agent', async () => {
+  it.each(['{"id":"agent_other"}', '{}', 'null', 'secret invalid JSON'])(
+    'rejects an invalid update response without exposing its body: %s',
+    async (body) => {
+      vi.stubGlobal(
+        'fetch',
+        vi.fn(async () => new Response(body))
+      )
+      const api = createAgentTransport({ baseUrl: 'https://api.openai.com/v1' })
+      await expect(
+        api.updateAgent(
+          'agent_test',
+          { instructions: 'Act carefully.' },
+          new AbortController().signal
+        )
+      ).rejects.toThrow(
+        /^Invalid agent update response\. Check saved settings before retrying\.$/
+      )
+    }
+  )
+  it('preserves cancellation while reading an update response body', async () => {
+    const controller = new AbortController()
+    const reason = new DOMException('Cancelled by caller', 'AbortError')
     vi.stubGlobal(
       'fetch',
-      vi.fn(async () => new Response(JSON.stringify({ id: 'agent_other' })))
+      vi.fn(async () => ({
+        ok: true,
+        json: async () => {
+          controller.abort(reason)
+          throw reason
+        },
+      }))
     )
     const api = createAgentTransport({ baseUrl: 'https://api.openai.com/v1' })
     await expect(
       api.updateAgent(
         'agent_test',
         { instructions: 'Act carefully.' },
-        new AbortController().signal
+        controller.signal
       )
-    ).rejects.toThrow('Invalid agent update response')
+    ).rejects.toBe(reason)
   })
   it('creates a session at the collection endpoint and preserves its executor URL', async () => {
     const session = {

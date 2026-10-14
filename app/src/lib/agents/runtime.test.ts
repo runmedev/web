@@ -13,8 +13,49 @@ afterEach(() => {
   resetAgentMonitors()
   localStorage.clear()
   vi.unstubAllGlobals()
+  vi.restoreAllMocks()
 })
 describe('agents runtime', () => {
+  it('bounds updates by default and honors caller cancellation without retrying', async () => {
+    const api = createAgentsApi()
+    api.configure({ baseUrl: 'https://proxy.example/v1' })
+    const deadline = new AbortController()
+    const timeout = vi
+      .spyOn(AbortSignal, 'timeout')
+      .mockReturnValue(deadline.signal)
+    const fetch = vi.fn(
+      async (_url: string, init?: RequestInit) =>
+        new Promise<Response>((_resolve, reject) => {
+          const signal = init!.signal!
+          if (signal.aborted) reject(signal.reason)
+          else
+            signal.addEventListener('abort', () => reject(signal.reason), {
+              once: true,
+            })
+        })
+    )
+    vi.stubGlobal('fetch', fetch)
+    const update = api.updateAgent('agent_test', { instructions: 'Help.' })
+    const rejected = expect(update).rejects.toMatchObject({
+      name: 'TimeoutError',
+    })
+    expect(timeout).toHaveBeenCalledWith(30000)
+    deadline.abort(new DOMException('Deadline exceeded', 'TimeoutError'))
+    await rejected
+    const caller = new AbortController()
+    caller.abort(new DOMException('Cancelled', 'AbortError'))
+    await expect(
+      api.updateAgent(
+        'agent_test',
+        { instructions: 'Help.' },
+        {
+          signal: caller.signal,
+        }
+      )
+    ).rejects.toMatchObject({ name: 'AbortError' })
+    expect(timeout).toHaveBeenCalledTimes(1)
+    expect(fetch).toHaveBeenCalledTimes(2)
+  })
   it('updates only saved instructions using fresh vault credentials and refuses a locked vault', async () => {
     const { webcrypto } = await import('node:crypto')
     const { keyVault } = await import('../keyvault/store')

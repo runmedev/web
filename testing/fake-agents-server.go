@@ -16,6 +16,25 @@ import (
 var demoMu sync.Mutex
 var demoMessages = map[int]map[string]any{}
 var demoSubmissions = map[string]string{}
+var demoInstructions = "Original instructions."
+
+// updateDemoAgent accepts only instructions so the CUJ detects unintended fields.
+func updateDemoAgent(w http.ResponseWriter, r *http.Request) {
+	var body struct {
+		Instructions *string `json:"instructions"`
+	}
+	decoder := json.NewDecoder(http.MaxBytesReader(w, r.Body, 1<<20))
+	decoder.DisallowUnknownFields()
+	if decoder.Decode(&body) != nil || body.Instructions == nil || strings.TrimSpace(*body.Instructions) == "" {
+		http.Error(w, "Only non-empty instructions are supported", http.StatusBadRequest)
+		return
+	}
+	demoMu.Lock()
+	defer demoMu.Unlock()
+	demoInstructions = *body.Instructions
+	w.Header().Set("Content-Type", "application/json")
+	json.NewEncoder(w).Encode(map[string]any{"id": "agent_demo", "instructions": demoInstructions, "model": "fixture-model", "tools": []any{}})
+}
 
 // acceptDemoMessage persists synthetic user/reply items and deduplicates retries.
 func acceptDemoMessage(w http.ResponseWriter, r *http.Request) {
@@ -64,6 +83,7 @@ func acceptDemoMessage(w http.ResponseWriter, r *http.Request) {
 
 // main serves synthetic history and an SSE stream on loopback only.
 func main() {
+	http.HandleFunc("/v1/agents/agent_demo", serveAgentDemo)
 	http.HandleFunc("/v1/agents/sessions", serveAgentDemo)
 	http.HandleFunc("/v1/agents/sessions/sess_demo", serveAgentDemo)
 	http.HandleFunc("/v1/agents/sessions/sess_demo/", serveAgentDemo)
@@ -79,6 +99,10 @@ func serveAgentDemo(w http.ResponseWriter, r *http.Request) {
 	}
 	if r.Method == "OPTIONS" {
 		w.WriteHeader(http.StatusNoContent)
+		return
+	}
+	if r.Method == "POST" && r.URL.Path == "/v1/agents/agent_demo" {
+		updateDemoAgent(w, r)
 		return
 	}
 	if r.Method == "POST" && r.URL.Path == "/v1/agents/sessions" {

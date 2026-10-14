@@ -22,6 +22,28 @@ Capture the rendered monitor with notebook context and record assertions. Contro
 
 Using the Go fixture and an isolated browser JS notebook, configure `agents.configure({baseUrl:'http://127.0.0.1:8989/v1'})`, then `await agents.sendMessage('sess_demo', 'Browser helper test')`. In another cell, call `await agents.listItems('sess_demo', {limit:2})` and assert the newest item is the fixture reply and the next item is the submitted prompt. Verify `{limit:2,after:page.last_id}` returns older items. No monitor needs to be mounted. Save the assertions and browser screenshot under `app/test/browser/test-output/`. Never send this test prompt to a real session.
 
+## Saved agent instructions from browser JS
+
+With the same Go fixture and isolated browser session, execute
+`agents.configure({baseUrl:'http://127.0.0.1:8989/v1'}); const updated = await agents.updateAgent('agent_demo', {instructions:'Updated instructions.', model:'must-not-be-sent'}); console.log(updated)`.
+Assert the response contains `id: 'agent_demo'`, the exact instructions, and
+`model: 'fixture-model'`. The fixture rejects unexpected fields, so this also
+checks that the helper preserves other saved settings. Do not update a real agent
+for this test. Run `test/browser/agent-update.ts` against the local Vite server
+and Go fixture for executable assertions and a screenshot.
+
+From `app/`, compile and run the check (set `CHROMIUM_PATH` to a test browser):
+
+```sh
+pnpm exec tsc --target es2022 --module nodenext --moduleResolution nodenext --esModuleInterop --skipLibCheck --outDir test/browser/.generated test/browser/agent-update.ts
+node test/browser/.generated/agent-update.js
+```
+
+Runtime/transport tests additionally cover vault rotation and lockout, the default
+30-second deadline, caller cancellation (including during response-body reads),
+malformed-response redaction, and rejection through the sandbox bridge. Saved
+agent updates affect new sessions; they do not modify existing session snapshots.
+
 ## Named key vault
 
 1. Open Key Vault from the left navigation on an isolated test origin. Create a vault with a test passphrase and add two synthetic named keys; values must be masked and cleared after saving.
