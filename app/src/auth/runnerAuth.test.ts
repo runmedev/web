@@ -53,6 +53,158 @@ describe('workload runner credentials', () => {
     vi.unstubAllGlobals()
   })
 
+  it.each([
+    'http://localhost:9988',
+    'http://127.0.0.1:9988',
+    'http://127.0.0.2:9988',
+    'http://[::1]:9988',
+  ])(
+    'signs for HTTP loopback %s and its matching WebSocket origin',
+    async (runnerBaseUrl) => {
+      await configureRunnerAuth({
+        ...base,
+        runnerName: 'local',
+        runnerBaseUrl,
+        privateKeyPkcs8Pem,
+      })
+      const token = await getRunnerTokenForEndpoint(
+        runnerBaseUrl.replace('http:', 'ws:') + '/ws'
+      )
+      await expect(
+        jwtVerify(token!, publicKey, {
+          issuer: base.issuer,
+          audience: base.audience,
+        })
+      ).resolves.toBeDefined()
+      expect(
+        await getRunnerTokenForEndpoint(runnerBaseUrl.replace(':9988', ':9989'))
+      ).toBeUndefined()
+    }
+  )
+
+  it.each([
+    'http://localhost.example:9988',
+    'http://192.168.1.1:9988',
+    'http://0.0.0.0:9988',
+    'http://localhost:9988/path',
+    'http://localhost:9988?x=1',
+    'http://user@localhost:9988',
+    'ws://localhost:9988',
+    'http://localhost.:9988',
+  ])('rejects non-loopback or non-origin input %s', async (runnerBaseUrl) => {
+    await expect(
+      configureRunnerAuth({
+        ...base,
+        runnerName: 'local',
+        runnerBaseUrl,
+        privateKeyPkcs8Pem,
+      })
+    ).rejects.toThrow('origin')
+  })
+
+  it('restores the provisioned signer after reload and after a fresh tab session', async () => {
+    await getRunnerIdToken('pod')
+    sessionStorage.clear()
+    resetRunnerAuthForTests()
+    expect(getRunnerAuthStatus({ runnerName: 'pod' })).toMatchObject({
+      configured: true,
+      tokenExpiresAt: undefined,
+    })
+    const tokens = await Promise.all(
+      Array.from({ length: 8 }, () => getRunnerIdToken('pod'))
+    )
+    expect(new Set(tokens).size).toBe(1)
+    await expect(
+      jwtVerify(tokens[0], publicKey, {
+        issuer: base.issuer,
+        audience: base.audience,
+      })
+    ).resolves.toBeDefined()
+    clearRunnerAuth({ runnerName: 'pod' })
+    expect(localStorage.getItem('runme/runnerAuth/v2')).not.toContain(
+      'PRIVATE KEY'
+    )
+    resetRunnerAuthForTests()
+    await expect(getRunnerIdToken('pod')).rejects.toThrow('provisioning')
+  })
+
+  it('retains legacy session markers until the signer is provisioned once', async () => {
+    localStorage.removeItem('runme/runnerAuth/v2')
+    sessionStorage.setItem(
+      'runme/runnerAuthDescriptors/v1',
+      JSON.stringify([base])
+    )
+    resetRunnerAuthForTests()
+    await expect(getRunnerIdToken('pod')).rejects.toThrow('provisioning')
+    await configureRunnerAuth({ ...base, privateKeyPkcs8Pem })
+    resetRunnerAuthForTests()
+    await expect(getRunnerIdToken('pod')).resolves.toBeTruthy()
+  })
+
+  it('keeps legacy origin bindings when another tab has provisioned a different runner', async () => {
+    sessionStorage.setItem(
+      'runme/runnerAuthDescriptors/v1',
+      JSON.stringify([
+        {
+          ...base,
+          runnerName: 'legacy',
+          runnerBaseUrl: 'https://legacy.example',
+        },
+      ])
+    )
+    resetRunnerAuthForTests()
+    await expect(getRunnerIdToken('pod')).resolves.toBeTruthy()
+    await expect(
+      getRunnerTokenForEndpoint('https://legacy.example')
+    ).rejects.toThrow('provisioning')
+    await configureRunnerAuth({ ...base, privateKeyPkcs8Pem })
+    sessionStorage.clear()
+    resetRunnerAuthForTests()
+    await expect(
+      getRunnerTokenForEndpoint('https://legacy.example')
+    ).rejects.toThrow('provisioning')
+  })
+
+  it('fails closed for a malformed persisted key and never reflects key contents', async () => {
+    localStorage.setItem(
+      'runme/runnerAuth/v2',
+      JSON.stringify([{ ...base, privateKeyPkcs8Pem: 'secret-invalid-pem' }])
+    )
+    resetRunnerAuthForTests()
+    await expect(getRunnerIdToken('pod')).rejects.toThrow(
+      /^Invalid ES256 runner signing key; provision it again$/
+    )
+  })
+
+  it('observes key rotation and clearing from another tab before using cached authority', async () => {
+    const old = await getRunnerIdToken('pod')
+    const pair = await generateKeyPair('ES256', { extractable: true })
+    const pem = await exportPKCS8(pair.privateKey)
+    localStorage.setItem(
+      'runme/runnerAuth/v2',
+      JSON.stringify([{ ...base, privateKeyPkcs8Pem: pem }])
+    )
+    const token = await getRunnerIdToken('pod')
+    expect(token).not.toBe(old)
+    await expect(jwtVerify(token, pair.publicKey)).resolves.toBeDefined()
+    localStorage.setItem('runme/runnerAuth/v2', JSON.stringify([base]))
+    await expect(getRunnerIdToken('pod')).rejects.toThrow('provisioning')
+  })
+
+  it('rejects persistence failure without replacing a working signer', async () => {
+    const pair = await generateKeyPair('ES256', { extractable: true })
+    const pem = await exportPKCS8(pair.privateKey)
+    vi.spyOn(Storage.prototype, 'setItem').mockImplementation(() => {
+      throw new Error('secret storage error')
+    })
+    await expect(
+      configureRunnerAuth({ ...base, privateKeyPkcs8Pem: pem })
+    ).rejects.toThrow(/^Unable to save runner authentication configuration$/)
+    await expect(
+      jwtVerify(await getRunnerIdToken('pod'), publicKey)
+    ).resolves.toBeDefined()
+  })
+
   it('keeps the previous origin protected when a runner name is repointed', async () => {
     clearRunnerAuth({ runnerName: 'pod' })
     await expect(
@@ -154,7 +306,7 @@ describe('workload runner credentials', () => {
     expect(fetcher).toHaveBeenCalledTimes(1)
   })
 
-  it('reuses and renews one verifiable token without persisting secrets', async () => {
+  it('reuses and renews tokens while persisting only the provisioned signer', async () => {
     const tokens = await Promise.all(
       Array.from({ length: 8 }, () => getRunnerIdToken('pod'))
     )
@@ -176,6 +328,11 @@ describe('workload runner credentials', () => {
     expect(status).not.toContain(tokens[0])
     expect(JSON.stringify(sessionStorage)).not.toContain('PRIVATE KEY')
     expect(JSON.stringify(sessionStorage)).not.toContain(tokens[0])
+    expect(
+      JSON.parse(localStorage.getItem('runme/runnerAuth/v2')!)[0]
+        .privateKeyPkcs8Pem
+    ).toBe(privateKeyPkcs8Pem)
+    expect(JSON.stringify(localStorage)).not.toContain(tokens[0])
     vi.useFakeTimers()
     vi.setSystemTime(Date.now() + 250000)
     expect(await getRunnerIdToken('pod')).not.toBe(tokens[0])
@@ -194,7 +351,7 @@ describe('workload runner credentials', () => {
   })
 
   it('repeatedly rejects corrupted mode markers instead of selecting human auth', async () => {
-    sessionStorage.setItem('runme/runnerAuthDescriptors/v1', '{')
+    localStorage.setItem('runme/runnerAuth/v2', '{')
     resetRunnerAuthForTests()
     for (let attempt = 0; attempt < 2; attempt++)
       await expect(
@@ -210,7 +367,7 @@ describe('workload runner credentials', () => {
     await expect(
       configureRunnerAuth({
         ...base,
-        runnerBaseUrl: 'http://localhost:9988',
+        runnerBaseUrl: 'http://runner.example:9988',
         privateKeyPkcs8Pem,
       })
     ).rejects.toThrow('HTTPS')
@@ -220,6 +377,49 @@ describe('workload runner credentials', () => {
         privateKeyPkcs8Pem: 'secret-should-never-appear',
       })
     ).rejects.toThrow('Invalid ES256')
+  })
+
+  it('restores the signer for Google minting and invalidates Google tokens on a cross-tab clear', async () => {
+    configureGoogleWorkloadIdentity(drive)
+    resetRunnerAuthForTests()
+    resetWorkloadIdentityForTests()
+    const fetcher = vi.fn(
+      async () =>
+        new Response(
+          JSON.stringify({
+            accessToken: 'google-restored',
+            tokenType: 'Bearer',
+            serviceAccountEmail: drive.expectedServiceAccountEmail,
+            scopes: drive.scopes,
+            expiresAt: new Date(Date.now() + 899000).toISOString(),
+          })
+        )
+    )
+    vi.stubGlobal('fetch', fetcher)
+    await expect(getWorkloadIdentityAccessToken()).resolves.toBe(
+      'google-restored'
+    )
+    localStorage.setItem('runme/runnerAuth/v2', JSON.stringify([base]))
+    window.dispatchEvent(
+      new StorageEvent('storage', {
+        key: 'runme/runnerAuth/v2',
+        storageArea: localStorage,
+      })
+    )
+    expect(getWorkloadIdentityStatus()).toMatchObject({
+      connected: false,
+      canRenew: false,
+    })
+    await expect(getWorkloadIdentityAccessToken()).rejects.toThrow()
+    expect(fetcher).toHaveBeenCalledTimes(1)
+  })
+
+  it('discards a token when the signer is cleared during lazy import', async () => {
+    resetRunnerAuthForTests()
+    const pending = getRunnerIdToken('pod')
+    clearRunnerAuth({ runnerName: 'pod' })
+    await expect(pending).rejects.toThrow('changed')
+    await expect(getRunnerIdToken('pod')).rejects.toThrow('provisioning')
   })
 
   it('requests scoped Google tokens with the same JWT and coalesces concurrent calls', async () => {
