@@ -9,6 +9,9 @@ import LocalNotebooks, {
   OperationLogMutationCommitUncertainError,
 } from './local'
 import { STORAGE_METHODS, STORAGE_OWNER_VERSION } from './storageOwnerProtocol'
+import { requiresStorageReload, storageRecovery } from './storageRecovery'
+import { StorageRecoveryClient } from './storageRecoveryClient'
+import type { RecoveryMessage } from './storageRecoveryProtocol'
 
 type Pending = {
   resolve: (value: unknown) => void
@@ -21,12 +24,18 @@ export class StorageOwnerClient {
   private pending = new Map<string, Pending>()
   private closed = false
   onChange?: (uri: string) => void
+  onFailure?: (error: Error) => void
+  recovery?: StorageRecoveryClient
   constructor(
     private readonly port: MessagePort,
     private readonly token: DriveNotebookStore['getAccessToken'],
     private readonly getCredentialBoundary: () => string = () => 'default'
   ) {
     port.onmessage = (event) => {
+      if (event.data?.type === 'storage-recovery') {
+        void this.recovery?.receive(event.data as RecoveryMessage)
+        return
+      }
       void this.receive(event.data)
     }
     port.onmessageerror = () =>
@@ -49,13 +58,13 @@ export class StorageOwnerClient {
       const timer = setTimeout(
         () => {
           this.pending.delete(id)
-          reject(
-            new Error(
-              method === 'getDriveQueueMetrics'
-                ? 'Storage worker did not respond to queue diagnostics.'
-                : 'Storage worker did not acknowledge the request. Its outcome is uncertain; do not repeat creation blindly.'
-            )
+          const error = new Error(
+            method === 'getDriveQueueMetrics'
+              ? 'Storage worker did not respond to queue diagnostics.'
+              : 'Storage worker did not acknowledge the request. Its outcome is uncertain; do not repeat creation blindly.'
           )
+          this.onFailure?.(error)
+          reject(error)
         },
         method === 'hello' || method === 'getDriveQueueMetrics'
           ? 10_000
@@ -133,6 +142,7 @@ export class StorageOwnerClient {
         new Error(String(message.error.message)),
         message.error
       )
+      this.onFailure?.(error)
       // Preserve error types that drive editor recovery and creation UI choices.
       if (error.name === 'OperationLogMutationCommitUncertainError')
         Object.setPrototypeOf(
@@ -152,6 +162,8 @@ export class StorageOwnerClient {
     } else pending.resolve(message.value)
   }
   close(error = new Error('Storage worker disconnected')): void {
+    this.recovery?.disconnected()
+    this.onFailure?.(error)
     this.closed = true
     for (const pending of this.pending.values()) {
       clearTimeout(pending.timer)
@@ -179,6 +191,21 @@ export function createSharedNotebookStore(
     (options) => drive.getAccessToken(options),
     credentialBoundary
   )
+  client.onFailure = (error) => {
+    if (requiresStorageReload(error)) storageRecovery.report(error)
+  }
+  client.recovery = new StorageRecoveryClient(
+    (message) => worker.port.postMessage(message),
+    () => {
+      // This is an acknowledged shutdown, not worker failure. Keep editors frozen
+      // until navigation completes so no last keystroke escapes the recovery copy.
+      client.onFailure = undefined
+      client.recovery = undefined
+      client.close()
+      window.location.reload()
+    }
+  )
+  storageRecovery.registerRestart(() => client.recovery!.restart())
   // Migration is part of the handshake: do not let a recovery scan generate a
   // second remote identity while an old reserved ID only exists in localStorage.
   const ready = Promise.resolve().then(async () => {

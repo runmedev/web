@@ -858,7 +858,6 @@ export function GoogleAuthProvider({ children }: { children: ReactNode }) {
               serviceAccount.trim().toLowerCase()
           ) {
             setAccessToken('')
-            window.gapi?.client?.setToken(null)
           }
           errors.push({
             target: 'drive',
@@ -2066,7 +2065,6 @@ export function GoogleAuthProvider({ children }: { children: ReactNode }) {
     persistStoredDriveAccount(null)
     clearImpersonatedServiceAccountCredential(['drive'])
     setAccessToken('')
-    window.gapi?.client.setToken(null)
 
     if (oauthClient.authFlow !== 'service_account') {
       requestAccountSelectionNext()

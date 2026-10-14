@@ -39,6 +39,33 @@ export type RemoteMarkdownDocument = {
   }
 }
 
+const BUNDLED_DOCUMENTS = import.meta.glob('../../../docs/*.md', {
+  query: '?raw',
+  import: 'default',
+  eager: true,
+}) as Record<string, string>
+
+const BUNDLED_IMAGES = import.meta.glob(
+  '../../../docs/**/*.{png,jpg,jpeg,svg,webp,gif}',
+  { query: '?url', import: 'default', eager: true }
+) as Record<string, string>
+
+/** Resolve only this build's documentation. Never substitute another revision. */
+function bundledPath(uri: string): string | undefined {
+  if (!runmeVersionInfo.webCommit) return undefined
+  const repo = normalizeRepository(runmeVersionInfo.webRepo)
+  const revision = runmeVersionInfo.webCommit
+  const url = new URL(uri)
+  const clean = url.origin + url.pathname
+  for (const prefix of [
+    `https://github.com/${repo}/blob/${revision}/`,
+    `https://raw.githubusercontent.com/${repo}/${revision}/`,
+  ]) {
+    if (clean.startsWith(prefix))
+      return decodeURIComponent(clean.slice(prefix.length))
+  }
+}
+
 const DOCUMENTATION_DEFINITIONS: readonly DocumentationDefinition[] =
   DOCUMENTATION_MANIFEST
 
@@ -110,11 +137,13 @@ export function getDocumentationEntry(
 export async function getDocumentationMarkdown(
   name: string,
   info: RunmeVersionInfo = runmeVersionInfo,
-  fetchImpl: typeof fetch = fetch
+  _fetchImpl: typeof fetch = fetch
 ): Promise<string> {
   const entry = getDocumentationEntry(name, info)
-  const document = await fetchRemoteMarkdownDocument(entry.uri, fetchImpl)
-  return stripDocumentationFrontmatter(document.content)
+  const content = BUNDLED_DOCUMENTS[`../../../${entry.path}`]
+  if (content === undefined)
+    throw new Error(`Bundled documentation is missing: ${entry.path}`)
+  return stripDocumentationFrontmatter(content)
 }
 
 export function getGettingStartedDocument(
@@ -148,7 +177,10 @@ export function resolveDocumentationHref(
   href: string,
   baseUri: string
 ): string {
-  return new URL(href, baseUri).toString()
+  const resolved = new URL(href, baseUri).toString()
+  const path = bundledPath(resolved)
+  const asset = path && BUNDLED_IMAGES[`../../../${path}`]
+  return asset ? new URL(asset, window.location.origin).href : resolved
 }
 
 export function toRawMarkdownUri(uri: string): string {
@@ -206,6 +238,24 @@ export async function fetchRemoteMarkdownDocument(
     throw new Error(
       `Unsupported documentation URI ${uri}. Expected an HTTP(S) Markdown link.`
     )
+  }
+  // Current-build permalinks are document identities, not network dependencies.
+  // Older revisions and user-supplied remote Markdown retain their HTTP behavior.
+  // Anchors and query parameters do not change the bytes at a commit-pinned
+  // path. Keep those links local too, while preserving the caller's URI.
+  const path = bundledPath(uri)
+  const bundled = path
+    ? listDocumentation().find((entry) => entry.path === path)
+    : undefined
+  if (bundled) {
+    return {
+      uri,
+      name: deriveRemoteDocumentName(uri),
+      mimeType: DOCUMENTATION_MIME_TYPE,
+      content: BUNDLED_DOCUMENTS[`../../../${bundled.path}`],
+      readOnly: true,
+      version: { revisionId: bundled.revision },
+    }
   }
   const rawUri = toRawMarkdownUri(uri)
   const response = await fetchImpl(rawUri, {

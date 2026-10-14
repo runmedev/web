@@ -11,6 +11,10 @@ import {
   STORAGE_OWNER_VERSION,
   encodeStorageError,
 } from './storageOwnerProtocol'
+import {
+  type RecoveryMessage,
+  recoveryMessage,
+} from './storageRecoveryProtocol'
 import { SyncDeferred } from './syncWorkQueue'
 
 /** One SharedWorker owns this host; ports only submit typed storage requests. */
@@ -42,8 +46,19 @@ export class StorageOwnerHost {
   private credentialBoundary: string | undefined
   private available = false
   private scanning: Promise<unknown> | undefined
+  private inFlight = new Set<Promise<void>>()
+  private recovery?: {
+    id: string
+    ready: Set<MessagePort>
+    draining: boolean
+    timer?: ReturnType<typeof setTimeout>
+  }
+  private draining?: Promise<void>
 
-  constructor(private readonly store: LocalNotebooks) {}
+  constructor(
+    private readonly store: LocalNotebooks,
+    private readonly shutdown?: () => void
+  ) {}
 
   attach(port: MessagePort): void {
     this.ports.set(port, {
@@ -53,10 +68,129 @@ export class StorageOwnerHost {
     })
     this.views.set(port, new Map())
     port.onmessage = (event) => {
-      void this.receive(port, event.data)
+      if (event.data?.type === 'storage-recovery') {
+        this.recover(port, event.data)
+        return
+      }
+      const operation = this.receive(port, event.data)
+      this.inFlight.add(operation)
+      void operation.then(
+        () => this.inFlight.delete(operation),
+        () => this.inFlight.delete(operation)
+      )
     }
     port.onmessageerror = () => this.detach(port)
     port.start()
+    if (this.recovery) {
+      port.postMessage(recoveryMessage('prepare', this.recovery.id))
+      this.armRecoveryTimeout()
+    }
+  }
+
+  /** Unversioned control plane: every attached tab must preserve its editor before shutdown. */
+  private recover(port: MessagePort, message: RecoveryMessage): void {
+    if (!this.ports.has(port) || message.protocol !== 1) return
+    if (message.action === 'restart') {
+      if (this.recovery && !this.recovery.draining) {
+        port.postMessage(recoveryMessage('prepare', this.recovery.id))
+        return
+      }
+      if (!this.shutdown) {
+        port.postMessage(
+          recoveryMessage(
+            'blocked',
+            message.id,
+            'This storage worker cannot restart itself.'
+          )
+        )
+        return
+      }
+      const round = {
+        id: message.id,
+        ready: new Set<MessagePort>(),
+        draining: Boolean(this.recovery?.draining),
+        timer: undefined as ReturnType<typeof setTimeout> | undefined,
+      }
+      this.recovery = round
+      this.armRecoveryTimeout()
+      for (const client of this.ports.keys())
+        client.postMessage(recoveryMessage('prepare', round.id))
+    } else if (message.action === 'ready' && message.id === this.recovery?.id) {
+      if (message.error) {
+        this.abortRecovery(message.error)
+        return
+      }
+      this.recovery.ready.add(port)
+      void this.finishRecovery()
+    }
+  }
+
+  private armRecoveryTimeout(): void {
+    const round = this.recovery
+    if (!round) return
+    clearTimeout(round.timer)
+    round.timer = setTimeout(() => {
+      if (this.recovery !== round) return
+      this.abortRecovery(
+        'Another Runme tab did not acknowledge recovery. Bring all Runme tabs to the foreground and retry. Older tabs may need to be navigated away first.'
+      )
+    }, 30_000)
+  }
+
+  private abortRecovery(error: string): void {
+    const round = this.recovery
+    if (!round) return
+    clearTimeout(round.timer)
+    // Once draining starts the queue must stay closed, but a later retry can
+    // gather new editor acknowledgements after a late tab fixes its backup error.
+    if (!round.draining) this.recovery = undefined
+    else round.ready.clear()
+    for (const port of this.ports.keys())
+      port.postMessage(recoveryMessage('blocked', round.id, error))
+  }
+
+  /** No timer may force termination while a storage or network commit is still active. */
+  private async finishRecovery(): Promise<void> {
+    const round = this.recovery
+    if (!round || [...this.ports.keys()].some((port) => !round.ready.has(port)))
+      return
+    clearTimeout(round.timer)
+    for (const port of this.ports.keys())
+      port.postMessage(recoveryMessage('draining', round.id))
+    if (!round.draining) {
+      round.draining = true
+      this.draining = (async () => {
+        await this.store.ready
+        await Promise.allSettled([
+          ...this.inFlight,
+          ...(this.scanning ? [this.scanning] : []),
+        ])
+        await this.store.drainForStorageRestart()
+      })()
+    }
+    try {
+      await this.draining
+      // A tab attached during draining must preserve its editor too.
+      if (
+        this.recovery !== round ||
+        [...this.ports.keys()].some((port) => !round.ready.has(port))
+      )
+        return
+      this.recovery = undefined
+      for (const port of this.ports.keys())
+        port.postMessage(recoveryMessage('reload', round.id))
+      this.shutdown?.()
+    } catch {
+      // Remain quiescent rather than start a second owner after an uncertain drain.
+      for (const port of this.ports.keys())
+        port.postMessage(
+          recoveryMessage(
+            'blocked',
+            round.id,
+            'Storage is still shutting down. Keep this page open; no forced reload was performed.'
+          )
+        )
+    }
   }
 
   private detach(port: MessagePort): void {
@@ -70,6 +204,7 @@ export class StorageOwnerHost {
     }
     port.close()
     this.updateAvailability()
+    if (this.recovery) void this.finishRecovery()
   }
 
   private updateAvailability(): void {
@@ -84,6 +219,7 @@ export class StorageOwnerHost {
 
   /** Recover keys from durable state; concurrent tab wake-ups share one scan. */
   rescan(retryErrors = false): Promise<unknown> {
+    if (this.recovery?.draining) return Promise.resolve()
     if (!this.scanning) {
       this.scanning = this.store
         .reconcileDriveBackedFiles({ retryErrors })
@@ -173,7 +309,18 @@ export class StorageOwnerHost {
       return
     }
     if (request.type !== 'request' || typeof request.id !== 'string') return
+    // Closing a stale tab must release its port even when its data protocol differs.
+    if (request.method === 'disconnect') {
+      this.detach(port)
+      return
+    }
     try {
+      if (
+        request.method !== 'disconnect' &&
+        request.method !== 'heartbeat' &&
+        (this.recovery?.draining || this.recovery?.ready.has(port))
+      )
+        throw new Error('Storage is restarting. New requests are paused.')
       if (
         typeof request.credentialBoundary === 'string' &&
         state.credentialBoundary !== request.credentialBoundary

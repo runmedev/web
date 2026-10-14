@@ -1,3 +1,4 @@
+import { localHtmlContent } from '../../lib/externalServices'
 import { useEffect, useMemo, useRef, useState } from 'react'
 
 /** Measure isolated HTML without granting same-origin or notebook API access. */
@@ -24,7 +25,9 @@ export function HtmlOutput({
     const gestures = `<script>addEventListener('dblclick',event=>{if(event.target instanceof Element && event.target.closest('a,button,input,textarea,select,summary,[contenteditable]'))return;parent.postMessage({type:'runme-output-dblclick',nonce:${JSON.stringify(nonce)}},'*')});</script>`
     // Remove the browser's default body inset; author-supplied HTML styles can
     // still set their own padding or margins. The output surface owns its border.
-    return '<style>body{margin:0}</style>' + bridge + gestures + html
+    return localHtmlContent(
+      '<style>body{margin:0}</style>' + bridge + gestures + html
+    )
   }, [html, nonce])
   useEffect(() => {
     setHeight(120)

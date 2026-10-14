@@ -1,3 +1,4 @@
+import { getExternalServices } from '../../lib/externalServices'
 import {
   CaptureUpdateAction,
   Excalidraw,
@@ -207,21 +208,27 @@ export default function ExcalidrawDocument({
           applyingExternalUpdateRef.current = false
         }, 0)
       })().catch((error) => {
-        appLogger.error('Failed to refresh Excalidraw document from local store', {
-          attrs: {
-            scope: 'excalidraw.drive',
-            uri: document.uri,
-            remoteUri,
-            error: String(error),
-          },
-        })
+        appLogger.error(
+          'Failed to refresh Excalidraw document from local store',
+          {
+            attrs: {
+              scope: 'excalidraw.drive',
+              uri: document.uri,
+              remoteUri,
+              error: String(error),
+            },
+          }
+        )
         applyingExternalUpdateRef.current = false
         setSaveState('error')
         setErrorMessage(String(error))
       })
     }
 
-    const unsubscribe = localStore.subscribeSync(localUri, refreshFromLocalStore)
+    const unsubscribe = localStore.subscribeSync(
+      localUri,
+      refreshFromLocalStore
+    )
     return unsubscribe
   }, [document.uri, localUri, remoteUri, restoreSerializedScene])
 
@@ -288,16 +295,17 @@ export default function ExcalidrawDocument({
               : 'Ready'}
         </span>
       </div>
-      <div
-        className="min-h-0 flex-1"
-        data-testid="excalidraw-document-canvas"
-      >
+      <div className="min-h-0 flex-1" data-testid="excalidraw-document-canvas">
         <Excalidraw
           key={document.uri}
           excalidrawAPI={(api) => {
             excalidrawApiRef.current = api
           }}
           initialData={initialData}
+          aiEnabled={false}
+          validateEmbeddable={
+            getExternalServices().remoteContent ? undefined : false
+          }
           name={document.title}
           onChange={handleChange}
           UIOptions={{

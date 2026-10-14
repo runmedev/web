@@ -141,3 +141,12 @@ This module defines:
 - OIDC and Google Drive config blocks (including key normalization such as `clientID` and `discoveryURL`).
 - Empty-string sentinel for unset string values.
 - Drive base URL field; upload endpoint derivation and fallback behavior are handled by Drive client initialization code.
+
+## Deployment-controlled external services
+
+`externalServices.analytics` and `.remoteContent` default to false.
+Google authentication is always available, loads its SDK on demand, and stays
+off the rendering critical path; it has no deployment enable/disable setting.
+The content and analytics settings are applied independently
+of the legacy local-preference switch. The same bundle can run in a restricted
+deployment or a public deployment; see the PWA guide for configuration.

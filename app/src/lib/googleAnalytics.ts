@@ -1,3 +1,5 @@
+import { getExternalServices } from './externalServices'
+
 export type NotebookAnalyticsSource =
   | 'local'
   | 'google_drive'
@@ -22,6 +24,7 @@ type AnalyticsPageContext = {
 }
 
 export interface GoogleAnalyticsClientOptions {
+  enabled?: () => boolean
   measurementId?: string
   hostname: string
   origin: string
@@ -88,6 +91,7 @@ export class GoogleAnalyticsClient {
   constructor(private readonly options: GoogleAnalyticsClientOptions) {}
 
   initialize(): boolean {
+    if (!(this.options.enabled?.() ?? false)) return false
     if (this.gtag) {
       return true
     }
@@ -171,7 +175,11 @@ export class GoogleAnalyticsClient {
     params: Record<string, string>
   ): void {
     try {
-      if (!this.gtag || !this.pageContext) {
+      if (
+        !(this.options.enabled?.() ?? false) ||
+        !this.gtag ||
+        !this.pageContext
+      ) {
         return
       }
       this.gtag?.('event', eventName, {
@@ -189,6 +197,7 @@ const navigatorWithPrivacySignals = navigator as Navigator & {
 }
 
 export const googleAnalytics = new GoogleAnalyticsClient({
+  enabled: () => getExternalServices().analytics,
   measurementId: import.meta.env.VITE_GOOGLE_ANALYTICS_MEASUREMENT_ID,
   hostname: window.location.hostname,
   origin: window.location.origin,

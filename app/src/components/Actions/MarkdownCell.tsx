@@ -1,3 +1,4 @@
+import { canLoadContentAsset } from '../../lib/externalServices'
 /**
  * MarkdownCell - In-place markdown rendering component (Jupyter-style)
  *
@@ -156,14 +157,17 @@ const markdownComponents: Components = {
     </td>
   ),
   hr: (props) => <hr className="my-4 border-nb-border-strong" {...props} />,
-  img: ({ src, alt, ...props }) => (
-    <img
-      src={src}
-      alt={alt || ''}
-      className="max-w-full h-auto rounded-md my-2"
-      {...props}
-    />
-  ),
+  img: ({ src, alt, ...props }) =>
+    !canLoadContentAsset(src) ? (
+      <span role="note">External image unavailable: {alt || src}</span>
+    ) : (
+      <img
+        src={src}
+        alt={alt || ''}
+        className="max-w-full h-auto rounded-md my-2"
+        {...props}
+      />
+    ),
 }
 
 interface MarkdownCellProps {

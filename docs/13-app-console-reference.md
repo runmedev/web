@@ -133,8 +133,9 @@ console.log(guide)
 ```
 
 `await documentation.list()` returns compact `{ name, description }` entries.
-`documentation.get(name)` fetches the selected Markdown from the commit-pinned
-GitHub URL for the running app version.
+`documentation.get(name)` reads the selected Markdown bundled with the running
+app version. It works without access to GitHub; source permalinks identify the
+version of the included documentation.
 
 List and resolve comments on a Drive-backed notebook:
 

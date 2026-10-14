@@ -8,6 +8,8 @@ import { StorageOwnerHost } from './storageOwnerHost'
 
 // The stable worker URL/name keeps all compatible tabs on this owner. The
 // versioned handshake rejects incompatible clients rather than adding a writer.
+// Host is assigned after constructing the stores whose callbacks reference it.
+// eslint-disable-next-line prefer-const
 let host: StorageOwnerHost
 const drive = new DriveNotebookStore((options) => host.accessToken(options))
 const networkCoordination = new OwnerCommitQueue()
@@ -29,7 +31,10 @@ store.setFilesystemStore(new FilesystemNotebookStore())
 store.setDriveSyncAvailable(false)
 appState.setDriveNotebookStore(drive)
 appState.setLocalNotebooks(store)
-host = new StorageOwnerHost(store)
+host = new StorageOwnerHost(store, () => {
+  store.close()
+  ;(globalThis as unknown as { close(): void }).close()
+})
 ;(
   globalThis as unknown as { onconnect: (event: MessageEvent) => void }
 ).onconnect = (event) => host.attach(event.ports[0])

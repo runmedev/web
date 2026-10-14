@@ -125,7 +125,7 @@ flowchart TD
 
 The app supports multiple notebook storage backends:
 
-- `DriveNotebookStore` - Google Drive via GAPI
+- `DriveNotebookStore` - Google Drive via the fetch-based REST client
 - `FilesystemNotebookStore` - Browser File System Access API
 - `LocalNotebooks` - IndexedDB-backed local mirror and app-facing notebook store
 

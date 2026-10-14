@@ -16,7 +16,6 @@ import {
   DriveCreateNotCommittedError,
   DriveFileCreatedError,
   DriveNotebookStore,
-  GapiDriveFilesClient,
   driveFileUrl,
   driveFolderUrl,
   isDriveItemUri,
@@ -85,8 +84,8 @@ describe("parseDriveItem", () => {
   it("preserves a Drive resource key from a shared link", () => {
     expect(
       parseDriveItem(
-        "https://drive.google.com/drive/folders/folder123?resourcekey=key_123",
-      ),
+        "https://drive.google.com/drive/folders/folder123?resourcekey=key_123"
+      )
     ).toEqual({
       id: "folder123",
       type: NotebookStoreItemType.Folder,
@@ -96,10 +95,10 @@ describe("parseDriveItem", () => {
 
   it("adds resource keys to canonical Drive URLs", () => {
     expect(driveFolderUrl("folder123", "folder_key")).toBe(
-      "https://drive.google.com/drive/folders/folder123?resourcekey=folder_key",
+      "https://drive.google.com/drive/folders/folder123?resourcekey=folder_key"
     );
     expect(driveFileUrl("file123", "file_key")).toBe(
-      "https://drive.google.com/file/d/file123/view?resourcekey=file_key",
+      "https://drive.google.com/file/d/file123/view?resourcekey=file_key"
     );
   });
 
@@ -122,33 +121,33 @@ describe("parseDriveItem", () => {
 describe("isDriveItemUri", () => {
   it("accepts supported Drive URL forms", () => {
     expect(isDriveItemUri("https://drive.google.com/file/d/file123/view")).toBe(
-      true,
+      true
     );
     expect(
-      isDriveItemUri("https://drive.google.com/drive/folders/folder123"),
+      isDriveItemUri("https://drive.google.com/drive/folders/folder123")
     ).toBe(true);
     expect(isDriveItemUri("https://drive.google.com/open?id=open123")).toBe(
-      true,
+      true
     );
     expect(
       isDriveItemUri(
-        "https://drive.google.com/uc?export=download&id=download123",
-      ),
+        "https://drive.google.com/uc?export=download&id=download123"
+      )
     ).toBe(true);
   });
 
   it("rejects local mirror, filesystem, contents, raw id, and generic URL inputs", () => {
     expect(isDriveItemUri("local://file/notebook123")).toBe(false);
     expect(isDriveItemUri("fs://workspace/ws123/file/notebook.json")).toBe(
-      false,
+      false
     );
     expect(isDriveItemUri("contents://localhost:9977/file/notebook.json")).toBe(
-      false,
+      false
     );
     expect(isDriveItemUri("0BwwA4oUTeiV1UVNwOHItT0xfa2M")).toBe(false);
     expect(isDriveItemUri("https://example.com/not-drive")).toBe(false);
     expect(isDriveItemUri("https://drive.google.com/not-a-drive-item")).toBe(
-      false,
+      false
     );
   });
 });
@@ -167,23 +166,21 @@ describe("DriveNotebookStore", () => {
             { id: "copy", name: "source.ipynb", parents: ["old-parent"] },
           ],
         }),
-        { headers: { "Content-Type": "application/json" } },
+        { headers: { "Content-Type": "application/json" } }
       );
     });
     const store = new DriveNotebookStore(async () => "access-token");
     expect(
-      (await store.findByCreateOperation(null, "source-operation"))?.parents,
+      (await store.findByCreateOperation(null, "source-operation"))?.parents
     ).toEqual([driveFolderUrl("old-parent")]);
   });
 
   it.each([
-    ["gapi", false],
-    ["gapi", true],
     ["fetch", false],
     ["fetch", true],
   ] as const)(
     "rechecks public copy claims and detects a competing readback (%s, %s)",
-    async (transport, race) => {
+    async (_transport, race) => {
       setGoogleDriveBaseUrl("https://drive.example.test");
       let property: string | undefined = "p:claim";
       const fetchMock = vi
@@ -194,7 +191,7 @@ describe("DriveNotebookStore", () => {
             return new Response(
               JSON.stringify({
                 properties: { runmeIpynbCopy: property, unrelated: "keep" },
-              }),
+              })
             );
           expect(JSON.parse(String(init?.body))).toEqual({
             properties: { runmeIpynbCopy: null },
@@ -203,24 +200,16 @@ describe("DriveNotebookStore", () => {
           return new Response("", { status: 200 });
         });
       const store = new DriveNotebookStore(async () => "access-token");
-      if (transport === "gapi")
-        vi.spyOn(store as any, "getFilesClient").mockResolvedValue(
-          new GapiDriveFilesClient({
-            client: {
-              getToken: () => ({ access_token: "access-token" }),
-              drive: { files: {}, drives: {}, revisions: {} },
-            },
-          } as never),
-        );
+
       expect(
         await store.updateDerivedCopyClaimAfterCheck(
           driveFileUrl("source"),
           "p:claim",
-          null,
-        ),
+          null
+        )
       ).toBe(!race);
       expect(fetchMock).toHaveBeenCalledTimes(3);
-    },
+    }
   );
 
   it("does not mutate copy claims when metadata is unavailable", async () => {
@@ -233,8 +222,8 @@ describe("DriveNotebookStore", () => {
       await store.updateDerivedCopyClaimAfterCheck(
         driveFileUrl("source"),
         undefined,
-        "p:claim",
-      ),
+        "p:claim"
+      )
     ).toBe(false);
     expect(fetchMock).toHaveBeenCalledTimes(1);
   });
@@ -246,7 +235,7 @@ describe("DriveNotebookStore", () => {
       .mockResolvedValue(new Response("retention limit", { status: 403 }));
     const store = new DriveNotebookStore(async () => "access-token");
     await expect(
-      store.loadRevisionForRecovery(driveFileUrl("source"), { id: "hidden" }),
+      store.loadRevisionForRecovery(driveFileUrl("source"), { id: "hidden" })
     ).rejects.toThrow("200 retained-revision limit");
     expect(fetchMock).toHaveBeenCalledTimes(1);
   });
@@ -264,13 +253,13 @@ describe("DriveNotebookStore", () => {
       appProperties: { runmeCreateOperationId: "different-source" },
     });
     await expect(
-      store.getDerivedCopyTarget(driveFileUrl("unrelated"), "intended-source"),
+      store.getDerivedCopyTarget(driveFileUrl("unrelated"), "intended-source")
     ).rejects.toThrow("refusing to overwrite");
   });
 
-  it.each(["gapi", "fetch"])(
-    "uses v3 metadata and upload receipts without an ETag via %s",
-    async (transport) => {
+  it.each(["fetch"])(
+    "uses v3 metadata and upload receipts without an ETag via REST",
+    async () => {
       setGoogleDriveBaseUrl("https://www.googleapis.com");
       const receipt = {
         md5Checksum: "new",
@@ -287,7 +276,7 @@ describe("DriveNotebookStore", () => {
             "X-Goog-Drive-Resource-Keys": "copy/file-key",
           });
           expect(url.searchParams.get("fields")).toBe(
-            "md5Checksum,headRevisionId,version,appProperties,properties",
+            "md5Checksum,headRevisionId,version,appProperties,properties"
           );
           if (init?.method === "GET") {
             expect(url.pathname).toBe("/drive/v3/files/copy");
@@ -297,7 +286,7 @@ describe("DriveNotebookStore", () => {
                 headRevisionId: "opaque-before",
                 version: "40",
                 properties: { runmeIpynbCopy: "r:copy" },
-              }),
+              })
             );
           }
           expect(url.pathname).toBe("/upload/drive/v3/files/copy");
@@ -309,15 +298,7 @@ describe("DriveNotebookStore", () => {
           return new Response(JSON.stringify(receipt));
         });
       const store = new DriveNotebookStore(async () => "access-token");
-      if (transport === "gapi") {
-        const client = new GapiDriveFilesClient({
-          client: {
-            getToken: () => ({ access_token: "access-token" }),
-            drive: { files: {}, drives: {}, revisions: {} },
-          },
-        } as never);
-        vi.spyOn(store as any, "getFilesClient").mockResolvedValue(client);
-      }
+
       await expect(
         store.saveContentAfterVersionCheck(
           "https://drive.google.com/file/d/copy/view?resourcekey=file-key",
@@ -328,16 +309,16 @@ describe("DriveNotebookStore", () => {
             name: "new.ipynb",
             parentUri: "https://drive.google.com/drive/folders/new",
             previousParentUri: "https://drive.google.com/drive/folders/old",
-          },
-        ),
+          }
+        )
       ).resolves.toEqual(receipt);
       expect(fetchMock).toHaveBeenCalledTimes(2);
-    },
+    }
   );
 
-  it.each(["gapi", "fetch"])(
-    "paginates, retains and downloads recovery revisions via %s",
-    async (transport) => {
+  it.each(["fetch"])(
+    "paginates, retains and downloads recovery revisions via REST",
+    async () => {
       setGoogleDriveBaseUrl("https://drive.example.test");
       const requests: string[] = [];
       vi.spyOn(globalThis, "fetch").mockImplementation(async (input, init) => {
@@ -354,8 +335,8 @@ describe("DriveNotebookStore", () => {
                 : {
                     revisions: [{ id: "intervening", keepForever: false }],
                     nextPageToken: "second",
-                  },
-            ),
+                  }
+            )
           );
         expect(url.pathname).toBe("/drive/v3/files/copy/revisions/intervening");
         if (init?.method === "PATCH") {
@@ -366,21 +347,13 @@ describe("DriveNotebookStore", () => {
         return new Response("historical bytes");
       });
       const store = new DriveNotebookStore(async () => "access-token");
-      if (transport === "gapi")
-        vi.spyOn(store as any, "getFilesClient").mockResolvedValue(
-          new GapiDriveFilesClient({
-            client: {
-              getToken: () => ({ access_token: "access-token" }),
-              drive: { files: {}, drives: {}, revisions: {} },
-            },
-          } as never),
-        );
+
       const uri =
         "https://drive.google.com/file/d/copy/view?resourcekey=file-key";
       const revisions = await store.listRevisions(uri);
       expect(revisions.map((r) => r.id)).toEqual(["intervening", "head"]);
       expect(await store.loadRevisionForRecovery(uri, revisions[0]!)).toBe(
-        "historical bytes",
+        "historical bytes"
       );
       expect(requests).toEqual([
         "GET /drive/v3/files/copy/revisions",
@@ -388,7 +361,7 @@ describe("DriveNotebookStore", () => {
         "PATCH /drive/v3/files/copy/revisions/intervening",
         "GET /drive/v3/files/copy/revisions/intervening",
       ]);
-    },
+    }
   );
 
   it("forwards native Drive files.list search parameters and returns paging metadata", async () => {
@@ -399,7 +372,7 @@ describe("DriveNotebookStore", () => {
         const url = new URL(String(input));
         expect(url.pathname).toBe("/drive/v3/files");
         expect(url.searchParams.get("q")).toBe(
-          "name = 'eval_read.json' and trashed = false",
+          "name = 'eval_read.json' and trashed = false"
         );
         expect(url.searchParams.get("corpora")).toBe("drive");
         expect(url.searchParams.get("driveId")).toBe("shared-drive-1");
@@ -409,7 +382,7 @@ describe("DriveNotebookStore", () => {
         expect(url.searchParams.get("pageSize")).toBe("25");
         expect(url.searchParams.get("pageToken")).toBe("page-1");
         expect(url.searchParams.get("fields")).toBe(
-          "nextPageToken,incompleteSearch,files(id,name,mimeType,modifiedTime)",
+          "nextPageToken,incompleteSearch,files(id,name,mimeType,modifiedTime)"
         );
         return new Response(
           JSON.stringify({
@@ -436,7 +409,7 @@ describe("DriveNotebookStore", () => {
           {
             status: 200,
             headers: { "Content-Type": "application/json" },
-          },
+          }
         );
       });
 
@@ -488,7 +461,7 @@ describe("DriveNotebookStore", () => {
         const url = new URL(String(input));
         expect(url.pathname).toBe("/drive/v3/files");
         expect(url.searchParams.get("q")).toBe(
-          "'folder123' in parents and trashed = false and appProperties has { key='runmeCreateOperationId' and value='operation-123' }",
+          "'folder123' in parents and trashed = false and appProperties has { key='runmeCreateOperationId' and value='operation-123' }"
         );
         expect(url.searchParams.get("orderBy")).toBe("createdTime asc");
         expect(url.searchParams.get("pageSize")).toBe("2");
@@ -509,7 +482,7 @@ describe("DriveNotebookStore", () => {
           {
             status: 200,
             headers: { "Content-Type": "application/json" },
-          },
+          }
         );
       });
 
@@ -517,8 +490,8 @@ describe("DriveNotebookStore", () => {
     await expect(
       store.findByCreateOperation(
         "https://drive.google.com/drive/folders/folder123",
-        "operation-123",
-      ),
+        "operation-123"
+      )
     ).resolves.toMatchObject({
       uri: "https://drive.google.com/file/d/file123/view",
       name: "draft.json",
@@ -541,17 +514,17 @@ describe("DriveNotebookStore", () => {
         const url = new URL(String(input));
         expect(url.pathname).toBe("/drive/v3/files");
         expect(url.searchParams.get("q")).toBe(
-          "'folder123' in parents and trashed = false",
+          "'folder123' in parents and trashed = false"
         );
         expect(url.searchParams.get("includeItemsFromAllDrives")).toBe("true");
         expect(url.searchParams.get("supportsAllDrives")).toBe("true");
         expect(url.searchParams.get("orderBy")).toBe("name");
         expect(url.searchParams.get("pageSize")).toBe("1000");
         expect(url.searchParams.get("fields")).toBe(
-          "nextPageToken,files(id,name,mimeType,resourceKey)",
+          "nextPageToken,files(id,name,mimeType,resourceKey)"
         );
         expect(
-          new Headers(init?.headers).get("X-Goog-Drive-Resource-Keys"),
+          new Headers(init?.headers).get("X-Goog-Drive-Resource-Keys")
         ).toBe("folder123/folder-key");
 
         const pageToken = url.searchParams.get("pageToken");
@@ -575,15 +548,15 @@ describe("DriveNotebookStore", () => {
 
     const store = new DriveNotebookStore(async () => "access-token");
     const result = await store.list(
-      "https://drive.google.com/drive/folders/folder123?resourcekey=folder-key",
+      "https://drive.google.com/drive/folders/folder123?resourcekey=folder-key"
     );
 
     expect(fetchMock).toHaveBeenCalledTimes(2);
     expect(
-      new URL(String(fetchMock.mock.calls[0][0])).searchParams.get("pageToken"),
+      new URL(String(fetchMock.mock.calls[0][0])).searchParams.get("pageToken")
     ).toBeNull();
     expect(
-      new URL(String(fetchMock.mock.calls[1][0])).searchParams.get("pageToken"),
+      new URL(String(fetchMock.mock.calls[1][0])).searchParams.get("pageToken")
     ).toBe("page-2");
     expect(result).toHaveLength(101);
     expect(result.at(-1)).toMatchObject({
@@ -602,7 +575,7 @@ describe("DriveNotebookStore", () => {
         if (url.pathname === "/drive/v3/files") {
           expect(init?.method).toBe("POST");
           expect(
-            new Headers(init?.headers).get("X-Goog-Drive-Resource-Keys"),
+            new Headers(init?.headers).get("X-Goog-Drive-Resource-Keys")
           ).toBe("folder123/folder-key");
           expect(JSON.parse(String(init?.body))).toMatchObject({
             id: "reserved-file123",
@@ -625,7 +598,7 @@ describe("DriveNotebookStore", () => {
             {
               status: 200,
               headers: { "Content-Type": "application/json" },
-            },
+            }
           );
         }
         if (url.pathname === "/upload/drive/v3/files/reserved-file123") {
@@ -650,7 +623,7 @@ describe("DriveNotebookStore", () => {
         expectedContentChecksum: "expected-checksum",
         expectedRequestFingerprint: "expected-request",
         fileId: "reserved-file123",
-      },
+      }
     );
 
     expect(fetchMock).toHaveBeenCalledTimes(2);
@@ -669,7 +642,7 @@ describe("DriveNotebookStore", () => {
       new Response(JSON.stringify({ ids: ["reserved-file123"] }), {
         status: 200,
         headers: { "Content-Type": "application/json" },
-      }),
+      })
     );
 
     const store = new DriveNotebookStore(async () => "access-token");
@@ -677,7 +650,7 @@ describe("DriveNotebookStore", () => {
     await expect(store.generateFileId()).resolves.toBe("reserved-file123");
     expect(fetchMock).toHaveBeenCalledWith(
       expect.stringContaining("/drive/v3/files/generateIds?"),
-      expect.objectContaining({ method: "GET" }),
+      expect.objectContaining({ method: "GET" })
     );
   });
 
@@ -690,7 +663,7 @@ describe("DriveNotebookStore", () => {
         if (url.pathname === "/drive/v3/files") {
           expect(init?.method).toBe("POST");
           expect(
-            new Headers(init?.headers).get("X-Goog-Drive-Resource-Keys"),
+            new Headers(init?.headers).get("X-Goog-Drive-Resource-Keys")
           ).toBe("folder123/folder-key");
           return new Response(
             JSON.stringify({
@@ -702,7 +675,7 @@ describe("DriveNotebookStore", () => {
             {
               status: 200,
               headers: { "Content-Type": "application/json" },
-            },
+            }
           );
         }
         expect(url.pathname).toBe("/upload/drive/v3/files/notebook123");
@@ -714,8 +687,8 @@ describe("DriveNotebookStore", () => {
     await expect(
       store.create(
         "https://drive.google.com/drive/folders/folder123?resourcekey=folder-key",
-        "notebook.json",
-      ),
+        "notebook.json"
+      )
     ).resolves.toMatchObject({
       uri: "https://drive.google.com/file/d/notebook123/view",
       parents: [
@@ -733,19 +706,19 @@ describe("DriveNotebookStore", () => {
         new Response(JSON.stringify({ driveId: "shared-drive-1" }), {
           status: 200,
           headers: { "Content-Type": "application/json" },
-        }),
+        })
       )
       .mockResolvedValueOnce(
         new Response(JSON.stringify({}), {
           status: 200,
           headers: { "Content-Type": "application/json" },
-        }),
+        })
       );
     const store = new DriveNotebookStore(async () => "access-token");
     const folderUri = "https://drive.google.com/drive/folders/folder123";
 
     await expect(store.canUsePreGeneratedFileId(folderUri)).resolves.toBe(
-      false,
+      false
     );
     await expect(store.canUsePreGeneratedFileId(folderUri)).resolves.toBe(true);
     expect(fetchMock).toHaveBeenCalledTimes(2);
@@ -770,7 +743,7 @@ describe("DriveNotebookStore", () => {
       const pending = store.waitForCreateOperation(
         "https://drive.google.com/drive/folders/folder123",
         "operation-123",
-        100,
+        100
       );
       await vi.advanceTimersByTimeAsync(850);
 
@@ -784,7 +757,7 @@ describe("DriveNotebookStore", () => {
   it("classifies a rejected metadata create as definitely not committed", async () => {
     setGoogleDriveBaseUrl("https://drive.example.test");
     vi.spyOn(globalThis, "fetch").mockResolvedValue(
-      new Response("Forbidden", { status: 403 }),
+      new Response("Forbidden", { status: 403 })
     );
 
     const store = new DriveNotebookStore(async () => "access-token");
@@ -794,8 +767,8 @@ describe("DriveNotebookStore", () => {
         "https://drive.google.com/drive/folders/folder123",
         "notebook.ipynb",
         "{}",
-        "application/x-ipynb+json",
-      ),
+        "application/x-ipynb+json"
+      )
     ).rejects.toBeInstanceOf(DriveCreateNotCommittedError);
   });
 
@@ -824,8 +797,8 @@ describe("DriveNotebookStore", () => {
           {
             status: 403,
             headers: { "Content-Type": "application/json" },
-          },
-        ),
+          }
+        )
       );
 
       const store = new DriveNotebookStore(async () => "access-token");
@@ -838,18 +811,18 @@ describe("DriveNotebookStore", () => {
                 parent,
                 "notebook.ipynb",
                 "{}",
-                "application/x-ipynb+json",
+                "application/x-ipynb+json"
               )
             : store.createFolder(parent, "new-folder");
 
       await expect(create).rejects.toThrow(
-        "service accounts do not have storage quota",
+        "service accounts do not have storage quota"
       );
       await expect(create).rejects.toThrow("Choose a folder in a Shared drive");
       await expect(create).rejects.toThrow(
-        "A folder shared from a user's My Drive is not a Shared drive",
+        "A folder shared from a user's My Drive is not a Shared drive"
       );
-    },
+    }
   );
 
   it("reports the created file when its initial content upload fails", async () => {
@@ -866,7 +839,7 @@ describe("DriveNotebookStore", () => {
           {
             status: 200,
             headers: { "Content-Type": "application/json" },
-          },
+          }
         );
       }
       if (url.pathname === "/upload/drive/v3/files/file123") {
@@ -882,7 +855,7 @@ describe("DriveNotebookStore", () => {
         "https://drive.google.com/drive/folders/folder123",
         "notebook.ipynb",
         "{}",
-        "application/x-ipynb+json",
+        "application/x-ipynb+json"
       );
     } catch (error) {
       failure = error;
@@ -914,7 +887,7 @@ describe("DriveNotebookStore", () => {
             {
               status: 200,
               headers: { "Content-Type": "application/json" },
-            },
+            }
           );
         }
         expect(init?.method).toBe("PATCH");
@@ -934,7 +907,7 @@ describe("DriveNotebookStore", () => {
     const store = new DriveNotebookStore(async () => "access-token");
     await store.markCreateOperationComplete(
       "https://drive.google.com/file/d/file123/view",
-      "expected-checksum",
+      "expected-checksum"
     );
 
     expect(fetchMock).toHaveBeenCalledTimes(2);
@@ -962,7 +935,7 @@ describe("DriveNotebookStore", () => {
                 "Content-Type": "application/json",
                 ETag: '"drive-etag-1"',
               },
-            },
+            }
           );
         }
         expect(url.pathname).toBe("/upload/drive/v3/files/file123");
@@ -982,8 +955,8 @@ describe("DriveNotebookStore", () => {
         uri,
         '{"cells":[]}',
         "application/json",
-        { checksum: "empty-checksum", revisionId: "empty-revision" },
-      ),
+        { checksum: "empty-checksum", revisionId: "empty-revision" }
+      )
     ).resolves.toEqual({});
     expect(fetchMock).toHaveBeenCalledTimes(2);
   });
@@ -1009,8 +982,8 @@ describe("DriveNotebookStore", () => {
         "https://drive.google.com/file/d/file123/view",
         '{"cells":[]}',
         "application/json",
-        { version: "1" },
-      ),
+        { version: "1" }
+      )
     ).resolves.toBe(false);
     expect(fetchMock).toHaveBeenCalledTimes(1);
   });
@@ -1032,7 +1005,7 @@ describe("DriveNotebookStore", () => {
                 "Content-Type": "application/json",
                 ETag: '"drive-etag-1"',
               },
-            },
+            }
           );
         }
         return new Response("precondition failed", { status: 412 });
@@ -1045,8 +1018,8 @@ describe("DriveNotebookStore", () => {
         uri,
         '{"cells":[]}',
         "application/json",
-        { checksum: "empty-checksum", revisionId: "empty-revision" },
-      ),
+        { checksum: "empty-checksum", revisionId: "empty-revision" }
+      )
     ).rejects.toThrow();
     expect(fetchMock).toHaveBeenCalledTimes(2);
   });
@@ -1067,8 +1040,8 @@ describe("DriveNotebookStore", () => {
     const store = new DriveNotebookStore(async () => "access-token");
     await expect(
       store.loadContent(
-        "https://drive.google.com/file/d/file123/view?resourcekey=file-key",
-      ),
+        "https://drive.google.com/file/d/file123/view?resourcekey=file-key"
+      )
     ).resolves.toBe('{"type":"excalidraw"}');
   });
 
@@ -1090,7 +1063,7 @@ describe("DriveNotebookStore", () => {
             {
               status: 200,
               headers: { "Content-Type": "application/json" },
-            },
+            }
           );
         }
         if (url.pathname === "/drive/v3/files/file123") {
@@ -1110,8 +1083,8 @@ describe("DriveNotebookStore", () => {
     await expect(
       store.save(
         "https://drive.google.com/file/d/file123/view?resourcekey=file-key",
-        notebook,
-      ),
+        notebook
+      )
     ).resolves.toEqual({ conflicted: false });
     expect(fetchMock).toHaveBeenCalledTimes(4);
   });
@@ -1151,7 +1124,7 @@ describe("DriveNotebookStore", () => {
               {
                 status: 200,
                 headers: { "Content-Type": "application/json" },
-              },
+              }
             );
           }
           if (url.searchParams.get("alt") === "media") {
@@ -1173,13 +1146,13 @@ describe("DriveNotebookStore", () => {
             {
               status: 200,
               headers: { "Content-Type": "application/json" },
-            },
+            }
           );
         }
         if (url.pathname === "/upload/drive/v3/files/file123") {
           expect(init?.method).toBe("PATCH");
           expect(new Headers(init?.headers).get("Content-Type")).toBe(
-            "application/x-ipynb+json",
+            "application/x-ipynb+json"
           );
           uploadedContent = String(init?.body);
           return new Response("", { status: 200 });
@@ -1191,7 +1164,7 @@ describe("DriveNotebookStore", () => {
     const store = new DriveNotebookStore(async () => "access-token");
     const result = await store.save(
       "https://drive.google.com/file/d/file123/view",
-      source,
+      source
     );
 
     expect(result).toEqual({ conflicted: false });
@@ -1229,13 +1202,13 @@ describe("DriveNotebookStore", () => {
           {
             status: 200,
             headers: { "Content-Type": "application/json" },
-          },
+          }
         );
       });
 
     const store = new DriveNotebookStore(async () => "access-token");
     const loaded = await store.load(
-      "https://drive.google.com/file/d/file123/view",
+      "https://drive.google.com/file/d/file123/view"
     );
 
     expect(fetchMock).toHaveBeenCalledTimes(2);
@@ -1287,7 +1260,7 @@ describe("DriveNotebookStore", () => {
                 "Content-Type": "application/json",
                 ETag: '"drive-etag-1"',
               },
-            },
+            }
           );
         }
         if (url.pathname === "/drive/v3/files/file123") {
@@ -1301,7 +1274,7 @@ describe("DriveNotebookStore", () => {
             {
               status: 200,
               headers: { "Content-Type": "application/json" },
-            },
+            }
           );
         }
         expect(url.pathname).toBe("/upload/drive/v3/files/file123");
@@ -1322,8 +1295,8 @@ describe("DriveNotebookStore", () => {
             uri,
             rawContent,
             "application/x-ipynb+json",
-            { checksum: "initial-checksum", revisionId: "revision-1" },
-          ),
+            { checksum: "initial-checksum", revisionId: "revision-1" }
+          )
         ).resolves.toEqual({});
       } else {
         remoteContent = rawContent;
@@ -1340,7 +1313,7 @@ describe("DriveNotebookStore", () => {
       const saved = JSON.parse(uploads.at(-1)!);
       expect(saved.metadata.after_raw_write).toEqual({ keep: true });
       expect(saved.cells[0].source).toBe("print('edited')");
-    },
+    }
   );
 
   it("uses shared drive name for shared drive root folder metadata", async () => {
@@ -1352,7 +1325,7 @@ describe("DriveNotebookStore", () => {
         if (url.pathname === "/drive/v3/files/drive123") {
           expect(url.searchParams.get("supportsAllDrives")).toBe("true");
           expect(url.searchParams.get("fields")).toBe(
-            "id,name,mimeType,parents,driveId,resourceKey",
+            "id,name,mimeType,parents,driveId,resourceKey"
           );
           return new Response(
             JSON.stringify({
@@ -1364,7 +1337,7 @@ describe("DriveNotebookStore", () => {
             {
               status: 200,
               headers: { "Content-Type": "application/json" },
-            },
+            }
           );
         }
         if (url.pathname === "/drive/v3/drives/drive123") {
@@ -1377,7 +1350,7 @@ describe("DriveNotebookStore", () => {
             {
               status: 200,
               headers: { "Content-Type": "application/json" },
-            },
+            }
           );
         }
         throw new Error(`Unexpected Drive request: ${url.toString()}`);
@@ -1385,7 +1358,7 @@ describe("DriveNotebookStore", () => {
 
     const store = new DriveNotebookStore(async () => "access-token");
     const result = await store.getMetadata(
-      "https://drive.google.com/drive/folders/drive123",
+      "https://drive.google.com/drive/folders/drive123"
     );
 
     expect(fetchMock).toHaveBeenCalledTimes(2);
@@ -1408,7 +1381,7 @@ describe("DriveNotebookStore", () => {
         expect(url.searchParams.get("fields")).toBe("id,name,mimeType,parents");
         expect(init?.method).toBe("POST");
         expect(
-          new Headers(init?.headers).get("X-Goog-Drive-Resource-Keys"),
+          new Headers(init?.headers).get("X-Goog-Drive-Resource-Keys")
         ).toBe("parent123/parent-key");
         expect(JSON.parse(String(init?.body))).toEqual({
           name: "Reports",
@@ -1425,14 +1398,14 @@ describe("DriveNotebookStore", () => {
           {
             status: 200,
             headers: { "Content-Type": "application/json" },
-          },
+          }
         );
       });
 
     const store = new DriveNotebookStore(async () => "access-token");
     const result = await store.createFolder(
       "https://drive.google.com/drive/folders/parent123?resourcekey=parent-key",
-      "Reports",
+      "Reports"
     );
 
     expect(fetchMock).toHaveBeenCalledTimes(1);
@@ -1471,14 +1444,14 @@ describe("DriveNotebookStore", () => {
           {
             status: 200,
             headers: { "Content-Type": "application/json" },
-          },
+          }
         );
       });
 
     const store = new DriveNotebookStore(async () => "access-token");
     const result = await store.rename(
       "https://drive.google.com/file/d/file123/view?resourcekey=file-key",
-      "renamed.json",
+      "renamed.json"
     );
 
     expect(fetchMock).toHaveBeenCalledTimes(1);
@@ -1512,14 +1485,14 @@ describe("DriveNotebookStore", () => {
           {
             status: 200,
             headers: { "Content-Type": "application/json" },
-          },
+          }
         );
       });
 
     const store = new DriveNotebookStore(async () => "access-token");
     const result = await store.rename(
       "https://drive.google.com/drive/folders/folder123",
-      "Renamed Folder",
+      "Renamed Folder"
     );
 
     expect(fetchMock).toHaveBeenCalledTimes(1);
@@ -1543,7 +1516,7 @@ describe("DriveNotebookStore", () => {
         expect(url.searchParams.get("supportsAllDrives")).toBe("true");
         expect(url.searchParams.get("resourceKey")).toBe("file-key");
         expect(
-          new Headers(init?.headers).get("X-Goog-Drive-Resource-Keys"),
+          new Headers(init?.headers).get("X-Goog-Drive-Resource-Keys")
         ).toBe("source123/source-key,destination123/destination-key");
         expect(init?.method).toBe("PATCH");
         expect(init?.body).toBeUndefined();
@@ -1557,7 +1530,7 @@ describe("DriveNotebookStore", () => {
           {
             status: 200,
             headers: { "Content-Type": "application/json" },
-          },
+          }
         );
       });
 
@@ -1565,7 +1538,7 @@ describe("DriveNotebookStore", () => {
     const result = await store.move(
       "https://drive.google.com/file/d/file123/view?resourcekey=file-key",
       "https://drive.google.com/drive/folders/source123?resourcekey=source-key",
-      "https://drive.google.com/drive/folders/destination123?resourcekey=destination-key",
+      "https://drive.google.com/drive/folders/destination123?resourcekey=destination-key"
     );
 
     expect(fetchMock).toHaveBeenCalledTimes(1);
@@ -1605,13 +1578,13 @@ describe("DriveNotebookStore", () => {
           {
             status: 200,
             headers: { "Content-Type": "application/json" },
-          },
+          }
         );
       });
 
     const store = new DriveNotebookStore(async () => "access-token");
     const result = await store.moveToTrash(
-      "https://drive.google.com/file/d/file123/view?resourcekey=file-key",
+      "https://drive.google.com/file/d/file123/view?resourcekey=file-key"
     );
 
     expect(fetchMock).toHaveBeenCalledTimes(1);
@@ -1631,7 +1604,7 @@ describe("DriveNotebookStore", () => {
       .mockImplementation(async (input, init) => {
         const url = new URL(String(input));
         expect(
-          new Headers(init?.headers).get("X-Goog-Drive-Resource-Keys"),
+          new Headers(init?.headers).get("X-Goog-Drive-Resource-Keys")
         ).toBe("file123/file-key");
         const pageToken = url.searchParams.get("pageToken");
         const body = pageToken
@@ -1648,7 +1621,7 @@ describe("DriveNotebookStore", () => {
 
     const store = new DriveNotebookStore(async () => "access-token");
     const revisions = await store.listRevisions(
-      "https://drive.google.com/file/d/file123/view?resourcekey=file-key",
+      "https://drive.google.com/file/d/file123/view?resourcekey=file-key"
     );
 
     expect(revisions.map((revision) => revision.id)).toEqual([
@@ -1657,7 +1630,7 @@ describe("DriveNotebookStore", () => {
     ]);
     expect(fetchMock).toHaveBeenCalledTimes(2);
     expect(
-      new URL(String(fetchMock.mock.calls[1][0])).searchParams.get("pageToken"),
+      new URL(String(fetchMock.mock.calls[1][0])).searchParams.get("pageToken")
     ).toBe("next-page");
   });
 
@@ -1668,7 +1641,7 @@ describe("DriveNotebookStore", () => {
       .mockImplementation(async (input, init) => {
         const url = new URL(String(input));
         expect(
-          new Headers(init?.headers).get("X-Goog-Drive-Resource-Keys"),
+          new Headers(init?.headers).get("X-Goog-Drive-Resource-Keys")
         ).toBe("file123/file-key");
         expect(url.pathname).toBe("/drive/v3/files/file123/comments");
         expect(url.searchParams.get("supportsAllDrives")).toBe("true");
@@ -1688,7 +1661,7 @@ describe("DriveNotebookStore", () => {
 
     const store = new DriveNotebookStore(async () => "access-token");
     const comments = await store.listComments(
-      "https://drive.google.com/file/d/file123/view?resourcekey=file-key",
+      "https://drive.google.com/file/d/file123/view?resourcekey=file-key"
     );
 
     expect(comments.map((comment) => comment.id)).toEqual([
@@ -1697,7 +1670,7 @@ describe("DriveNotebookStore", () => {
     ]);
     expect(fetchMock).toHaveBeenCalledTimes(2);
     expect(
-      new URL(String(fetchMock.mock.calls[1][0])).searchParams.get("pageToken"),
+      new URL(String(fetchMock.mock.calls[1][0])).searchParams.get("pageToken")
     ).toBe("next-page");
   });
 
@@ -1710,7 +1683,7 @@ describe("DriveNotebookStore", () => {
         expect(url.pathname).toBe("/drive/v3/files/file123/comments");
         expect(url.searchParams.get("supportsAllDrives")).toBe("true");
         expect(
-          new Headers(init?.headers).get("X-Goog-Drive-Resource-Keys"),
+          new Headers(init?.headers).get("X-Goog-Drive-Resource-Keys")
         ).toBe("file123/file-key");
         expect(init?.method).toBe("POST");
         expect(JSON.parse(String(init?.body))).toEqual({
@@ -1725,7 +1698,7 @@ describe("DriveNotebookStore", () => {
           {
             status: 200,
             headers: { "Content-Type": "application/json" },
-          },
+          }
         );
       });
 
@@ -1733,7 +1706,7 @@ describe("DriveNotebookStore", () => {
     const comment = await store.createComment(
       "https://drive.google.com/file/d/file123/view?resourcekey=file-key",
       " Please check this ",
-      '{"runme":{"kind":"cell","cellId":"cell-1"}}',
+      '{"runme":{"kind":"cell","cellId":"cell-1"}}'
     );
 
     expect(fetchMock).toHaveBeenCalledTimes(1);
@@ -1758,7 +1731,7 @@ describe("DriveNotebookStore", () => {
           {
             status: 200,
             headers: { "Content-Type": "application/json" },
-          },
+          }
         );
       });
 
@@ -1772,7 +1745,7 @@ describe("DriveNotebookStore", () => {
           mimeType: "text/plain",
           value: "migration guide",
         },
-      },
+      }
     );
 
     expect(fetchMock).toHaveBeenCalledTimes(1);
@@ -1785,11 +1758,11 @@ describe("DriveNotebookStore", () => {
       .mockImplementation(async (input, init) => {
         const url = new URL(String(input));
         expect(url.pathname).toBe(
-          "/drive/v3/files/file123/comments/comment-1/replies",
+          "/drive/v3/files/file123/comments/comment-1/replies"
         );
         expect(url.searchParams.get("supportsAllDrives")).toBe("true");
         expect(
-          new Headers(init?.headers).get("X-Goog-Drive-Resource-Keys"),
+          new Headers(init?.headers).get("X-Goog-Drive-Resource-Keys")
         ).toBe("file123/file-key");
         expect(init?.method).toBe("POST");
         expect(JSON.parse(String(init?.body))).toEqual({
@@ -1800,14 +1773,14 @@ describe("DriveNotebookStore", () => {
           {
             status: 200,
             headers: { "Content-Type": "application/json" },
-          },
+          }
         );
       });
 
     const store = new DriveNotebookStore(async () => "access-token");
     const reply = await store.resolveComment(
       "https://drive.google.com/file/d/file123/view?resourcekey=file-key",
-      "comment-1",
+      "comment-1"
     );
 
     expect(fetchMock).toHaveBeenCalledTimes(1);
@@ -1821,10 +1794,10 @@ describe("DriveNotebookStore", () => {
       .mockImplementation(async (input, init) => {
         const url = new URL(String(input));
         expect(url.pathname).toBe(
-          "/drive/v3/files/file123/revisions/revision-1",
+          "/drive/v3/files/file123/revisions/revision-1"
         );
         expect(
-          new Headers(init?.headers).get("X-Goog-Drive-Resource-Keys"),
+          new Headers(init?.headers).get("X-Goog-Drive-Resource-Keys")
         ).toBe("file123/file-key");
         return new Response("{}", {
           status: 200,
@@ -1837,7 +1810,7 @@ describe("DriveNotebookStore", () => {
       "https://drive.google.com/file/d/file123/view?resourcekey=file-key";
     await expect(store.loadRevision(uri, "revision-1")).resolves.toBeTruthy();
     await expect(store.loadRevisionContent(uri, "revision-1")).resolves.toBe(
-      "{}",
+      "{}"
     );
     expect(fetchMock).toHaveBeenCalledTimes(2);
   });
@@ -1861,7 +1834,7 @@ describe("DriveNotebookStore", () => {
       new Response(ipynb, {
         status: 200,
         headers: { "Content-Type": "application/x-ipynb+json" },
-      }),
+      })
     );
     const warn = vi
       .spyOn(appLogger, "warn")
@@ -1871,7 +1844,7 @@ describe("DriveNotebookStore", () => {
     const loaded = await store.loadRevision(
       "https://drive.google.com/file/d/file123/view",
       "revision-1",
-      "notebook.ipynb",
+      "notebook.ipynb"
     );
 
     expect(loaded.metadata.owner).toBe("runme");
@@ -1901,7 +1874,7 @@ describe("DriveNotebookStore", () => {
       new Response(ipynb, {
         status: 200,
         headers: { "Content-Type": "application/x-ipynb+json" },
-      }),
+      })
     );
     const warn = vi
       .spyOn(appLogger, "warn")
@@ -1910,7 +1883,7 @@ describe("DriveNotebookStore", () => {
     const store = new DriveNotebookStore(async () => "access-token");
     const loaded = await store.loadRevision(
       "https://drive.google.com/file/d/file123/view",
-      "revision-1",
+      "revision-1"
     );
 
     expect(loaded.cells[0]?.value).toBe("# Hello");
@@ -1925,7 +1898,7 @@ describe("DriveNotebookStore", () => {
           cellsWithObjectRunmeMetadata: 1,
           notebookRunmeMetadataType: "object",
         },
-      },
+      }
     );
   });
 
@@ -1935,7 +1908,7 @@ describe("DriveNotebookStore", () => {
       new Response(plainIpynb(), {
         status: 200,
         headers: { "Content-Type": "application/x-ipynb+json" },
-      }),
+      })
     );
     const warn = vi
       .spyOn(appLogger, "warn")
@@ -1944,7 +1917,7 @@ describe("DriveNotebookStore", () => {
     const store = new DriveNotebookStore(async () => "access-token");
     const loaded = await store.loadRevision(
       "https://drive.google.com/file/d/file123/view",
-      "revision-1",
+      "revision-1"
     );
 
     expect(loaded.cells).toHaveLength(1);
@@ -1960,7 +1933,7 @@ describe("DriveNotebookStore", () => {
           cellsWithObjectRunmeMetadata: 0,
           notebookRunmeMetadataType: "undefined",
         },
-      },
+      }
     );
   });
 
@@ -1970,7 +1943,7 @@ describe("DriveNotebookStore", () => {
       new Response(plainIpynb(), {
         status: 200,
         headers: { "Content-Type": "application/json" },
-      }),
+      })
     );
     const warn = vi
       .spyOn(appLogger, "warn")
@@ -1980,7 +1953,7 @@ describe("DriveNotebookStore", () => {
     const loaded = await store.loadRevision(
       "https://drive.google.com/file/d/file123/view",
       "revision-1",
-      "notebook.json",
+      "notebook.json"
     );
 
     expect(loaded.cells).toHaveLength(1);
@@ -1996,7 +1969,7 @@ describe("DriveNotebookStore", () => {
           cellsWithObjectRunmeMetadata: 0,
           notebookRunmeMetadataType: "undefined",
         },
-      },
+      }
     );
   });
 
@@ -2017,7 +1990,7 @@ describe("DriveNotebookStore", () => {
       new Response(encodeRunmeNotebook(source), {
         status: 200,
         headers: { "Content-Type": "application/json" },
-      }),
+      })
     );
     const warn = vi
       .spyOn(appLogger, "warn")
@@ -2027,7 +2000,7 @@ describe("DriveNotebookStore", () => {
     const loaded = await store.loadRevision(
       "https://drive.google.com/file/d/file123/view",
       "revision-1",
-      "notebook.ipynb",
+      "notebook.ipynb"
     );
 
     expect(loaded.cells).toHaveLength(1);
@@ -2041,7 +2014,7 @@ describe("DriveNotebookStore", () => {
           initialFormat: "ipynb",
           cellCount: 1,
         },
-      },
+      }
     );
   });
 
@@ -2053,7 +2026,7 @@ describe("DriveNotebookStore", () => {
         new Response(body, {
           status: 200,
           headers: { "Content-Type": "application/json" },
-        }),
+        })
       );
       const warn = vi
         .spyOn(appLogger, "warn")
@@ -2063,7 +2036,7 @@ describe("DriveNotebookStore", () => {
       const loaded = await store.loadRevision(
         "https://drive.google.com/file/d/file123/view",
         "revision-1",
-        "notebook.ipynb",
+        "notebook.ipynb"
       );
 
       expect(loaded.cells).toHaveLength(0);
@@ -2076,9 +2049,9 @@ describe("DriveNotebookStore", () => {
             initialFormat: "ipynb",
             cellCount: 0,
           },
-        },
+        }
       );
-    },
+    }
   );
 
   it("recognizes default-only Runme cells under the current IPYNB filename", async () => {
@@ -2087,7 +2060,7 @@ describe("DriveNotebookStore", () => {
       new Response('{"cells":[{"value":"echo hi"},{}]}', {
         status: 200,
         headers: { "Content-Type": "application/json" },
-      }),
+      })
     );
     const warn = vi
       .spyOn(appLogger, "warn")
@@ -2097,7 +2070,7 @@ describe("DriveNotebookStore", () => {
     const loaded = await store.loadRevision(
       "https://drive.google.com/file/d/file123/view",
       "revision-1",
-      "notebook.ipynb",
+      "notebook.ipynb"
     );
 
     expect(loaded.cells).toHaveLength(2);
@@ -2111,7 +2084,7 @@ describe("DriveNotebookStore", () => {
           initialFormat: "ipynb",
           cellCount: 2,
         },
-      },
+      }
     );
   });
 
@@ -2121,7 +2094,7 @@ describe("DriveNotebookStore", () => {
       new Response('{"metadata":{"runme":{"unexpected":true}}}', {
         status: 200,
         headers: { "Content-Type": "application/json" },
-      }),
+      })
     );
     const warn = vi
       .spyOn(appLogger, "warn")
@@ -2131,8 +2104,8 @@ describe("DriveNotebookStore", () => {
     await expect(
       store.loadRevision(
         "https://drive.google.com/file/d/file123/view",
-        "revision-1",
-      ),
+        "revision-1"
+      )
     ).rejects.toThrow();
     expect(warn).not.toHaveBeenCalled();
   });

@@ -1,3 +1,4 @@
+import { canLoadContentAsset } from '../../lib/externalServices'
 import { ArrowTopRightOnSquareIcon } from '@heroicons/react/20/solid'
 import { Button, ScrollArea } from '@radix-ui/themes'
 import { useCallback, useEffect, useMemo, useState } from 'react'
@@ -165,6 +166,10 @@ export function RemoteMarkdownDocument({
         const resolved = src
           ? toRawMarkdownUri(resolveDocumentationHref(src, document.uri))
           : undefined
+        if (!canLoadContentAsset(resolved))
+          return (
+            <span role="note">External image unavailable: {alt || src}</span>
+          )
         return (
           <img
             src={resolved}

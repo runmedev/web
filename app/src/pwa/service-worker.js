@@ -7,7 +7,6 @@ const PRECACHE_NAME = `runme-precache-${BUILD_ID}`;
 const RUNTIME_NAME = `runme-runtime-${BUILD_ID}`;
 const RUNME_CACHE_PREFIX = "runme-";
 const INDEX_URL = "/index.html";
-const GOOGLE_API_URL = "https://apis.google.com/js/api.js";
 
 /** Returns true when a response is safe to retain for offline use. */
 function isCacheable(response) {
@@ -23,25 +22,25 @@ async function handleNavigation(request) {
   }
 }
 
-/** Precaches the local shell and opportunistically retains the Google loader. */
+/** Precaches only assets shipped in this release; no external loader is needed. */
 async function precacheAppShell() {
   const precache = await caches.open(PRECACHE_NAME);
   await precache.addAll(PRECACHE_URLS);
+}
 
-  try {
-    const googleApi = await fetch(GOOGLE_API_URL, { mode: "no-cors" });
-    if (isCacheable(googleApi)) {
-      const runtime = await caches.open(RUNTIME_NAME);
-      await runtime.put(GOOGLE_API_URL, googleApi);
-    }
-  } catch {
-    // The external loader is optional; the local app shell must still install.
-  }
+/** Release assets have identical bytes for every same-origin request. Servers
+ * may send Vary: Origin, while module and precache requests use different Origin
+ * headers. Ignore that variance only in the declared release cache, never in
+ * the runtime cache used for arbitrary resources.
+ */
+async function matchPrecache(request) {
+  const precache = await caches.open(PRECACHE_NAME);
+  return precache.match(request, { ignoreVary: true });
 }
 
 /** Serves immutable, content-hashed build assets directly from the precache. */
 async function handleRevisionedAsset(request) {
-  const cached = await caches.match(request);
+  const cached = (await matchPrecache(request)) ?? (await caches.match(request));
   if (cached) {
     return cached;
   }
@@ -64,26 +63,8 @@ async function handleNetworkFirst(request) {
     }
     return response;
   } catch {
-    return (await runtime.match(request)) ?? caches.match(request);
+    return (await runtime.match(request)) ?? matchPrecache(request);
   }
-}
-
-/** Returns cached third-party bootstrap code and refreshes it in the background. */
-async function handleGoogleApi(event) {
-  const cache = await caches.open(RUNTIME_NAME);
-  const cached = await cache.match(event.request);
-  const refreshed = fetch(event.request).then(async (response) => {
-    if (isCacheable(response)) {
-      await cache.put(event.request, response.clone());
-    }
-    return response;
-  });
-
-  if (cached) {
-    event.waitUntil(refreshed.catch(() => undefined));
-    return cached;
-  }
-  return refreshed;
 }
 
 self.addEventListener("install", (event) => {
@@ -119,11 +100,6 @@ self.addEventListener("fetch", (event) => {
   const url = new URL(request.url);
   if (request.mode === "navigate") {
     event.respondWith(handleNavigation(request));
-    return;
-  }
-
-  if (url.href === GOOGLE_API_URL) {
-    event.respondWith(handleGoogleApi(event));
     return;
   }
 

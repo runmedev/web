@@ -1,3 +1,4 @@
+import { canLoadContentAsset } from '../../lib/externalServices'
 import { useCallback, useEffect, useMemo, useState } from 'react'
 
 import { useGoogleAuth } from '../../contexts/GoogleAuthContext'
@@ -269,6 +270,13 @@ export default function ResourceCell({ cell }: { cell: parser_pb.Cell }) {
   }
 
   const src = state.objectUrl ?? resource.source.uri
+  if (
+    ['image', 'video', 'audio'].includes(state.renderer) &&
+    !canLoadContentAsset(src)
+  )
+    return (
+      <div role="note">External resource unavailable in this deployment.</div>
+    )
   if (state.renderer === 'image') {
     return (
       <img

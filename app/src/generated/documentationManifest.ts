@@ -170,4 +170,12 @@ export const DOCUMENTATION_MANIFEST = [
     order: 20,
     path: 'docs/20-agent-monitors.md',
   },
+  {
+    name: 'storage-recovery',
+    title: 'Restart Runme storage',
+    description:
+      'Recover a storage worker version mismatch without closing the browser or losing notebook editor copies.',
+    order: 21,
+    path: 'docs/21-storage-recovery.md',
+  },
 ] as const satisfies readonly DocumentationManifestEntry[]

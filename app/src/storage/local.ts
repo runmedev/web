@@ -646,6 +646,12 @@ export class LocalNotebooks extends Dexie {
     this.workQueue = undefined
   }
 
+  /** Quiesce background work without replacing the closed queue during worker shutdown. */
+  async drainForStorageRestart(): Promise<void> {
+    this.workQueue?.close()
+    await this.workQueue?.drain()
+  }
+
   /** Read bounded owner-side diagnostics without scanning files or touching OPFS. */
   async getDriveQueueMetrics() {
     return this.getWorkQueue().getMetrics()

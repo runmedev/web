@@ -62,3 +62,9 @@ jobs:
           src/lib/runtime/sandboxJsKernel.test.ts src/lib/notebookData.test.ts
           src/components/Actions/Actions.test.tsx
           --maxWorkers=2 --minWorkers=1
+      - name: Test storage restart and editor recovery
+        run: >-
+          pnpm -C app exec vitest run
+          src/storage/storageRecovery.test.ts src/lib/storageRecoveryDrafts.test.ts
+          src/components/StorageRecoveryBanner.test.tsx
+          --maxWorkers=2 --minWorkers=1
