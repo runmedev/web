@@ -7,3 +7,8 @@ strictPeerDependencies: false
 onlyBuiltDependencies:
   - '@tailwindcss/oxide'
   - esbuild
+  - electron
+
+# Keep Electron's Node type dependency pinned for reproducible installs.
+overrides:
+  'electron>@types/node': 24.10.1

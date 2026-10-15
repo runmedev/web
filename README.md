@@ -89,3 +89,9 @@ pnpm run lint
 - `packages/react-console`: Runme Console is a terminal attached to a Runme execution.
 
 All dependencies are managed efficiently through pnpm's workspace features.
+
+## Bundled desktop app
+
+Build the Electron app and local MCP interface with `pnpm build:desktop`, then
+launch with `pnpm desktop`. See [Runme Desktop and local MCP](docs/22-desktop-runtime.md)
+for packaging, runner configuration, persistent storage, and Codex setup.

@@ -178,4 +178,12 @@ export const DOCUMENTATION_MANIFEST = [
     order: 21,
     path: 'docs/21-storage-recovery.md',
   },
+  {
+    name: 'desktop-runtime',
+    title: 'Runme Desktop and local MCP',
+    description:
+      'Build and launch the bundled Electron Runme app, connect Codex to its local MCP endpoint, persist notebooks, and optionally package and start a Runme runner. Explains local authentication, packaging, and Linux executor usage.',
+    order: 22,
+    path: 'docs/22-desktop-runtime.md',
+  },
 ] as const satisfies readonly DocumentationManifestEntry[]
