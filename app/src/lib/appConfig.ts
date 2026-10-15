@@ -503,6 +503,9 @@ export class RuntimeAppConfigSchema {
               workloadIdentity: {
                 authFlow: 'workload_identity' as const,
                 runnerName: pickString(drive, ['runnerName']),
+                ...(drive.provider !== undefined
+                  ? { provider: drive.provider as 'runner' | 'gke_metadata' }
+                  : {}),
                 expectedServiceAccountEmail: pickString(drive, [
                   'expectedServiceAccountEmail',
                 ]),

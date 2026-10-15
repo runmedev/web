@@ -18,7 +18,19 @@ test('MCP authenticates, discovers the live registry, and propagates calls/error
         result: JSON.stringify(request.arguments),
       })
   })
-  bridge.setTools([{ name: 'echo', inputSchema: { type: 'object' } }])
+  const catalog = [
+    {
+      name: 'echo',
+      title: 'Echo tool',
+      description: 'Echo the supplied value.',
+      inputSchema: {
+        type: 'object' as const,
+        properties: { value: { type: 'number' } },
+      },
+      annotations: { readOnlyHint: true, untrustedContentHint: true },
+    },
+  ]
+  bridge.setTools(catalog)
   const http = await startMcpServer(bridge, 'a'.repeat(64), 0)
   const url = new URL(
     `http://127.0.0.1:${(http.address() as { port: number }).port}/mcp`
@@ -64,7 +76,30 @@ test('MCP authenticates, discovers the live registry, and propagates calls/error
         requestInit: { headers: { Authorization: `Bearer ${'a'.repeat(64)}` } },
       })
     )
-    assert.equal((await client.listTools()).tools[0].name, 'echo')
+    const wire = await fetch(url, {
+      method: 'POST',
+      headers: {
+        Authorization: `Bearer ${'a'.repeat(64)}`,
+        'Content-Type': 'application/json',
+        Accept: 'application/json, text/event-stream',
+      },
+      body: JSON.stringify({
+        jsonrpc: '2.0',
+        id: 9,
+        method: 'tools/list',
+        params: {},
+      }),
+    })
+    assert.deepEqual((await wire.json()).result.tools, catalog)
+    // The SDK client drops annotations outside its own MCP schema. The wire
+    // catalog above still retains them for clients supporting WebMCP hints.
+    assert.deepEqual(
+      (await client.listTools()).tools,
+      catalog.map((tool) => ({
+        ...tool,
+        annotations: { readOnlyHint: true },
+      }))
+    )
     const result = await client.callTool({
       name: 'echo',
       arguments: { value: 42 },

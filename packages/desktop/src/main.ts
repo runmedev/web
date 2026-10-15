@@ -5,6 +5,7 @@ import { access, chmod, mkdir, readFile, writeFile } from 'node:fs/promises'
 import type { Server } from 'node:http'
 import path from 'node:path'
 
+import { GoogleCredentials, googlePolicyFromEnv } from './googleCredentials.js'
 import { channels } from './protocol.js'
 import { startAssetServer, startMcpServer } from './server.js'
 import { ToolBridge } from './toolBridge.js'
@@ -112,6 +113,8 @@ async function start() {
     ? process.resourcesPath
     : path.resolve(__dirname, '..')
   const assets = path.join(resources, 'web')
+  const googlePolicy = googlePolicyFromEnv(process.env)
+  const googleCredentials = new GoogleCredentials(googlePolicy)
   const config = process.env.RUNME_APP_CONFIG
     ? await readFile(path.resolve(process.env.RUNME_APP_CONFIG), 'utf8')
     : JSON.stringify({
@@ -120,6 +123,17 @@ async function start() {
           defaultRunnerEndpoint: 'ws://127.0.0.1:9988/ws',
         },
         externalServices: { analytics: false, remoteContent: false },
+        ...(googlePolicy
+          ? {
+              googleDrive: {
+                authFlow: 'workload_identity',
+                provider: 'gke_metadata',
+                expectedServiceAccountEmail: googlePolicy.serviceAccountEmail,
+                scopes: googlePolicy.allowedScopes,
+                lifetimeSeconds: 900,
+              },
+            }
+          : {}),
       })
   const ui = await startAssetServer(
     assets,
@@ -190,10 +204,16 @@ async function start() {
     if (!contents.isDestroyed()) contents.send(channels.request, request)
   })
   const currentBridge = bridge
-  const trusted = (event: Electron.IpcMainEvent) =>
+  const trusted = (
+    event: Electron.IpcMainEvent | Electron.IpcMainInvokeEvent
+  ) =>
     event.sender === contents &&
     event.senderFrame === contents.mainFrame &&
     new URL(event.senderFrame.url).origin === origin
+  ipcMain.handle(channels.googleToken, async (event, request) => {
+    if (!trusted(event)) throw new Error('Untrusted Google credential caller')
+    return googleCredentials.mint(request)
+  })
   ipcMain.on(channels.catalog, (event, tools) => {
     if (!trusted(event)) return
     try {

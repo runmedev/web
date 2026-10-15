@@ -3,6 +3,7 @@ export const channels = {
   catalog: 'runme:tool-catalog',
   request: 'runme:tool-request',
   response: 'runme:tool-response',
+  googleToken: 'runme:google-token',
 } as const
 
 export type ToolDescriptor = {
@@ -25,7 +26,23 @@ export type ToolRequest =
 export type ToolResponse = { id: string; result?: string; error?: string }
 
 export interface DesktopBridge {
+  googleAccessToken?(request: GoogleTokenRequest): Promise<GoogleTokenResult>
   publishTools(tools: ToolDescriptor[]): void
   onRequest(listener: (request: ToolRequest) => void): () => void
   respond(response: ToolResponse): void
+}
+
+export interface GoogleTokenRequest {
+  expectedServiceAccountEmail: string
+  scopes: string[]
+  lifetimeSeconds?: number
+  forceRefresh?: boolean
+}
+
+export interface GoogleTokenResult {
+  accessToken: string
+  tokenType: 'Bearer'
+  expiresAt: string
+  serviceAccountEmail: string
+  scopes: string[]
 }

@@ -1,3 +1,4 @@
+import type { DesktopBridge } from '../../../packages/desktop/src/protocol'
 import {
   getRunnerAuthStatus,
   getRunnerIdToken,
@@ -6,7 +7,8 @@ import {
 
 export interface WorkloadIdentityDriveConfig {
   authFlow: 'workload_identity'
-  runnerName: string
+  provider?: 'runner' | 'gke_metadata'
+  runnerName?: string
   expectedServiceAccountEmail: string
   scopes: string[]
   lifetimeSeconds?: number
@@ -44,8 +46,10 @@ function normalize(
   if (
     !input ||
     input.authFlow !== 'workload_identity' ||
-    typeof input.runnerName !== 'string' ||
-    !input.runnerName.trim() ||
+    (input.provider !== undefined &&
+      !['runner', 'gke_metadata'].includes(input.provider)) ||
+    (input.provider !== 'gke_metadata' &&
+      (typeof input.runnerName !== 'string' || !input.runnerName.trim())) ||
     typeof input.expectedServiceAccountEmail !== 'string' ||
     !/^[\w.-]+@[\w.-]+\.iam\.gserviceaccount\.com$/.test(
       input.expectedServiceAccountEmail
@@ -66,7 +70,9 @@ function normalize(
     throw new Error('Invalid token lifetime')
   return {
     authFlow: 'workload_identity',
-    runnerName: input.runnerName,
+    ...(input.provider === 'gke_metadata'
+      ? { provider: 'gke_metadata' as const }
+      : { runnerName: input.runnerName }),
     expectedServiceAccountEmail: input.expectedServiceAccountEmail,
     scopes: [...new Set(input.scopes)].sort(),
     lifetimeSeconds: lifetime,
@@ -98,7 +104,13 @@ export function configureGoogleWorkloadIdentity(
   invalidate()
 }
 
-/** Obtain only the requested Google scopes from the configured runner. */
+/** The isolated preload is the only desktop credential transport; web mode has no fallback. */
+function desktopGoogle() {
+  return (window as Window & { runmeDesktop?: DesktopBridge }).runmeDesktop
+    ?.googleAccessToken
+}
+
+/** Obtain requested Google scopes through the selected workload provider. */
 export function getWorkloadIdentityAccessToken(
   forceRefresh = false
 ): Promise<string> {
@@ -113,39 +125,54 @@ export function getWorkloadIdentityAccessToken(
   if (pending) return pending
   const currentGeneration = generation
   const work = (async () => {
-    const status = getRunnerAuthStatus({ runnerName: cfg.runnerName })
-    if (!status.runnerBaseUrl)
-      throw new Error('Runner authentication needs key provisioning')
-    const jwt = await getRunnerIdToken(cfg.runnerName)
-    if (generation !== currentGeneration)
-      throw new Error('Workload identity configuration changed')
     const requestGeneration = currentGeneration
-    const response = await fetch(
-      `${status.runnerBaseUrl}/v1/credentials/google:mint`,
-      {
-        method: 'POST',
-        credentials: 'omit',
-        redirect: 'error',
-        signal: AbortSignal.timeout(20000),
-        headers: {
-          Authorization: `Bearer ${jwt}`,
-          'Content-Type': 'application/json',
-        },
-        body: JSON.stringify({
-          scopes: cfg.scopes,
-          lifetimeSeconds: cfg.lifetimeSeconds,
-        }),
-      }
-    )
-    if (!response.ok)
-      throw new Error(
-        response.status === 401
-          ? 'Runner authentication needs key provisioning'
-          : response.status === 403
-            ? 'Runner denied Google token creation or requested scopes'
-            : 'Runner Google token service unavailable'
-      )
-    const result = await response.json()
+    const result =
+      cfg.provider === 'gke_metadata'
+        ? await (() => {
+            const mint = desktopGoogle()
+            if (!mint)
+              throw new Error('GKE metadata provider requires Runme Desktop')
+            return mint({
+              expectedServiceAccountEmail: cfg.expectedServiceAccountEmail,
+              scopes: cfg.scopes,
+              lifetimeSeconds: cfg.lifetimeSeconds,
+              forceRefresh,
+            })
+          })()
+        : await (async () => {
+            const status = getRunnerAuthStatus({ runnerName: cfg.runnerName! })
+            if (!status.runnerBaseUrl)
+              throw new Error('Runner authentication needs key provisioning')
+            const jwt = await getRunnerIdToken(cfg.runnerName!)
+            if (generation !== currentGeneration)
+              throw new Error('Workload identity configuration changed')
+            const response = await fetch(
+              `${status.runnerBaseUrl}/v1/credentials/google:mint`,
+              {
+                method: 'POST',
+                credentials: 'omit',
+                redirect: 'error',
+                signal: AbortSignal.timeout(20000),
+                headers: {
+                  Authorization: `Bearer ${jwt}`,
+                  'Content-Type': 'application/json',
+                },
+                body: JSON.stringify({
+                  scopes: cfg.scopes,
+                  lifetimeSeconds: cfg.lifetimeSeconds,
+                }),
+              }
+            )
+            if (!response.ok)
+              throw new Error(
+                response.status === 401
+                  ? 'Runner authentication needs key provisioning'
+                  : response.status === 403
+                    ? 'Runner denied Google token creation or requested scopes'
+                    : 'Runner Google token service unavailable'
+              )
+            return response.json()
+          })()
     const expiresAt = Date.parse(result.expiresAt)
     if (
       result.tokenType !== 'Bearer' ||
@@ -159,7 +186,9 @@ export function getWorkloadIdentityAccessToken(
       expiresAt <= Date.now() + 5000 ||
       expiresAt > Date.now() + (cfg.lifetimeSeconds! + 30) * 1000
     )
-      throw new Error('Runner returned unexpected Google credentials')
+      throw new Error(
+        'Workload provider returned unexpected Google credentials'
+      )
     if (
       requestGeneration !== generation ||
       JSON.stringify(getWorkloadIdentityConfig()) !== JSON.stringify(cfg)
@@ -182,7 +211,7 @@ export function getWorkloadIdentityAccessToken(
         emit()
       }
       throw new Error(
-        'Unable to obtain workload identity credentials; check runner authentication, scopes, and availability'
+        'Unable to obtain workload identity credentials; check the selected provider, identity, scopes, and availability'
       )
     })
     .finally(() => {
@@ -202,10 +231,13 @@ export function getWorkloadIdentityStatus() {
         // Otherwise an idle expired token disables the only queue that can renew it.
         canRenew:
           !suspended &&
-          getRunnerAuthStatus({ runnerName: cfg.runnerName }).configured,
+          (cfg.provider === 'gke_metadata'
+            ? Boolean(desktopGoogle())
+            : getRunnerAuthStatus({ runnerName: cfg.runnerName! }).configured),
         authFlow: 'workload_identity' as const,
         effectivePrincipal: cfg.expectedServiceAccountEmail,
-        authorizingPrincipal: 'runme',
+        authorizingPrincipal:
+          cfg.provider === 'gke_metadata' ? 'GKE workload identity' : 'runme',
         expiresAt: token ? new Date(token.expiresAt).toISOString() : null,
         renewal: 'workload_identity' as const,
         lastError,

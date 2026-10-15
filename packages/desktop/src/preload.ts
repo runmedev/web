@@ -4,6 +4,8 @@ import { type DesktopBridge, channels } from './protocol.js'
 
 // Sandboxed preload exposes only the tool transport, never ipcRenderer or Node.
 const bridge: DesktopBridge = {
+  googleAccessToken: (request) =>
+    ipcRenderer.invoke(channels.googleToken, request),
   publishTools: (tools) => ipcRenderer.send(channels.catalog, tools),
   onRequest: (listener) => {
     const handler = (

@@ -23,7 +23,7 @@ create a second notebook store or a separate implementation of editing.
 ## Build and launch
 
 Use Node 22.12+ (or Node 24) and the repository's pinned pnpm. Run from the repo
-root. Electron is downloaded for the build machine's platform and architecture.
+root. By default Electron is downloaded for the build machine's platform and architecture.
 
 ```sh {"name":"build-desktop"}
 pnpm install --frozen-lockfile
@@ -68,7 +68,7 @@ GUI client started separately, configure its environment accordingly. Localhost
 refers to that client's network namespace; a client outside the executor needs
 explicit forwarding. The app does not publish an external endpoint.
 
-Read `ReadInstructionsForAIAgents` first. For example, call `ExecuteCode` with:
+Read `readInstructionsForAIAgents` first. For example, call `ExecuteCode` with:
 
 ```json
 {
@@ -101,7 +101,7 @@ pnpm package:desktop
 Outputs appear in `packages/desktop/release/`. On macOS launch
 `Runme.app/Contents/MacOS/runme-desktop`; on Linux launch `runme-desktop` in the
 output directory. These are unsigned application bundles, not signed installers.
-Build on the target platform; cross-compiling the runner is not performed.
+Linux bundles can also be assembled on macOS; the Go runner must be built separately for the target.
 
 To have the app supervise the bundled runner, set `RUNME_RUNNER_CONFIG` to an
 absolute runner YAML path before launch. An optional `RUNME_RUNNER_BINARY`
@@ -117,8 +117,7 @@ and no signing key is copied into the package.
 
 `RUNME_APP_CONFIG` can point to a public `app-configs.yaml` with different runner
 endpoints or workload identity configuration. It is served to the renderer;
-never put private keys or tokens there. For Drive use the existing runner-backed
-workload identity tools. Interactive OAuth popups and external navigation are
+never put private keys or tokens there. An explicit file replaces the generated default configuration, including the Google Drive provider described below. Interactive OAuth popups and external navigation are
 currently blocked in the desktop host; there is no new desktop OAuth callback
 integration in this implementation.
 
@@ -146,3 +145,120 @@ and reloads to verify tool re-registration. It does not require cloud credential
 or a fake backend. Artifacts go to `app/test/browser/test-output/desktop/`.
 To test a packaged executable, set `RUNME_DESKTOP_EXECUTABLE` to its absolute
 path before running `pnpm smoke:desktop`.
+
+## One tool interface for web and desktop
+
+`WebMcpToolRegistrationHost` registers the application tools once. In a browser,
+it registers with `navigator.modelContext`; in Electron, the same registration
+code uses `createDesktopToolContext`. That adapter keeps the handlers in the
+renderer and publishes their JSON descriptors over the isolated preload.
+`tools/list` returns this live catalog. `tools/call` forwards the name and
+arguments to the same handler and wraps its result string as MCP text content.
+There is no desktop-only notebook tool catalog or schema generation pipeline.
+
+Names, titles, descriptions, input schemas, and annotations are identical on
+the wire. WebMCP-specific annotations are preserved even though some MCP SDK
+clients strip hints outside their own schema. Registration parity and transport
+regression tests protect this contract. A new tool added to the registration
+host automatically appears in both environments.
+
+The initial transport is stateless HTTP: it does not advertise tool-list-change
+notifications. Clients should list tools again after renderer reload. During
+startup or reload, discovery reports that the app is loading. In-flight calls
+fail on renderer loss; mutations are never automatically retried.
+
+## Google Drive using the pod's workload identity
+
+Set the target service account before starting the app:
+
+```sh
+export RUNME_GOOGLE_SERVICE_ACCOUNT=runme@YOUR_PROJECT.iam.gserviceaccount.com
+# Optional: restrict the default Drive scope to the required scopes.
+export RUNME_GOOGLE_SCOPES=https://www.googleapis.com/auth/drive
+```
+
+This enables the `gke_metadata` provider and generates public Drive configuration
+at startup. No Google token or key is packaged or persisted. If using
+`RUNME_APP_CONFIG`, include the following in that file instead of relying on the
+generated configuration (the environment variables above still pin host policy):
+
+```yaml
+googleDrive:
+  authFlow: workload_identity
+  provider: gke_metadata
+  expectedServiceAccountEmail: runme@YOUR_PROJECT.iam.gserviceaccount.com
+  scopes:
+    - https://www.googleapis.com/auth/drive
+  lifetimeSeconds: 900
+```
+
+The existing `configureGoogleWorkloadIdentity` tool accepts these same fields;
+`runnerName` is required only for the default `runner` provider. Both web and
+desktop expose this identical schema. Using `gke_metadata` outside the desktop
+host fails explicitly; it never falls back to a personal Google account.
+
+The renderer calls a narrow preload method. JavaScript in Electron's main
+process obtains credential A from the GKE metadata server, then calls IAM
+Credentials `generateAccessToken` for the pinned service account and Drive
+scopes to obtain credential B. Only B is returned to the existing Drive client.
+The source credential remains in the host process. Tokens are coalesced and
+cached in memory with expiry and force-refresh handling. Requests cannot select
+another metadata host, IAM endpoint, service account, or broader scope.
+
+Node's HTTP client has no browser CORS restriction, so this flow needs no
+`--disable-web-security` flag and no runner credential helper. Keeping the
+renderer sandboxed also prevents notebook content from obtaining arbitrary
+host credentials. The runner remains optional for shell execution.
+
+Provision GKE Workload Identity and enable the IAM Service Account Credentials
+API in the project separately. The metadata principal must have
+`iam.serviceAccounts.getAccessToken` on the target account. For a federated KSA,
+a suitable workload identity binding can supply this; if the metadata identity
+is already the target GSA, grant it permission to mint its own access token.
+Share the relevant Drive files/folders or Shared Drive with that GSA. IAM and
+OAuth scopes do not grant Drive file access. Use a Shared Drive for creating
+notebooks because service accounts cannot own My Drive files.
+
+## Package Linux for executor pods
+
+The packager downloads the target Electron distribution; it does not compile
+Chromium. Supported Linux targets are `x64` and `arm64`. It rejects a runner
+whose ELF architecture differs from the requested target.
+
+```sh
+export RUNME_TARGET_PLATFORM=linux
+export RUNME_TARGET_ARCH=x64
+export RUNME_RUNNER_BINARY=/absolute/path/to/runme-linux-amd64 # optional
+pnpm package:desktop
+```
+
+The release directory contains `Runme-linux-x64/` and a versioned
+`runme-desktop-linux-x64-<commit>.tar.gz`, checksum file, and JSON manifest.
+Uncommitted source adds a `-dirty` suffix. The manifest records the full commit,
+Electron version, target, and whether the runner is included. Ship the entire
+archive; the executable depends on its bundled resources. Publish only these
+three artifacts to a versioned GCS prefix, never the checkout or profile.
+
+In the executor image, install Xvfb and Electron's Linux shared libraries
+(including GTK, NSS, and GBM). Run as a non-root user with a working Chromium
+sandbox. Extract the archive to the PVC, then launch:
+
+```sh
+export RUNME_DESKTOP_DATA_DIR=/workspace/runme/profile
+export RUNME_GOOGLE_SERVICE_ACCOUNT=runme@YOUR_PROJECT.iam.gserviceaccount.com
+/workspace/runme/Runme-linux-x64/start-headless.sh
+```
+
+The launcher uses Electron's bundled Node runtime to start Xvfb on an available
+display, launch hidden Electron, and forward termination to the app before
+stopping Xvfb. It reuses `DISPLAY` when already set. This does not install a
+separate Node runtime, Chrome, agent-browser daemon, or global browser flags.
+The MCP bridge supplies the integration with Chromium; agent-browser remains
+an alternative for UI automation, not a dependency for notebook tools.
+
+Before rolling out to agents, smoke-test the Linux archive in the actual
+executor image: discover tools, create/edit/reopen a local notebook across a
+restart, read/write a shared Drive notebook, refresh credentials after expiry,
+and check denied IAM/Drive permissions fail without interactive fallback.
+The local test suite covers policy, exchange, expiry, disconnect, transport,
+and registry parity; it cannot certify the pod's IAM, Drive ACLs, or sandbox.

@@ -22,7 +22,14 @@ export class ToolBridge {
   setTools(value: unknown) {
     if (!Array.isArray(value) || value.length > 256)
       throw new Error('Invalid tool catalog')
-    const tools = value.map((tool) => ToolSchema.parse(tool))
+    const tools = value.map((tool) => {
+      const parsed = ToolSchema.parse(tool)
+      // MCP's schema strips WebMCP extensions (e.g. untrustedContentHint).
+      // Validate the MCP fields, then retain the registry's JSON annotations.
+      return tool.annotations
+        ? { ...parsed, annotations: structuredClone(tool.annotations) }
+        : parsed
+    })
     if (new Set(tools.map((tool) => tool.name)).size !== tools.length)
       throw new Error('Duplicate tools')
     this.tools = tools

@@ -49,7 +49,7 @@ export async function startMcpServer(
       {
         capabilities: { tools: {} },
         instructions:
-          'Runme tools operate on the live application. Read ReadInstructionsForAIAgents first. Use ExecuteCode and its operation polling/cancellation tools for notebook workflows. After disconnection, inspect state before retrying mutations.',
+          'Runme tools operate on the live application. Call readInstructionsForAIAgents first. Use ExecuteCode and its operation polling/cancellation tools for notebook workflows. After reload or disconnection, list tools again and inspect state before retrying mutations.',
       }
     )
     const disconnected = new AbortController()
