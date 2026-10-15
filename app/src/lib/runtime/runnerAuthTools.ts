@@ -103,12 +103,13 @@ export function runnerAuthTools() {
       name: 'configureGoogleWorkloadIdentity',
       title: 'Configure Google Workload Identity',
       description:
-        'Select unattended Drive authentication using an already configured runner. Returns status only, never a Google token.',
+        'Select unattended Drive authentication using a configured runner or the desktop GKE metadata provider. Returns status only, never a Google token.',
       inputSchema: {
         type: 'object',
         additionalProperties: false,
         properties: {
           authFlow: { const: 'workload_identity' },
+          provider: { type: 'string', enum: ['runner', 'gke_metadata'] },
           runnerName: textField,
           expectedServiceAccountEmail: textField,
           scopes: {
@@ -119,12 +120,17 @@ export function runnerAuthTools() {
           },
           lifetimeSeconds: { type: 'integer', minimum: 60, maximum: 3600 },
         },
-        required: [
-          'authFlow',
-          'runnerName',
-          'expectedServiceAccountEmail',
-          'scopes',
+        allOf: [
+          {
+            if: {
+              properties: { provider: { const: 'gke_metadata' } },
+              required: ['provider'],
+            },
+            then: {},
+            else: { required: ['runnerName'] },
+          },
         ],
+        required: ['authFlow', 'expectedServiceAccountEmail', 'scopes'],
       },
       run: (input: Record<string, unknown>) =>
         configureWorkloadDrive(input as unknown as WorkloadIdentityDriveConfig),

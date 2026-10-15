@@ -31,6 +31,7 @@ Current numbered docs:
 - [16-notebook-diffs.md](16-notebook-diffs.md)
 - [17-ipynb-notebooks.md](17-ipynb-notebooks.md)
 - [18-progressive-web-app.md](18-progressive-web-app.md)
+- [22-desktop-runtime.md](22-desktop-runtime.md)
 
 These docs intentionally exclude implementation-only material such as deployment
 internals and design proposals. Internal notes remain under `docs-dev/` and
