@@ -1,4 +1,8 @@
-import type { GoogleTokenRequest, GoogleTokenResult } from './protocol.js'
+import type {
+  GoogleTokenMode,
+  GoogleTokenRequest,
+  GoogleTokenResult,
+} from './protocol.js'
 
 const metadataUrl =
   'http://metadata.google.internal/computeMetadata/v1/instance/service-accounts/default/token'
@@ -9,6 +13,7 @@ const driveScopes = new Set([
 ])
 
 export interface GoogleCredentialPolicy {
+  tokenMode?: GoogleTokenMode
   serviceAccountEmail: string
   allowedScopes: string[]
 }
@@ -19,6 +24,8 @@ export function googlePolicyFromEnv(
 ): GoogleCredentialPolicy | undefined {
   if (!env.RUNME_GOOGLE_SERVICE_ACCOUNT) return undefined
   const policy = {
+    tokenMode: (env.RUNME_GOOGLE_TOKEN_MODE ??
+      'iam_exchange') as GoogleTokenMode,
     serviceAccountEmail: env.RUNME_GOOGLE_SERVICE_ACCOUNT,
     allowedScopes: (
       env.RUNME_GOOGLE_SCOPES ?? 'https://www.googleapis.com/auth/drive'
@@ -27,6 +34,7 @@ export function googlePolicyFromEnv(
       .map((s) => s.trim()),
   }
   if (
+    !['iam_exchange', 'metadata_direct'].includes(policy.tokenMode) ||
     !/^[\w.-]+@[\w.-]+\.iam\.gserviceaccount\.com$/.test(
       policy.serviceAccountEmail
     ) ||
@@ -34,12 +42,12 @@ export function googlePolicyFromEnv(
     policy.allowedScopes.some((s) => !driveScopes.has(s))
   )
     throw new Error(
-      'Invalid desktop Google service account or Drive scope policy'
+      'Invalid desktop Google token mode, service account, or Drive scope policy'
     )
   return policy
 }
 
-/** JavaScript-only workload credentials. The metadata token never leaves the main process.
+/** JavaScript-only workload credentials. Only the selected scoped token reaches the renderer.
  * Fixed endpoints and a pinned account prevent turning preload into an arbitrary fetch proxy.
  */
 export class GoogleCredentials {
@@ -71,9 +79,15 @@ export class GoogleCredentials {
             'scopes',
             'lifetimeSeconds',
             'forceRefresh',
+            'tokenMode',
           ].includes(k)
       ) ||
       input.expectedServiceAccountEmail !== policy.serviceAccountEmail ||
+      (input.tokenMode ?? 'iam_exchange') !==
+        (policy.tokenMode ?? 'iam_exchange') ||
+      !['iam_exchange', 'metadata_direct'].includes(
+        input.tokenMode ?? 'iam_exchange'
+      ) ||
       !Array.isArray(input.scopes) ||
       input.scopes.length < 1 ||
       input.scopes.length > 3 ||
@@ -84,11 +98,16 @@ export class GoogleCredentials {
         typeof input.forceRefresh !== 'boolean')
     )
       throw new Error('Desktop Google identity or scopes are not allowed')
+    const mode = input.tokenMode ?? 'iam_exchange'
+    if (mode === 'metadata_direct' && input.lifetimeSeconds !== undefined)
+      throw new Error(
+        'lifetimeSeconds is not supported in metadata_direct mode; metadata controls expiry'
+      )
     const lifetime = input.lifetimeSeconds ?? 900
     if (!Number.isInteger(lifetime) || lifetime < 60 || lifetime > 3600)
       throw new Error('Invalid desktop Google token lifetime')
     const scopes = [...new Set(input.scopes)].sort()
-    const key = JSON.stringify([scopes, lifetime])
+    const key = JSON.stringify([mode, scopes, lifetime])
     if (input.forceRefresh) this.cache.delete(key)
     const cached = this.cache.get(key)
     if (cached && cached.refreshAt > this.now())
@@ -97,7 +116,7 @@ export class GoogleCredentials {
     if (pending) return structuredClone(await pending)
     if (this.pending.size >= 8)
       throw new Error('Too many concurrent Google credential requests')
-    const work = this.exchange(scopes, lifetime)
+    const work = this.exchange(scopes, lifetime, mode)
       .then((result) => {
         if (this.cache.size >= 32)
           this.cache.delete(this.cache.keys().next().value!)
@@ -113,29 +132,45 @@ export class GoogleCredentials {
     return structuredClone(await work)
   }
 
+  /** Fixed metadata requests stay in the main process and never follow redirects. */
+  private async metadata(url: string): Promise<Response> {
+    for (let attempt = 0; attempt < 3; attempt++) {
+      const response = await this.request(url, {
+        headers: { 'Metadata-Flavor': 'Google' },
+        redirect: 'error',
+        signal: AbortSignal.timeout(5000),
+      })
+      if (response.ok) return response
+      await response.body?.cancel()
+      if ((response.status !== 429 && response.status < 500) || attempt === 2)
+        throw new Error('Metadata unavailable')
+      await new Promise((resolve) => setTimeout(resolve, 200 * (attempt + 1)))
+    }
+    throw new Error('Metadata unavailable')
+  }
+
+  /** Direct mode verifies the pod identity; exchange mode may target a different GSA. */
   private async exchange(
     scopes: string[],
-    lifetime: number
+    lifetime: number,
+    mode: GoogleTokenMode
   ): Promise<GoogleTokenResult> {
     let stage = 'metadata'
     try {
-      // Metadata can briefly be unavailable during GKE pod startup. Only retry transient failures.
-      let metadata: Response | undefined
-      for (let attempt = 0; attempt < 3; attempt++) {
-        metadata = await this.request(metadataUrl, {
-          headers: { 'Metadata-Flavor': 'Google' },
-          redirect: 'error',
-          signal: AbortSignal.timeout(5000),
-        })
-        if (metadata.ok || (metadata.status !== 429 && metadata.status < 500))
-          break
-        await metadata.body?.cancel()
-        if (attempt < 2)
-          await new Promise((resolve) =>
-            setTimeout(resolve, 200 * (attempt + 1))
-          )
+      const url = new URL(metadataUrl)
+      if (mode === 'metadata_direct') {
+        stage = 'metadata identity'
+        const email = await this.metadata(
+          metadataUrl.replace(/token$/, 'email')
+        )
+        if ((await email.text()).trim() !== this.policy!.serviceAccountEmail)
+          throw new Error('Unexpected metadata identity')
+        url.searchParams.set('scopes', scopes.join(','))
       }
-      if (!metadata?.ok) throw new Error('Metadata unavailable')
+      stage = 'metadata token'
+      // Measure from request start so network latency never extends the token's lifetime.
+      const requestedAt = this.now()
+      const metadata = await this.metadata(url.toString())
       const source = await metadata.json()
       if (
         typeof source.access_token !== 'string' ||
@@ -145,6 +180,22 @@ export class GoogleCredentials {
         source.expires_in <= 0
       )
         throw new Error('Invalid metadata credentials')
+      if (mode === 'metadata_direct') {
+        const expiresAt = requestedAt + source.expires_in * 1000
+        if (
+          !Number.isSafeInteger(source.expires_in) ||
+          !Number.isFinite(expiresAt) ||
+          expiresAt <= this.now() + 5000
+        )
+          throw new Error('Invalid metadata expiry')
+        return {
+          accessToken: source.access_token,
+          tokenType: 'Bearer',
+          expiresAt: new Date(expiresAt).toISOString(),
+          serviceAccountEmail: this.policy!.serviceAccountEmail,
+          scopes,
+        }
+      }
       stage = 'IAM Credentials'
       const response = await this.request(
         `https://iamcredentials.googleapis.com/v1/projects/-/serviceAccounts/${this.policy!.serviceAccountEmail}:generateAccessToken`,
@@ -181,7 +232,7 @@ export class GoogleCredentials {
     } catch {
       // Upstream bodies, URLs, and exception strings may include credentials: never reflect them.
       throw new Error(
-        `GKE Drive ${stage} request failed; check workload identity, mint permission, and network access`
+        `GKE Drive ${stage} request failed; check workload identity, configured identity/scopes, and network access${stage === 'IAM Credentials' ? ' and mint permission' : ''}`
       )
     }
   }

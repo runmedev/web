@@ -7,6 +7,7 @@ import {
 import {
   type WorkloadIdentityDriveConfig,
   configureGoogleWorkloadIdentity,
+  desktopRequiredError,
   getWorkloadIdentityAccessToken,
   getWorkloadIdentityConfig,
 } from '../../auth/workloadIdentity'
@@ -110,6 +111,12 @@ export function runnerAuthTools() {
         properties: {
           authFlow: { const: 'workload_identity' },
           provider: { type: 'string', enum: ['runner', 'gke_metadata'] },
+          tokenMode: {
+            type: 'string',
+            enum: ['iam_exchange', 'metadata_direct'],
+            description:
+              'Desktop host-pinned token mode. Defaults to iam_exchange. metadata_direct uses metadata expiry and does not accept lifetimeSeconds.',
+          },
           runnerName: textField,
           expectedServiceAccountEmail: textField,
           scopes: {
@@ -129,6 +136,20 @@ export function runnerAuthTools() {
             then: {},
             else: { required: ['runnerName'] },
           },
+          {
+            if: { required: ['tokenMode'] },
+            then: {
+              properties: { provider: { const: 'gke_metadata' } },
+              required: ['provider'],
+            },
+          },
+          {
+            if: {
+              properties: { tokenMode: { const: 'metadata_direct' } },
+              required: ['tokenMode'],
+            },
+            then: { not: { required: ['lifetimeSeconds'] } },
+          },
         ],
         required: ['authFlow', 'expectedServiceAccountEmail', 'scopes'],
       },
@@ -145,7 +166,10 @@ export function runnerAuthTools() {
     execute: async (input: Record<string, unknown>) => {
       try {
         return JSON.stringify(await run(input))
-      } catch {
+      } catch (error) {
+        // This local constant is safe to expose; upstream error bodies are not.
+        if (error instanceof Error && error.message === desktopRequiredError)
+          throw new Error(desktopRequiredError)
         throw new Error(
           'Runner authentication operation failed; verify configuration and availability'
         )

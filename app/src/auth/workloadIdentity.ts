@@ -1,4 +1,7 @@
-import type { DesktopBridge } from '../../../packages/desktop/src/protocol'
+import type {
+  DesktopBridge,
+  GoogleTokenMode,
+} from '../../../packages/desktop/src/protocol'
 import {
   getRunnerAuthStatus,
   getRunnerIdToken,
@@ -8,6 +11,7 @@ import {
 export interface WorkloadIdentityDriveConfig {
   authFlow: 'workload_identity'
   provider?: 'runner' | 'gke_metadata'
+  tokenMode?: GoogleTokenMode
   runnerName?: string
   expectedServiceAccountEmail: string
   scopes: string[]
@@ -65,17 +69,35 @@ function normalize(
     )
   )
     throw new Error('Invalid workload identity Drive configuration')
+  if (
+    input.tokenMode !== undefined &&
+    (input.provider !== 'gke_metadata' ||
+      !['iam_exchange', 'metadata_direct'].includes(input.tokenMode))
+  )
+    throw new Error('Invalid GKE metadata token mode')
+  if (
+    input.tokenMode === 'metadata_direct' &&
+    input.lifetimeSeconds !== undefined
+  )
+    throw new Error(
+      'lifetimeSeconds is not supported in metadata_direct mode; metadata controls expiry'
+    )
   const lifetime = input.lifetimeSeconds ?? 900
   if (!Number.isInteger(lifetime) || lifetime < 60 || lifetime > 3600)
     throw new Error('Invalid token lifetime')
   return {
     authFlow: 'workload_identity',
     ...(input.provider === 'gke_metadata'
-      ? { provider: 'gke_metadata' as const }
+      ? {
+          provider: 'gke_metadata' as const,
+          ...(input.tokenMode ? { tokenMode: input.tokenMode } : {}),
+        }
       : { runnerName: input.runnerName }),
     expectedServiceAccountEmail: input.expectedServiceAccountEmail,
     scopes: [...new Set(input.scopes)].sort(),
-    lifetimeSeconds: lifetime,
+    ...(input.tokenMode === 'metadata_direct'
+      ? {}
+      : { lifetimeSeconds: lifetime }),
   }
 }
 
@@ -110,6 +132,9 @@ function desktopGoogle() {
     ?.googleAccessToken
 }
 
+export const desktopRequiredError =
+  'GKE metadata provider requires Runme Desktop'
+
 /** Obtain requested Google scopes through the selected workload provider. */
 export function getWorkloadIdentityAccessToken(
   forceRefresh = false
@@ -119,6 +144,8 @@ export function getWorkloadIdentityAccessToken(
     return Promise.reject(new Error('Workload identity is not configured'))
   if (suspended)
     return Promise.reject(new Error('Workload identity sync is disconnected'))
+  if (cfg.provider === 'gke_metadata' && !desktopGoogle())
+    return Promise.reject(new Error(desktopRequiredError))
   if (forceRefresh) token = undefined
   if (token && token.refreshAt > Date.now())
     return Promise.resolve(token.accessToken)
@@ -130,9 +157,9 @@ export function getWorkloadIdentityAccessToken(
       cfg.provider === 'gke_metadata'
         ? await (() => {
             const mint = desktopGoogle()
-            if (!mint)
-              throw new Error('GKE metadata provider requires Runme Desktop')
+            if (!mint) throw new Error(desktopRequiredError)
             return mint({
+              tokenMode: cfg.tokenMode,
               expectedServiceAccountEmail: cfg.expectedServiceAccountEmail,
               scopes: cfg.scopes,
               lifetimeSeconds: cfg.lifetimeSeconds,
@@ -184,7 +211,8 @@ export function getWorkloadIdentityAccessToken(
         JSON.stringify(cfg.scopes) ||
       !Number.isFinite(expiresAt) ||
       expiresAt <= Date.now() + 5000 ||
-      expiresAt > Date.now() + (cfg.lifetimeSeconds! + 30) * 1000
+      (cfg.tokenMode !== 'metadata_direct' &&
+        expiresAt > Date.now() + (cfg.lifetimeSeconds! + 30) * 1000)
     )
       throw new Error(
         'Workload provider returned unexpected Google credentials'

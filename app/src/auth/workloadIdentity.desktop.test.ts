@@ -64,7 +64,7 @@ it('uses only desktop JS credentials, coalesces renewal, and does not persist to
 it('fails closed outside desktop and rejects stale or mismatched credentials', async () => {
   configureGoogleWorkloadIdentity(config)
   await expect(getWorkloadIdentityAccessToken()).rejects.toThrow(
-    'selected provider'
+    'requires Runme Desktop'
   )
   let finish!: (value: ReturnType<typeof result>) => void
   desktopWindow.runmeDesktop = {
@@ -89,5 +89,62 @@ it('fails closed outside desktop and rejects stale or mismatched credentials', a
   }
   await expect(getWorkloadIdentityAccessToken()).rejects.toThrow(
     'selected provider'
+  )
+})
+
+it('direct mode accepts metadata expiry, caches with a margin, and refreshes only through preload', async () => {
+  vi.useFakeTimers()
+  try {
+    const mint = vi.fn().mockImplementation(async () => ({
+      ...result(),
+      expiresAt: new Date(Date.now() + 3600000).toISOString(),
+    }))
+    desktopWindow.runmeDesktop = { googleAccessToken: mint }
+    const fetcher = vi.fn()
+    vi.stubGlobal('fetch', fetcher)
+    configureGoogleWorkloadIdentity({
+      ...config,
+      lifetimeSeconds: undefined,
+      tokenMode: 'metadata_direct',
+    })
+    await Promise.all([
+      getWorkloadIdentityAccessToken(),
+      getWorkloadIdentityAccessToken(),
+    ])
+    expect(mint).toHaveBeenCalledTimes(1)
+    expect(mint).toHaveBeenLastCalledWith(
+      expect.objectContaining({
+        tokenMode: 'metadata_direct',
+        lifetimeSeconds: undefined,
+      })
+    )
+    vi.advanceTimersByTime(3479000)
+    await getWorkloadIdentityAccessToken()
+    expect(mint).toHaveBeenCalledTimes(1)
+    vi.advanceTimersByTime(1000)
+    await getWorkloadIdentityAccessToken()
+    expect(mint).toHaveBeenCalledTimes(2)
+    await getWorkloadIdentityAccessToken(true)
+    expect(mint).toHaveBeenCalledTimes(3)
+    expect(fetcher).not.toHaveBeenCalled()
+    expect(
+      JSON.stringify(localStorage) + JSON.stringify(sessionStorage)
+    ).not.toContain('desktop-google-secret')
+  } finally {
+    vi.useRealTimers()
+  }
+})
+
+it('rejects direct lifetime and non-desktop use clearly without alternate credentials', async () => {
+  expect(() =>
+    configureGoogleWorkloadIdentity({ ...config, tokenMode: 'metadata_direct' })
+  ).toThrow('lifetimeSeconds')
+  configureGoogleWorkloadIdentity({
+    ...config,
+    lifetimeSeconds: undefined,
+    tokenMode: 'metadata_direct',
+  })
+  await expect(getWorkloadIdentityAccessToken()).rejects.toThrow(
+    'requires Runme Desktop'
   )
 })

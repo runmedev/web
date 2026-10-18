@@ -43,6 +43,38 @@ describe('appConfig OIDC Google shorthand', () => {
     identity.resetWorkloadIdentityForTests()
   })
 
+  it('preserves direct metadata mode and rejects explicit lifetimes instead of defaulting them', async () => {
+    const { applyAppConfig } = await loadModules()
+    const identity = await import('../auth/workloadIdentity')
+    const config = {
+      authFlow: 'workload_identity',
+      provider: 'gke_metadata',
+      tokenMode: 'metadata_direct',
+      expectedServiceAccountEmail: 'runme@project.iam.gserviceaccount.com',
+      scopes: ['https://www.googleapis.com/auth/drive'],
+    }
+    try {
+      applyAppConfig({ googleDrive: config }, 'inline://direct-mode')
+      expect(identity.getWorkloadIdentityConfig()).toEqual(config)
+      for (const lifetimeSeconds of [900, '900', null]) {
+        expect(() =>
+          applyAppConfig(
+            { googleDrive: { ...config, lifetimeSeconds } },
+            'inline://direct-mode'
+          )
+        ).toThrow('lifetimeSeconds')
+      }
+      expect(() =>
+        applyAppConfig(
+          { googleDrive: { ...config, tokenMode: 'typo' } },
+          'inline://direct-mode'
+        )
+      ).toThrow('token mode')
+    } finally {
+      identity.resetWorkloadIdentityForTests()
+    }
+  })
+
   it('applies Google defaults when oidc.google is configured', async () => {
     const { applyAppConfig } = await loadModules()
 

@@ -506,12 +506,19 @@ export class RuntimeAppConfigSchema {
                 ...(drive.provider !== undefined
                   ? { provider: drive.provider as 'runner' | 'gke_metadata' }
                   : {}),
+                ...(drive.tokenMode !== undefined
+                  ? {
+                      tokenMode: drive.tokenMode as
+                        | 'iam_exchange'
+                        | 'metadata_direct',
+                    }
+                  : {}),
                 expectedServiceAccountEmail: pickString(drive, [
                   'expectedServiceAccountEmail',
                 ]),
                 scopes: asStringArray(drive.scopes),
-                ...(typeof drive.lifetimeSeconds === 'number'
-                  ? { lifetimeSeconds: drive.lifetimeSeconds }
+                ...(drive.lifetimeSeconds !== undefined
+                  ? { lifetimeSeconds: drive.lifetimeSeconds as number }
                   : {}),
               },
             }
