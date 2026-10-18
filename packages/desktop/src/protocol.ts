@@ -32,13 +32,9 @@ export interface DesktopBridge {
   respond(response: ToolResponse): void
 }
 
-export type GoogleTokenMode = 'iam_exchange' | 'metadata_direct'
-
 export interface GoogleTokenRequest {
-  tokenMode?: GoogleTokenMode
   expectedServiceAccountEmail: string
   scopes: string[]
-  lifetimeSeconds?: number
   forceRefresh?: boolean
 }
 

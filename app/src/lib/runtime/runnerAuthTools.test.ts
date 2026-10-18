@@ -22,7 +22,6 @@ describe('runner authentication tools', () => {
     const input = {
       authFlow: 'workload_identity',
       provider: 'gke_metadata',
-      tokenMode: 'metadata_direct',
       expectedServiceAccountEmail: 'runme@project.iam.gserviceaccount.com',
       scopes: ['https://www.googleapis.com/auth/drive'],
     }
@@ -46,8 +45,6 @@ describe('runner authentication tools', () => {
       expect(mint).toHaveBeenCalledWith({
         expectedServiceAccountEmail: input.expectedServiceAccountEmail,
         scopes: input.scopes,
-        tokenMode: 'metadata_direct',
-        lifetimeSeconds: undefined,
         forceRefresh: false,
       })
       await expect(

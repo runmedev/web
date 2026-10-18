@@ -489,6 +489,10 @@ export class RuntimeAppConfigSchema {
       const serviceAccount = parseGoogleDriveServiceAccount(
         drive.serviceAccount ?? drive.service_account
       )
+      if (authFlow === 'workload_identity' && 'tokenMode' in drive)
+        throw new Error(
+          'Remove tokenMode; GKE metadata authentication is direct-only'
+        )
       parsed.googleDrive = {
         clientId: pickString(drive, ['clientId', 'clientID']),
         clientSecret: hasClientMaterial
@@ -505,13 +509,6 @@ export class RuntimeAppConfigSchema {
                 runnerName: pickString(drive, ['runnerName']),
                 ...(drive.provider !== undefined
                   ? { provider: drive.provider as 'runner' | 'gke_metadata' }
-                  : {}),
-                ...(drive.tokenMode !== undefined
-                  ? {
-                      tokenMode: drive.tokenMode as
-                        | 'iam_exchange'
-                        | 'metadata_direct',
-                    }
                   : {}),
                 expectedServiceAccountEmail: pickString(drive, [
                   'expectedServiceAccountEmail',

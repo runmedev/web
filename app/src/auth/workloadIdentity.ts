@@ -1,7 +1,4 @@
-import type {
-  DesktopBridge,
-  GoogleTokenMode,
-} from '../../../packages/desktop/src/protocol'
+import type { DesktopBridge } from '../../../packages/desktop/src/protocol'
 import {
   getRunnerAuthStatus,
   getRunnerIdToken,
@@ -11,7 +8,6 @@ import {
 export interface WorkloadIdentityDriveConfig {
   authFlow: 'workload_identity'
   provider?: 'runner' | 'gke_metadata'
-  tokenMode?: GoogleTokenMode
   runnerName?: string
   expectedServiceAccountEmail: string
   scopes: string[]
@@ -69,18 +65,13 @@ function normalize(
     )
   )
     throw new Error('Invalid workload identity Drive configuration')
-  if (
-    input.tokenMode !== undefined &&
-    (input.provider !== 'gke_metadata' ||
-      !['iam_exchange', 'metadata_direct'].includes(input.tokenMode))
-  )
-    throw new Error('Invalid GKE metadata token mode')
-  if (
-    input.tokenMode === 'metadata_direct' &&
-    input.lifetimeSeconds !== undefined
-  )
+  if ('tokenMode' in input)
     throw new Error(
-      'lifetimeSeconds is not supported in metadata_direct mode; metadata controls expiry'
+      'Remove tokenMode; GKE metadata authentication is direct-only'
+    )
+  if (input.provider === 'gke_metadata' && input.lifetimeSeconds !== undefined)
+    throw new Error(
+      'lifetimeSeconds is not supported for gke_metadata; metadata controls expiry'
     )
   const lifetime = input.lifetimeSeconds ?? 900
   if (!Number.isInteger(lifetime) || lifetime < 60 || lifetime > 3600)
@@ -90,14 +81,11 @@ function normalize(
     ...(input.provider === 'gke_metadata'
       ? {
           provider: 'gke_metadata' as const,
-          ...(input.tokenMode ? { tokenMode: input.tokenMode } : {}),
         }
       : { runnerName: input.runnerName }),
     expectedServiceAccountEmail: input.expectedServiceAccountEmail,
     scopes: [...new Set(input.scopes)].sort(),
-    ...(input.tokenMode === 'metadata_direct'
-      ? {}
-      : { lifetimeSeconds: lifetime }),
+    ...(input.provider === 'gke_metadata' ? {} : { lifetimeSeconds: lifetime }),
   }
 }
 
@@ -159,10 +147,8 @@ export function getWorkloadIdentityAccessToken(
             const mint = desktopGoogle()
             if (!mint) throw new Error(desktopRequiredError)
             return mint({
-              tokenMode: cfg.tokenMode,
               expectedServiceAccountEmail: cfg.expectedServiceAccountEmail,
               scopes: cfg.scopes,
-              lifetimeSeconds: cfg.lifetimeSeconds,
               forceRefresh,
             })
           })()
@@ -211,7 +197,7 @@ export function getWorkloadIdentityAccessToken(
         JSON.stringify(cfg.scopes) ||
       !Number.isFinite(expiresAt) ||
       expiresAt <= Date.now() + 5000 ||
-      (cfg.tokenMode !== 'metadata_direct' &&
+      (cfg.provider !== 'gke_metadata' &&
         expiresAt > Date.now() + (cfg.lifetimeSeconds! + 30) * 1000)
     )
       throw new Error(

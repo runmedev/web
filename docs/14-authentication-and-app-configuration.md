@@ -346,8 +346,8 @@ The sync queue can renew an expired token after an idle period. Disconnecting
 Drive pauses workload token acquisition until explicit reconnect or configuration.
 
 `googleDrive` runtime YAML also accepts `authFlow: workload_identity`,
-`provider`, `tokenMode`, `runnerName`, `expectedServiceAccountEmail`, `scopes`,
-and `lifetimeSeconds` (except in direct metadata mode; see below).
+`provider`, `runnerName`, `expectedServiceAccountEmail`, `scopes`,
+and `lifetimeSeconds` (runner provider only; see below).
 Authentication Settings shows the signing identity, and Drive diagnostics show
 the service-account identity, token expiry, and renewal mode.
 
@@ -371,15 +371,16 @@ app.enableConfigOverridesOnLoad()
 
 ### Desktop direct metadata credentials
 
-For `provider: gke_metadata`, `tokenMode: metadata_direct` requests a scoped
-access token directly from the GKE metadata server after verifying the default
-service account email. Pin the same mode with
-`RUNME_GOOGLE_TOKEN_MODE=metadata_direct` in the desktop host, alongside
-`RUNME_GOOGLE_SERVICE_ACCOUNT` and `RUNME_GOOGLE_SCOPES`. Omit `lifetimeSeconds`: it
-is rejected in direct mode, which uses metadata's returned `expires_in`.
-`tokenMode: iam_exchange` remains the default and preserves IAM Credentials
-exchange with configurable lifetime. These fields are shared by app config and
-`configureGoogleWorkloadIdentity` on both WebMCP and desktop MCP; metadata auth
-requires the desktop host and never falls back to OAuth or another identity. See
+For `provider: gke_metadata`, Electron requests a scoped access token directly
+from the GKE metadata server after verifying the default service account email.
+Pin the identity and allowed scopes with `RUNME_GOOGLE_SERVICE_ACCOUNT` and
+`RUNME_GOOGLE_SCOPES` in the desktop host. Omit `lifetimeSeconds`: it is rejected
+for this provider, which uses metadata's returned `expires_in`. No IAM Credentials
+exchange or self-impersonation permission is required. Remove any obsolete
+`tokenMode` setting or `RUNME_GOOGLE_TOKEN_MODE` environment variable; both are
+rejected. The separate `runner` provider retains its broker flow and configurable
+lifetime. App config and `configureGoogleWorkloadIdentity` on both WebMCP and
+desktop MCP share this contract; metadata auth requires the desktop host and
+never falls back to OAuth or another identity. See
 [Desktop workload identity](22-desktop-runtime.md#google-drive-using-the-pods-workload-identity)
 for a complete configuration.

@@ -27,7 +27,6 @@ describe('appConfig OIDC Google shorthand', () => {
       provider: 'gke_metadata',
       expectedServiceAccountEmail: 'runme@project.iam.gserviceaccount.com',
       scopes: ['https://www.googleapis.com/auth/drive'],
-      lifetimeSeconds: 900,
     }
     applyAppConfig(
       { googleDrive: config },
@@ -43,13 +42,12 @@ describe('appConfig OIDC Google shorthand', () => {
     identity.resetWorkloadIdentityForTests()
   })
 
-  it('preserves direct metadata mode and rejects explicit lifetimes instead of defaulting them', async () => {
+  it('uses direct metadata and rejects explicit lifetimes instead of defaulting them', async () => {
     const { applyAppConfig } = await loadModules()
     const identity = await import('../auth/workloadIdentity')
     const config = {
       authFlow: 'workload_identity',
       provider: 'gke_metadata',
-      tokenMode: 'metadata_direct',
       expectedServiceAccountEmail: 'runme@project.iam.gserviceaccount.com',
       scopes: ['https://www.googleapis.com/auth/drive'],
     }
@@ -66,10 +64,10 @@ describe('appConfig OIDC Google shorthand', () => {
       }
       expect(() =>
         applyAppConfig(
-          { googleDrive: { ...config, tokenMode: 'typo' } },
+          { googleDrive: { ...config, tokenMode: 'iam_exchange' } },
           'inline://direct-mode'
         )
-      ).toThrow('token mode')
+      ).toThrow('Remove tokenMode')
     } finally {
       identity.resetWorkloadIdentityForTests()
     }

@@ -169,25 +169,23 @@ fail on renderer loss; mutations are never automatically retried.
 
 ## Google Drive using the pod's workload identity
 
-Choose the token mode in the **host environment** before starting the app. For a
-pod whose default metadata identity already has Drive access:
+Pin the service account and allowed scopes in the **host environment** before
+starting the app. The pod's default metadata identity must already have Drive access:
 
 ```sh
 export RUNME_GOOGLE_SERVICE_ACCOUNT=olympus-executor@olympus-executor-prod-449501.iam.gserviceaccount.com
 export RUNME_GOOGLE_SCOPES=https://www.googleapis.com/auth/drive
-export RUNME_GOOGLE_TOKEN_MODE=metadata_direct
 ```
 
 This enables `gke_metadata` and generates the matching public Drive configuration
 at startup. No Google token or key is packaged or persisted. If using
 `RUNME_APP_CONFIG`, include the following in that file; the host environment
-above still pins the mode, identity, and allowed scopes:
+above still pins the identity and allowed scopes:
 
 ```yaml
 googleDrive:
   authFlow: workload_identity
   provider: gke_metadata
-  tokenMode: metadata_direct
   expectedServiceAccountEmail: olympus-executor@olympus-executor-prod-449501.iam.gserviceaccount.com
   scopes:
     - https://www.googleapis.com/auth/drive
@@ -198,32 +196,27 @@ The `configureGoogleWorkloadIdentity` tool accepts the same fields as this
 `gke_metadata` fails clearly outside the supported desktop host. `runnerName`
 is required only for the default `runner` provider.
 
-In `metadata_direct` mode, Electron's main process first reads the default
+Electron's main process first reads the default
 metadata service account's `/email` and checks it against the pinned expected
 identity. It then requests `/token?scopes=...` using the configured scopes and
 `Metadata-Flavor: Google`. The returned access token is used directly by Drive.
 No IAM Credentials API call or self-impersonation permission is required.
 
-**Omit `lifetimeSeconds` in direct mode.** Supplying it is an error, because
+**Omit `lifetimeSeconds` for `gke_metadata`.** Supplying it is an error, because
 metadata does not offer a caller-selected lifetime. Expiry comes from
 `expires_in`, measured from request start. Tokens are cached only in memory and
 refreshed before expiry (the smaller of two minutes or 20% of remaining life).
 Concurrent requests coalesce; forced refresh discards the cached token and
 joins an already-running acquisition if present.
 
-`iam_exchange` remains the default when the mode is omitted, preserving existing
-configurations. Set `RUNME_GOOGLE_TOKEN_MODE=iam_exchange` and use
-`tokenMode: iam_exchange` (or omit it) to obtain a metadata credential and exchange
-it through IAM Credentials `generateAccessToken` for the pinned target account.
-This mode accepts `lifetimeSeconds` from 60 to 3600, defaulting to 900. It requires
-the IAM Service Account Credentials API and
-`iam.serviceAccounts.getAccessToken` on the target account; the metadata caller
-may be a different identity. Only the exchanged token reaches the renderer.
+`gke_metadata` is direct-only. Remove the obsolete `tokenMode` field and
+`RUNME_GOOGLE_TOKEN_MODE` environment variable; supplying either is an error.
+The separate `runner` provider retains its broker-based credential flow and
+configurable lifetime.
 
-All metadata and IAM requests run in Electron's main process through the narrow
+All metadata requests run in Electron's main process through the narrow
 preload bridge, with fixed endpoints and redirects disabled. The renderer cannot
-choose another metadata host, token mode contrary to host policy, target account,
-or broader scope. Notebook tools return authentication status, never raw tokens.
+choose another metadata host, target account, or broader scope. Notebook tools return authentication status, never raw tokens.
 Failures never fall back to another mode, identity, runner, or interactive OAuth.
 No `--disable-web-security` flag or browser metadata fetch is needed.
 
@@ -273,5 +266,5 @@ Before rolling out to agents, smoke-test the Linux archive in the actual
 executor image: discover tools, create/edit/reopen a local notebook across a
 restart, read/write a shared Drive notebook, refresh credentials after expiry,
 and check denied IAM/Drive permissions fail without interactive fallback.
-The local test suite covers policy, exchange, expiry, disconnect, transport,
+The local test suite covers policy, metadata acquisition, expiry, disconnect, transport,
 and registry parity; it cannot certify the pod's IAM, Drive ACLs, or sandbox.

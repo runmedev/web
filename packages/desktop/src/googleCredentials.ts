@@ -1,8 +1,4 @@
-import type {
-  GoogleTokenMode,
-  GoogleTokenRequest,
-  GoogleTokenResult,
-} from './protocol.js'
+import type { GoogleTokenRequest, GoogleTokenResult } from './protocol.js'
 
 const metadataUrl =
   'http://metadata.google.internal/computeMetadata/v1/instance/service-accounts/default/token'
@@ -13,7 +9,6 @@ const driveScopes = new Set([
 ])
 
 export interface GoogleCredentialPolicy {
-  tokenMode?: GoogleTokenMode
   serviceAccountEmail: string
   allowedScopes: string[]
 }
@@ -23,9 +18,11 @@ export function googlePolicyFromEnv(
   env: NodeJS.ProcessEnv
 ): GoogleCredentialPolicy | undefined {
   if (!env.RUNME_GOOGLE_SERVICE_ACCOUNT) return undefined
+  if (env.RUNME_GOOGLE_TOKEN_MODE !== undefined)
+    throw new Error(
+      'Remove RUNME_GOOGLE_TOKEN_MODE; GKE metadata authentication is direct-only'
+    )
   const policy = {
-    tokenMode: (env.RUNME_GOOGLE_TOKEN_MODE ??
-      'iam_exchange') as GoogleTokenMode,
     serviceAccountEmail: env.RUNME_GOOGLE_SERVICE_ACCOUNT,
     allowedScopes: (
       env.RUNME_GOOGLE_SCOPES ?? 'https://www.googleapis.com/auth/drive'
@@ -34,7 +31,6 @@ export function googlePolicyFromEnv(
       .map((s) => s.trim()),
   }
   if (
-    !['iam_exchange', 'metadata_direct'].includes(policy.tokenMode) ||
     !/^[\w.-]+@[\w.-]+\.iam\.gserviceaccount\.com$/.test(
       policy.serviceAccountEmail
     ) ||
@@ -42,7 +38,7 @@ export function googlePolicyFromEnv(
     policy.allowedScopes.some((s) => !driveScopes.has(s))
   )
     throw new Error(
-      'Invalid desktop Google token mode, service account, or Drive scope policy'
+      'Invalid desktop Google service account or Drive scope policy'
     )
   return policy
 }
@@ -74,20 +70,9 @@ export class GoogleCredentials {
       typeof input !== 'object' ||
       Object.keys(input).some(
         (k) =>
-          ![
-            'expectedServiceAccountEmail',
-            'scopes',
-            'lifetimeSeconds',
-            'forceRefresh',
-            'tokenMode',
-          ].includes(k)
+          !['expectedServiceAccountEmail', 'scopes', 'forceRefresh'].includes(k)
       ) ||
       input.expectedServiceAccountEmail !== policy.serviceAccountEmail ||
-      (input.tokenMode ?? 'iam_exchange') !==
-        (policy.tokenMode ?? 'iam_exchange') ||
-      !['iam_exchange', 'metadata_direct'].includes(
-        input.tokenMode ?? 'iam_exchange'
-      ) ||
       !Array.isArray(input.scopes) ||
       input.scopes.length < 1 ||
       input.scopes.length > 3 ||
@@ -98,16 +83,8 @@ export class GoogleCredentials {
         typeof input.forceRefresh !== 'boolean')
     )
       throw new Error('Desktop Google identity or scopes are not allowed')
-    const mode = input.tokenMode ?? 'iam_exchange'
-    if (mode === 'metadata_direct' && input.lifetimeSeconds !== undefined)
-      throw new Error(
-        'lifetimeSeconds is not supported in metadata_direct mode; metadata controls expiry'
-      )
-    const lifetime = input.lifetimeSeconds ?? 900
-    if (!Number.isInteger(lifetime) || lifetime < 60 || lifetime > 3600)
-      throw new Error('Invalid desktop Google token lifetime')
     const scopes = [...new Set(input.scopes)].sort()
-    const key = JSON.stringify([mode, scopes, lifetime])
+    const key = JSON.stringify(scopes)
     if (input.forceRefresh) this.cache.delete(key)
     const cached = this.cache.get(key)
     if (cached && cached.refreshAt > this.now())
@@ -116,7 +93,7 @@ export class GoogleCredentials {
     if (pending) return structuredClone(await pending)
     if (this.pending.size >= 8)
       throw new Error('Too many concurrent Google credential requests')
-    const work = this.exchange(scopes, lifetime, mode)
+    const work = this.acquireToken(scopes)
       .then((result) => {
         if (this.cache.size >= 32)
           this.cache.delete(this.cache.keys().next().value!)
@@ -149,24 +126,15 @@ export class GoogleCredentials {
     throw new Error('Metadata unavailable')
   }
 
-  /** Direct mode verifies the pod identity; exchange mode may target a different GSA. */
-  private async exchange(
-    scopes: string[],
-    lifetime: number,
-    mode: GoogleTokenMode
-  ): Promise<GoogleTokenResult> {
-    let stage = 'metadata'
+  /** Verify the pod identity before acquiring its scoped token. No impersonation or fallback. */
+  private async acquireToken(scopes: string[]): Promise<GoogleTokenResult> {
+    let stage = 'metadata identity'
     try {
+      const email = await this.metadata(metadataUrl.replace(/token$/, 'email'))
+      if ((await email.text()).trim() !== this.policy!.serviceAccountEmail)
+        throw new Error('Unexpected metadata identity')
       const url = new URL(metadataUrl)
-      if (mode === 'metadata_direct') {
-        stage = 'metadata identity'
-        const email = await this.metadata(
-          metadataUrl.replace(/token$/, 'email')
-        )
-        if ((await email.text()).trim() !== this.policy!.serviceAccountEmail)
-          throw new Error('Unexpected metadata identity')
-        url.searchParams.set('scopes', scopes.join(','))
-      }
+      url.searchParams.set('scopes', scopes.join(','))
       stage = 'metadata token'
       // Measure from request start so network latency never extends the token's lifetime.
       const requestedAt = this.now()
@@ -180,59 +148,24 @@ export class GoogleCredentials {
         source.expires_in <= 0
       )
         throw new Error('Invalid metadata credentials')
-      if (mode === 'metadata_direct') {
-        const expiresAt = requestedAt + source.expires_in * 1000
-        if (
-          !Number.isSafeInteger(source.expires_in) ||
-          !Number.isFinite(expiresAt) ||
-          expiresAt <= this.now() + 5000
-        )
-          throw new Error('Invalid metadata expiry')
-        return {
-          accessToken: source.access_token,
-          tokenType: 'Bearer',
-          expiresAt: new Date(expiresAt).toISOString(),
-          serviceAccountEmail: this.policy!.serviceAccountEmail,
-          scopes,
-        }
-      }
-      stage = 'IAM Credentials'
-      const response = await this.request(
-        `https://iamcredentials.googleapis.com/v1/projects/-/serviceAccounts/${this.policy!.serviceAccountEmail}:generateAccessToken`,
-        {
-          method: 'POST',
-          redirect: 'error',
-          signal: AbortSignal.timeout(20000),
-          headers: {
-            Authorization: `Bearer ${source.access_token}`,
-            'Content-Type': 'application/json',
-          },
-          body: JSON.stringify({ scope: scopes, lifetime: `${lifetime}s` }),
-        }
-      )
-      if (!response.ok) throw new Error('IAM request failed')
-      const token = await response.json()
-      const expiresAt = Date.parse(token.expireTime)
+      const expiresAt = requestedAt + source.expires_in * 1000
       if (
-        typeof token.expireTime !== 'string' ||
-        typeof token.accessToken !== 'string' ||
-        !token.accessToken ||
+        !Number.isSafeInteger(source.expires_in) ||
         !Number.isFinite(expiresAt) ||
-        expiresAt <= this.now() + 5000 ||
-        expiresAt > this.now() + (lifetime + 30) * 1000
+        expiresAt <= this.now() + 5000
       )
-        throw new Error('Invalid IAM credentials')
+        throw new Error('Invalid metadata expiry')
       return {
-        accessToken: token.accessToken,
+        accessToken: source.access_token,
         tokenType: 'Bearer',
-        expiresAt: token.expireTime,
+        expiresAt: new Date(expiresAt).toISOString(),
         serviceAccountEmail: this.policy!.serviceAccountEmail,
         scopes,
       }
     } catch {
       // Upstream bodies, URLs, and exception strings may include credentials: never reflect them.
       throw new Error(
-        `GKE Drive ${stage} request failed; check workload identity, configured identity/scopes, and network access${stage === 'IAM Credentials' ? ' and mint permission' : ''}`
+        `GKE Drive ${stage} request failed; check workload identity, configured identity/scopes, and network access`
       )
     }
   }

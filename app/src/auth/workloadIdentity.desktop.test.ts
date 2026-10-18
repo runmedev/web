@@ -17,7 +17,6 @@ const config = {
   provider: 'gke_metadata' as const,
   expectedServiceAccountEmail: 'runme@example.iam.gserviceaccount.com',
   scopes: ['https://www.googleapis.com/auth/drive'],
-  lifetimeSeconds: 900,
 }
 const result = () => ({
   accessToken: 'desktop-google-secret',
@@ -105,19 +104,17 @@ it('direct mode accepts metadata expiry, caches with a margin, and refreshes onl
     configureGoogleWorkloadIdentity({
       ...config,
       lifetimeSeconds: undefined,
-      tokenMode: 'metadata_direct',
     })
     await Promise.all([
       getWorkloadIdentityAccessToken(),
       getWorkloadIdentityAccessToken(),
     ])
     expect(mint).toHaveBeenCalledTimes(1)
-    expect(mint).toHaveBeenLastCalledWith(
-      expect.objectContaining({
-        tokenMode: 'metadata_direct',
-        lifetimeSeconds: undefined,
-      })
-    )
+    expect(mint).toHaveBeenLastCalledWith({
+      expectedServiceAccountEmail: config.expectedServiceAccountEmail,
+      scopes: config.scopes,
+      forceRefresh: false,
+    })
     vi.advanceTimersByTime(3479000)
     await getWorkloadIdentityAccessToken()
     expect(mint).toHaveBeenCalledTimes(1)
@@ -137,12 +134,11 @@ it('direct mode accepts metadata expiry, caches with a margin, and refreshes onl
 
 it('rejects direct lifetime and non-desktop use clearly without alternate credentials', async () => {
   expect(() =>
-    configureGoogleWorkloadIdentity({ ...config, tokenMode: 'metadata_direct' })
+    configureGoogleWorkloadIdentity({ ...config, lifetimeSeconds: 900 })
   ).toThrow('lifetimeSeconds')
   configureGoogleWorkloadIdentity({
     ...config,
     lifetimeSeconds: undefined,
-    tokenMode: 'metadata_direct',
   })
   await expect(getWorkloadIdentityAccessToken()).rejects.toThrow(
     'requires Runme Desktop'

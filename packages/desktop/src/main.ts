@@ -128,12 +128,8 @@ async function start() {
               googleDrive: {
                 authFlow: 'workload_identity',
                 provider: 'gke_metadata',
-                tokenMode: googlePolicy.tokenMode ?? 'iam_exchange',
                 expectedServiceAccountEmail: googlePolicy.serviceAccountEmail,
                 scopes: googlePolicy.allowedScopes,
-                ...(googlePolicy.tokenMode === 'metadata_direct'
-                  ? {}
-                  : { lifetimeSeconds: 900 }),
               },
             }
           : {}),

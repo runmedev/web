@@ -111,12 +111,6 @@ export function runnerAuthTools() {
         properties: {
           authFlow: { const: 'workload_identity' },
           provider: { type: 'string', enum: ['runner', 'gke_metadata'] },
-          tokenMode: {
-            type: 'string',
-            enum: ['iam_exchange', 'metadata_direct'],
-            description:
-              'Desktop host-pinned token mode. Defaults to iam_exchange. metadata_direct uses metadata expiry and does not accept lifetimeSeconds.',
-          },
           runnerName: textField,
           expectedServiceAccountEmail: textField,
           scopes: {
@@ -125,7 +119,13 @@ export function runnerAuthTools() {
             maxItems: 32,
             items: textField,
           },
-          lifetimeSeconds: { type: 'integer', minimum: 60, maximum: 3600 },
+          lifetimeSeconds: {
+            type: 'integer',
+            minimum: 60,
+            maximum: 3600,
+            description:
+              'Runner provider only; gke_metadata uses the metadata server expiry.',
+          },
         },
         allOf: [
           {
@@ -133,22 +133,8 @@ export function runnerAuthTools() {
               properties: { provider: { const: 'gke_metadata' } },
               required: ['provider'],
             },
-            then: {},
-            else: { required: ['runnerName'] },
-          },
-          {
-            if: { required: ['tokenMode'] },
-            then: {
-              properties: { provider: { const: 'gke_metadata' } },
-              required: ['provider'],
-            },
-          },
-          {
-            if: {
-              properties: { tokenMode: { const: 'metadata_direct' } },
-              required: ['tokenMode'],
-            },
             then: { not: { required: ['lifetimeSeconds'] } },
+            else: { required: ['runnerName'] },
           },
         ],
         required: ['authFlow', 'expectedServiceAccountEmail', 'scopes'],
