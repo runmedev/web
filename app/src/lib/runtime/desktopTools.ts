@@ -33,6 +33,10 @@ export function createDesktopToolContext(
 ): ModelContextLike {
   const tools = new Map<string, RegisteredAppTool>()
   const calls = new Map<string, AbortController>()
+  // Cancellation is cooperative: retain the work until its handler actually
+  // settles, even if the main-process caller already stopped waiting for it.
+  const executions = new Map<string, Promise<void>>()
+  let flushing = false
   let unsubscribe: (() => void) | undefined
   const publish = () =>
     bridge.publishTools(
@@ -49,15 +53,24 @@ export function createDesktopToolContext(
     )
   const handleRequest = (request: ToolRequest) => {
     if (request.type === 'flush') {
-      void flush()
+      flushing = true
+      void Promise.allSettled([...executions.values()])
+        .then(() => flush())
         .then(() => bridge.respond({ id: request.id, result: 'flushed' }))
         .catch((error: unknown) =>
           bridge.respond({ id: request.id, error: String(error) })
         )
+        .finally(() => {
+          flushing = false
+        })
       return
     }
     if (request.type === 'cancel') {
       calls.get(request.id)?.abort()
+      return
+    }
+    if (flushing) {
+      bridge.respond({ id: request.id, error: 'Runme is saving and closing' })
       return
     }
     const tool = tools.get(request.name)
@@ -67,7 +80,7 @@ export function createDesktopToolContext(
     }
     const controller = new AbortController()
     calls.set(request.id, controller)
-    void Promise.resolve()
+    const execution = Promise.resolve()
       .then(() =>
         tool.execute(request.arguments, { signal: controller.signal })
       )
@@ -75,7 +88,11 @@ export function createDesktopToolContext(
       .catch((error: unknown) =>
         bridge.respond({ id: request.id, error: String(error) })
       )
-      .finally(() => calls.delete(request.id))
+      .finally(() => {
+        calls.delete(request.id)
+        executions.delete(request.id)
+      })
+    executions.set(request.id, execution)
   }
   return {
     registerTool(tool, options) {
@@ -103,12 +120,15 @@ export function createDesktopToolContext(
 }
 
 /** Only Electron's isolated preload installs this bridge; normal web builds are unchanged. */
-export function getDesktopToolContext(): ModelContextLike | null {
+export function getDesktopToolContext(
+  waitForOperations: () => Promise<void> = async () => {}
+): ModelContextLike | null {
   if (typeof window === 'undefined') return null
   const bridge = (window as Window & { runmeDesktop?: DesktopBridge })
     .runmeDesktop
   return bridge
     ? createDesktopToolContext(bridge, async () => {
+        await waitForOperations()
         const { getNotebookDataController } = await import(
           '../notebookDataController'
         )

@@ -48,6 +48,7 @@ vi.mock('../../lib/runtime/useCodeOperationRegistry', () => ({
     start: startOperationMock,
     get: getOperationMock,
     cancel: cancelOperationMock,
+    waitForIdle: async () => {},
   }),
 }))
 
@@ -225,7 +226,10 @@ describe('WebMcpToolRegistrationHost', () => {
       expect(JSON.parse(JSON.stringify(catalog))).toEqual(
         JSON.parse(
           JSON.stringify(
-            native.map(({ execute: _execute, ...descriptor }) => descriptor)
+            native.map(({ execute, ...descriptor }) => {
+              expect(typeof execute).toBe('function')
+              return descriptor
+            })
           )
         )
       )

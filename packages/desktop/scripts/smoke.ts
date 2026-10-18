@@ -131,17 +131,30 @@ try {
     path: path.join(artifacts, 'notebook.png'),
     fullPage: true,
   })
+  // Close while an accepted code operation is still running. Its final edit
+  // must survive restart, even though the initial MCP call already returned.
+  const background = await client!.callTool({
+    name: 'ExecuteCode',
+    arguments: {
+      code: `await new Promise(resolve => setTimeout(resolve, 2500)); await notebooks.appendCell({ target: { uri: ${JSON.stringify(saved.uri)} }, kind: 'markup', value: '# Saved during shutdown' });`,
+      timeoutMs: 1000,
+    },
+  })
+  assert(!background.isError, JSON.stringify(background))
+  assert.equal(
+    JSON.parse((background.content as Array<{ text: string }>)[0].text).status,
+    'running'
+  )
   await client!.close()
   await application!.close()
   await rm(path.join(profile, 'connection.json'))
   const restart = await launch(new URL(connection.origin).port)
   page = restart.page
-  assert.match(
-    await execute(
-      `await notebooks.open(${JSON.stringify(saved.uri)}); const doc = await notebooks.get({ uri: ${JSON.stringify(saved.uri)} }); console.log(JSON.stringify(doc.notebook.cells.map(c => c.value)));`
-    ),
-    /Created through MCP/
+  const restored = await execute(
+    `await notebooks.open(${JSON.stringify(saved.uri)}); const doc = await notebooks.get({ uri: ${JSON.stringify(saved.uri)} }); console.log(JSON.stringify(doc.notebook.cells.map(c => c.value)));`
   )
+  assert.match(restored, /Created through MCP/)
+  assert.match(restored, /Saved during shutdown/)
   await page.reload()
   // Registration after reload is asynchronous; use observable tool discovery.
   await page.waitForFunction(() => !!(window as any).runmeDesktop)
@@ -162,6 +175,7 @@ try {
         passed: true,
         tools,
         persistence: 'verified after process restart',
+        shutdown: 'accepted background operation completed before exit',
         reload: 'verified',
         transport: 'Streamable HTTP',
         nativeWebMcpRequired: false,

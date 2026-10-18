@@ -44,7 +44,10 @@ Set `RUNME_DESKTOP_DATA_DIR` to an absolute persistent directory, such as
 `/workspace/runme/desktop` in the executor. An existing browser profile or its
 credentials are not imported automatically. Notebook tabs are session state;
 saved notebooks can be reopened from the workspace after restarting. Normal
-app shutdown waits for pending notebook edits to persist. Force-killing the
+app shutdown stops accepting MCP calls, waits for accepted handlers and background
+`ExecuteCode` operations to settle, then flushes pending notebook edits. If this
+cannot finish within the two-minute transport deadline, the app stays open;
+inspect or cancel the operation and retry closing. Force-killing the
 process cannot provide that guarantee.
 
 ## Connect Codex

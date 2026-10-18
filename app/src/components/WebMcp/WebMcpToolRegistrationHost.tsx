@@ -86,9 +86,11 @@ import {
 import { appState } from '../../lib/runtime/AppState'
 import { runnerAuthTools } from '../../lib/runtime/runnerAuthTools'
 
-function getModelContext(): ModelContextLike | null {
+function getModelContext(
+  waitForOperations: () => Promise<void>
+): ModelContextLike | null {
   // Desktop uses the same handlers over IPC, independent of experimental browser APIs.
-  const desktopContext = getDesktopToolContext()
+  const desktopContext = getDesktopToolContext(waitForOperations)
   if (desktopContext) return desktopContext
   const documentModelContext =
     typeof document === 'undefined'
@@ -168,7 +170,9 @@ export default function WebMcpToolRegistrationHost() {
   const appConsoleData = getAppConsoleData()
 
   useEffect(() => {
-    const modelContext = getModelContext()
+    const modelContext = getModelContext(() =>
+      codeOperationRegistry.waitForIdle()
+    )
     if (!modelContext) {
       appLogger.debug('WebMCP unavailable; skipping tool registration', {
         attrs: {

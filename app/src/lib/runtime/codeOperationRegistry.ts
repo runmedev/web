@@ -201,6 +201,16 @@ export class CodeOperationRegistry {
     this.resultTtlMs = options.resultTtlMs ?? DEFAULT_EXECUTE_CODE_RESULT_TTL_MS
   }
 
+  /** Drain accepted background work before desktop shutdown saves notebooks.
+   * The caller must first stop accepting new tool calls. Completion includes
+   * the final operation persistence and onSettled notification.
+   */
+  async waitForIdle(): Promise<void> {
+    await Promise.all(
+      [...this.live.values()].map((operation) => operation.completion)
+    )
+  }
+
   async start(input: StartOptions): Promise<ExecuteCodeOperation> {
     const sessionId = await this.ensureInitialized()
     const idempotencyKey = normalizeIdempotencyKey(input.idempotencyKey)
