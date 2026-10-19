@@ -346,7 +346,8 @@ The sync queue can renew an expired token after an idle period. Disconnecting
 Drive pauses workload token acquisition until explicit reconnect or configuration.
 
 `googleDrive` runtime YAML also accepts `authFlow: workload_identity`,
-`runnerName`, `expectedServiceAccountEmail`, `scopes`, and `lifetimeSeconds`.
+`provider`, `runnerName`, `expectedServiceAccountEmail`, `scopes`,
+and `lifetimeSeconds` (runner provider only; see below).
 Authentication Settings shows the signing identity, and Drive diagnostics show
 the service-account identity, token expiry, and renewal mode.
 
@@ -367,3 +368,19 @@ app.enableConfigOverridesOnLoad()
 - OIDC auth and Drive auth can share credentials, but they solve different problems.
 - If the app loads but features are unavailable, configuration mismatch is a more
   likely cause than a rendering bug.
+
+### Desktop direct metadata credentials
+
+For `provider: gke_metadata`, Electron requests a scoped access token directly
+from the GKE metadata server after verifying the default service account email.
+Pin the identity and allowed scopes with `RUNME_GOOGLE_SERVICE_ACCOUNT` and
+`RUNME_GOOGLE_SCOPES` in the desktop host. Omit `lifetimeSeconds`: it is rejected
+for this provider, which uses metadata's returned `expires_in`. No IAM Credentials
+exchange or self-impersonation permission is required. Remove any obsolete
+`tokenMode` setting or `RUNME_GOOGLE_TOKEN_MODE` environment variable; both are
+rejected. The separate `runner` provider retains its broker flow and configurable
+lifetime. App config and `configureGoogleWorkloadIdentity` on both WebMCP and
+desktop MCP share this contract; metadata auth requires the desktop host and
+never falls back to OAuth or another identity. See
+[Desktop workload identity](22-desktop-runtime.md#google-drive-using-the-pods-workload-identity)
+for a complete configuration.

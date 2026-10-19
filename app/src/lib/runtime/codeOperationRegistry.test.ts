@@ -148,8 +148,14 @@ describe('CodeOperationRegistry', () => {
     })
     expect(started.output.events[0]?.text).toBe('started\n')
 
+    const drained = vi.fn()
+    const shutdown = registry.waitForIdle().then(drained)
+    await vi.advanceTimersByTimeAsync(0)
+    expect(drained).not.toHaveBeenCalled()
     finish({ output: 'started\n', exitCode: 0 })
     await vi.advanceTimersByTimeAsync(0)
+    await shutdown
+    expect(drained).toHaveBeenCalledTimes(1)
     const completed = await registry.get({
       operationId: 'exec-test',
       afterSequence: started.output.nextSequence,

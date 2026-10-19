@@ -2,23 +2,65 @@ import { exportPKCS8, generateKeyPair } from 'jose'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 
 import { resetRunnerAuthForTests } from '../../auth/runnerAuth'
+import { resetWorkloadIdentityForTests } from '../../auth/workloadIdentity'
 import { configureRunner, runnerAuthTools } from './runnerAuthTools'
 
 const update = vi.hoisted(() => vi.fn())
 vi.mock('./runnersManager', () => ({ getRunnersManager: () => ({ update }) }))
-vi.mock('../../auth/workloadIdentity', () => ({
-  getWorkloadIdentityConfig: () => undefined,
-}))
 
 beforeEach(() => {
   localStorage.clear()
   sessionStorage.clear()
   resetRunnerAuthForTests()
+  resetWorkloadIdentityForTests()
   update.mockClear()
 })
 afterEach(() => vi.restoreAllMocks())
 
 describe('runner authentication tools', () => {
+  it('configures direct metadata through the shared tool and returns no token', async () => {
+    const input = {
+      authFlow: 'workload_identity',
+      provider: 'gke_metadata',
+      expectedServiceAccountEmail: 'runme@project.iam.gserviceaccount.com',
+      scopes: ['https://www.googleapis.com/auth/drive'],
+    }
+    const tool = runnerAuthTools().find(
+      (tool) => tool.name === 'configureGoogleWorkloadIdentity'
+    )!
+    const mint = vi.fn().mockResolvedValue({
+      accessToken: 'secret-fixture',
+      tokenType: 'Bearer',
+      serviceAccountEmail: input.expectedServiceAccountEmail,
+      scopes: input.scopes,
+      expiresAt: new Date(Date.now() + 3600000).toISOString(),
+    })
+    const host = window as Window & { runmeDesktop?: unknown }
+    host.runmeDesktop = { googleAccessToken: mint }
+    try {
+      expect(JSON.parse(await tool.execute(input))).toEqual({
+        configured: true,
+        serviceAccountEmail: input.expectedServiceAccountEmail,
+      })
+      expect(mint).toHaveBeenCalledWith({
+        expectedServiceAccountEmail: input.expectedServiceAccountEmail,
+        scopes: input.scopes,
+        forceRefresh: false,
+      })
+      await expect(
+        tool.execute({ ...input, lifetimeSeconds: 900 })
+      ).rejects.toThrow()
+      expect(mint).toHaveBeenCalledTimes(1)
+      delete host.runmeDesktop
+      await expect(tool.execute(input)).rejects.toThrow(
+        'requires Runme Desktop'
+      )
+    } finally {
+      delete host.runmeDesktop
+      resetWorkloadIdentityForTests()
+    }
+  })
+
   it.each([
     ['http://localhost:9988', 'ws://localhost:9988/ws'],
     ['https://runner.example', 'wss://runner.example/ws'],

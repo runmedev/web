@@ -68,3 +68,15 @@ jobs:
           src/storage/storageRecovery.test.ts src/lib/storageRecoveryDrafts.test.ts
           src/components/StorageRecoveryBanner.test.tsx
           --maxWorkers=2 --minWorkers=1
+      - name: Test desktop renderer and workload identity integration
+        run: >-
+          pnpm -C app exec vitest run
+          src/auth/workloadIdentity.desktop.test.ts
+          src/auth/runnerAuth.test.ts
+          src/contexts/GoogleAuthContext.workload.test.tsx
+          src/lib/appConfig.test.ts
+          src/lib/runtime/runnerAuthTools.test.ts
+          src/lib/runtime/desktopTools.test.ts
+          src/lib/runtime/codeOperationRegistry.test.ts
+          src/components/WebMcp/WebMcpToolRegistrationHost.test.tsx
+          --maxWorkers=2 --minWorkers=1
