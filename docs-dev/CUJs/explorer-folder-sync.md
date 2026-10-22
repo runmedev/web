@@ -12,6 +12,9 @@
    and continued access to the existing listing. Disconnect and retry; verify an
    error message, preserved listing and successful refresh after reconnecting.
 5. Check automatic refresh pauses offline/hidden and unmounting stops its timer.
+   With Drive unavailable, expand a previously cached folder and verify its
+   notebooks remain accessible. Create a notebook during a delayed refresh and
+   verify the eventual listing does not hide it.
 6. Run `await explorer.sync()` in App Console and sandbox code mode; verify the
    same behavior and `{ refreshed, failed }` result.
 
@@ -19,3 +22,9 @@ Automated coverage: `explorerSync.test.ts`, `WorkspaceExplorer.test.tsx`, the
 shallow-folder regression in `local.test.ts`, and the app/sandbox/code-mode runtime
 suites. Browser verification should capture toolbar screenshots at desktop and
 phone sizes in `app/test/browser/test-output/`.
+
+`test-scenario-explorer-folder-sync.ts` runs in the canonical CUJ suite. It uses
+real local storage to verify automatic rename discovery, manual phone-width
+refresh, the shared runtime, and toolbar placement, and saves screenshots and
+a walkthrough video. Drive authentication failures and concurrent local edits
+are covered by the component/storage tests above.

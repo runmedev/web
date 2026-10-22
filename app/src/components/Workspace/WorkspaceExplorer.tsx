@@ -825,16 +825,17 @@ export function WorkspaceExplorer() {
   }, [recordFolderChildAddition, store]);
 
   const fetchChildren = useCallback(
-    async (uri: string, quiet = false) => {
+    async (
+      uri: string,
+      quiet = false,
+      mutationVersion = folderMutationVersionsRef.current.get(uri) ?? 0,
+    ) => {
       const request = (listingRequests.current.get(uri) ?? 0) + 1;
       listingRequests.current.set(uri, request);
       const targetStore = storeForUri(uri, store, fsStore);
       if (!targetStore) {
         return;
       }
-
-      const mutationVersion =
-        folderMutationVersionsRef.current.get(uri) ?? 0;
 
       if (!quiet) setTreeNodes((prev) =>
         setChildrenForFolder(prev, uri, [
@@ -950,9 +951,14 @@ export function WorkspaceExplorer() {
     [fsStore, store, workspaceUris],
   );
 
-  const refreshFolder = useCallback(async (uri: string) => {
+  const refreshFolder = useCallback(async (
+    uri: string,
+    mutationVersion = folderMutationVersionsRef.current.get(uri) ?? 0,
+  ) => {
     if (!store) throw new Error("Notebook storage is not initialized.");
-    await syncExplorerFolder(uri, store, () => fetchChildren(uri, true));
+    // Protect local additions/removals made during the remote request too, not
+    // just those made while reading the resulting local metadata.
+    await syncExplorerFolder(uri, store, () => fetchChildren(uri, true, mutationVersion));
     const metadata = await (uri.startsWith("fs://") ? fsStore : store)?.getMetadata(uri);
     if (metadata) setTreeNodes((nodes) => updateNodeMetadata(nodes, uri, { name: metadata.name }));
   }, [store, fsStore, fetchChildren]);
@@ -1364,7 +1370,15 @@ function formatShortTimestamp(date: Date): string {
         if (!current?.isOpen) {
           return;
         }
-        void refreshFolder(folderUri).catch(() => {
+        void (async () => {
+          const mutationVersion = folderMutationVersionsRef.current.get(folderUri) ?? 0;
+          // Show the local mirror before contacting Drive. Expanding a cached
+          // folder must still work offline or while Drive authorization expires.
+          if (folderUri.startsWith("local://folder/")) {
+            await fetchChildren(folderUri, true, mutationVersion);
+          }
+          await refreshFolder(folderUri, mutationVersion);
+        })().catch(() => {
           setErrorMessage("Unable to sync folder. Check your connection and folder access, then retry.");
         });
       };
@@ -1378,7 +1392,7 @@ function formatShortTimestamp(date: Date): string {
         setTimeout(scheduleFetch, 0);
       }
     },
-    [refreshFolder],
+    [fetchChildren, refreshFolder],
   );
 
   const handleRename = useCallback(

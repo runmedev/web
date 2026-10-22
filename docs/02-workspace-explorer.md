@@ -82,6 +82,8 @@ a context menu. The button spins and is disabled during the refresh. If a folder
 fails, its previous listing remains available and the panel shows a retry message;
 other folders can still update. Reconnect Drive or grant local folder access
 through the existing controls if needed; background sync never opens an auth prompt.
+Expanding a cached Drive folder shows its saved listing immediately, even if
+Drive is unavailable or authorization has expired.
 
 The same action is available in App Console, browser JavaScript cells and
 WebMCP/code mode as `await explorer.sync()`. It returns `{ refreshed, failed }`
