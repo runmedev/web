@@ -3,6 +3,7 @@ import { create } from '@bufbuild/protobuf'
 import { afterEach, describe, expect, it, vi } from 'vitest'
 
 import { parser_pb } from '../../runme/client'
+import { explorerSync } from '../explorerSync'
 import { appLogger } from '../logging/runtime'
 import { __resetTabIdForTests, getClaimedSessionId } from '../tabIdentity'
 import { getRunmeVersionInfo } from '../versionInfo'
@@ -28,6 +29,20 @@ const createNotebook = () => {
 }
 
 describe('codeModeExecutor', () => {
+  it('dispatches explorer sync through the code-mode sandbox bridge', async () => {
+    const result = { refreshed: ['local://folder/local'], failed: [] }
+    const sync = vi.spyOn(explorerSync, 'sync').mockResolvedValue(result)
+    let actual: unknown
+    vi.spyOn(SandboxJSKernel.prototype, 'run').mockImplementation(async function (this: SandboxJSKernel) {
+      const bridge = (this as unknown as { bridge: { call: (method: string, args: unknown[]) => Promise<unknown> } }).bridge
+      actual = await bridge.call('explorer.sync', [])
+    })
+    const executor = createCodeModeExecutor({ mode: 'sandbox', resolveNotebook: () => null })
+    await executor.execute({ source: 'webmcp', code: 'await explorer.sync()' })
+    expect(actual).toEqual(result)
+    expect(sync).toHaveBeenCalledOnce()
+  })
+
   it.each(['browser', 'sandbox'] as const)('grades saved updates through the %s runtime', async (mode) => {
     const model = createNotebook()
     model.getNotebook().cells.push(create(parser_pb.CellSchema, {

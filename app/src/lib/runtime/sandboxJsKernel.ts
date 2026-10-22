@@ -130,6 +130,7 @@ const DEFAULT_SANDBOX_ALLOWED_METHODS = [
   'explorer.editName',
   'explorer.renameFolder',
   'explorer.listFolders',
+  'explorer.sync',
   'credentials.google.getServiceAccountCredentials',
   'credentials.google.setServiceAccountFromFilePath',
   'drive.authorize',
@@ -535,12 +536,14 @@ export function buildSandboxSrcDoc(options: {
           editName: (uri) => hostCall("explorer.editName", [uri]),
           renameFolder: (uri, name) => hostCall("explorer.renameFolder", [uri, name]),
           listFolders: () => hostCall("explorer.listFolders", []),
+          sync: () => hostCall("explorer.sync", []),
           help: () => {
             consoleProxy.log("explorer.mountDrive(driveUrl)");
             consoleProxy.log("explorer.removeFolder(uri)");
             consoleProxy.log("explorer.editName(uri)");
             consoleProxy.log("explorer.renameFolder(uri, name)");
             consoleProxy.log("explorer.listFolders()");
+            consoleProxy.log("await explorer.sync() - Sync mounted and expanded folder listings");
           },
         };
         const credentials = {
@@ -642,6 +645,7 @@ export function buildSandboxSrcDoc(options: {
           consoleProxy.log("- await explorer.editName(uri)");
           consoleProxy.log("- await explorer.renameFolder(uri, name)");
           consoleProxy.log("- await explorer.listFolders()");
+          consoleProxy.log("- await explorer.sync()");
           consoleProxy.log("- await credentials.google.getServiceAccountCredentials(serviceAccount, options)");
           consoleProxy.log("- await credentials.google.setServiceAccountFromFilePath(path)");
           consoleProxy.log("- await drive.authorize({ mode?, prompt? })");

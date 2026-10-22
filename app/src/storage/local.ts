@@ -1768,14 +1768,18 @@ export class LocalNotebooks extends Dexie {
    * discovered is guaranteed to have a local entry afterwards and the folder's
    * `children` array is updated to reflect the latest local URIs.
    */
-  async updateFolder(remoteUri: string, name?: string): Promise<string> {
+  async updateFolder(
+    remoteUri: string,
+    name?: string,
+    options: { recursive?: boolean } = {}
+  ): Promise<string> {
     if (!remoteUri) {
       throw new Error('updateFolder requires a non-empty remote URI')
     }
 
     return this.driveSyncCoordinator.runExclusive(
       this.driveFolderMembershipLockKey(remoteUri),
-      () => this.updateFolderInner(remoteUri, name)
+      () => this.updateFolderInner(remoteUri, name, options.recursive !== false)
     )
   }
 
@@ -1822,10 +1826,8 @@ export class LocalNotebooks extends Dexie {
     })
   }
 
-  private async updateFolderInner(
-    remoteUri: string,
-    name?: string
-  ): Promise<string> {
+  /** Called under the folder membership lock; never enumerates descendants. */
+  private async ensureFolderMirror(remoteUri: string, name?: string) {
     let existingFolder = await this.folders
       .where('remoteId')
       .equals(remoteUri)
@@ -1891,7 +1893,18 @@ export class LocalNotebooks extends Dexie {
       await this.folders.update(folderId, { name: resolvedName })
     }
 
-    // Fetch the latest Drive listing and mirror any notebooks we discover.
+    return { folderId, resolvedName, existingFolder }
+  }
+
+  private async updateFolderInner(
+    remoteUri: string,
+    name?: string,
+    recursive = true
+  ): Promise<string> {
+    const { folderId, resolvedName, existingFolder } =
+      await this.ensureFolderMirror(remoteUri, name)
+    // Refresh only the requested level for explorer polling. Child mirrors keep
+    // their existing membership until expanded, avoiding a full Drive crawl.
     const items = await this.driveStore.list(remoteUri)
     const childUris: string[] = []
 
@@ -1902,7 +1915,12 @@ export class LocalNotebooks extends Dexie {
         })
         childUris.push(localUri)
       } else if (item.type === NotebookStoreItemType.Folder) {
-        const localFolderUri = await this.updateFolder(item.uri, item.name)
+        const localFolderUri = recursive
+          ? await this.updateFolder(item.uri, item.name)
+          : await this.driveSyncCoordinator.runExclusive(
+              this.driveFolderMembershipLockKey(item.uri),
+              async () => (await this.ensureFolderMirror(item.uri, item.name)).folderId
+            )
         childUris.push(localFolderUri)
       }
     }
@@ -1958,7 +1976,7 @@ export class LocalNotebooks extends Dexie {
     return folderId
   }
 
-  async sync(localUri: string): Promise<void> {
+  async sync(localUri: string, options: { recursive?: boolean } = {}): Promise<void> {
     if (localUri.startsWith('drive-create:')) {
       const id = localUri.slice('drive-create:'.length)
       await this.queueDriveWork(
@@ -1977,7 +1995,7 @@ export class LocalNotebooks extends Dexie {
     }
 
     if (localUri.startsWith('local://folder/')) {
-      await this.syncFolder(localUri)
+      await this.syncFolder(localUri, options.recursive !== false)
       return
     }
 
@@ -7103,7 +7121,7 @@ export class LocalNotebooks extends Dexie {
     return folder ?? null
   }
 
-  private async syncFolder(localUri: string): Promise<void> {
+  private async syncFolder(localUri: string, recursive = true): Promise<void> {
     const record = await this.folders.get(localUri)
     if (!record) {
       throw new Error(`Local folder not found for ${localUri}`)
@@ -7120,6 +7138,7 @@ export class LocalNotebooks extends Dexie {
       const metadata = await this.driveStore.getMetadata(record.remoteId)
       if (metadata?.name && metadata.name !== record.name) {
         await this.folders.update(localUri, { name: metadata.name })
+        record.name = metadata.name
       }
     } catch (error) {
       console.error(
@@ -7129,7 +7148,7 @@ export class LocalNotebooks extends Dexie {
       )
     }
 
-    await this.updateFolder(record.remoteId, record.name)
+    await this.updateFolder(record.remoteId, record.name, { recursive })
     await this.folders.update(localUri, {
       lastSynced: nowIsoString(),
     })

@@ -3979,6 +3979,41 @@ describe('LocalNotebooks pending Drive create', () => {
     })
   })
 
+  it('shallow folder sync preserves descendant membership and local notebook bytes', async () => {
+    const root = 'https://drive.google.com/drive/folders/root'
+    const child = 'https://drive.google.com/drive/folders/child'
+    const newChild = 'https://drive.google.com/drive/folders/new-child'
+    const file = 'https://drive.google.com/file/d/note/view'
+    const driveStore = {
+      getMetadata: vi.fn(async () => ({ name: 'Renamed root' })),
+      list: vi.fn(async () => [
+        { uri: child, name: 'Child', type: NotebookStoreItemType.Folder },
+        { uri: newChild, name: 'New child', type: NotebookStoreItemType.Folder },
+        { uri: file, name: 'renamed.json', type: NotebookStoreItemType.File },
+      ]),
+      load: vi.fn(),
+      save: vi.fn(),
+    }
+    const store = createTestStore(driveStore)
+    await store.folders.put({ id: 'local://folder/root', remoteId: root, name: 'Root', children: [], lastSynced: '' })
+    await store.folders.put({ id: 'local://folder/child', remoteId: child, name: 'Child', children: ['local://file/grandchild'], lastSynced: '' })
+    await store.files.put({
+      id: 'local://file/edited', name: 'old.json', remoteId: file,
+      doc: 'uncommitted local edits', md5Checksum: 'local', lastRemoteChecksum: 'remote', lastSynced: '',
+    })
+    await store.sync('local://folder/root', { recursive: false })
+    expect(driveStore.list).toHaveBeenCalledOnce()
+    expect(driveStore.list).toHaveBeenCalledWith(root)
+    expect(await store.folders.get('local://folder/root')).toMatchObject({
+      name: 'Renamed root', children: expect.arrayContaining(['local://folder/child', 'local://file/edited']),
+    })
+    expect(await store.folders.get('local://folder/child')).toMatchObject({ children: ['local://file/grandchild'] })
+    expect(await store.folders.where('remoteId').equals(newChild).first()).toMatchObject({ children: [] })
+    expect(await store.getFileRecord('local://file/edited')).toMatchObject({ doc: 'uncommitted local edits', name: 'renamed.json' })
+    expect(driveStore.load).not.toHaveBeenCalled()
+    expect(driveStore.save).not.toHaveBeenCalled()
+  })
+
   it('preserves a direct attachment until a Drive listing confirms it', async () => {
     const folderUri = 'https://drive.google.com/drive/folders/folder123'
     let listedItems: Array<Record<string, unknown>> = []

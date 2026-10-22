@@ -44,6 +44,7 @@ explorer.openPicker()
 explorer.importMarkdown()
 explorer.mountDrive('https://drive.google.com/...')
 explorer.listFolders()
+await explorer.sync()
 explorer.removeFolder(uri)
 ```
 
@@ -66,3 +67,24 @@ explorer.removeFolder(uri)
   appended by other sessions.
 - `.runme` cell edits, executions, and comment-thread lifecycle changes are
   appended as operations; the editor and `comments.*` APIs materialize them.
+
+## Refreshing folder contents
+
+Folder listings refresh every minute while Runme is open in a visible, online
+browser tab, including when another sidebar panel is selected. Mounted roots
+and expanded folders are refreshed; collapsed descendants are loaded when opened.
+This updates names and folder membership without downloading or overwriting
+notebook contents. Browser background throttling can delay a refresh.
+
+Tap **Sync folders** (the circular arrow at the top right, immediately left of
+**Open local folder**) for an immediate refresh. This also works on phones without
+a context menu. The button spins and is disabled during the refresh. If a folder
+fails, its previous listing remains available and the panel shows a retry message;
+other folders can still update. Reconnect Drive or grant local folder access
+through the existing controls if needed; background sync never opens an auth prompt.
+Expanding a cached Drive folder shows its saved listing immediately, even if
+Drive is unavailable or authorization has expired.
+
+The same action is available in App Console, browser JavaScript cells and
+WebMCP/code mode as `await explorer.sync()`. It returns `{ refreshed, failed }`
+with folder URIs. Repeated requests share the current refresh pass.

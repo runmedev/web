@@ -252,6 +252,86 @@ describe('WorkspaceExplorer current document handling', () => {
     expect(mocks.setCurrentDoc).not.toHaveBeenCalledWith(null)
   })
 
+  it('syncs with a tap, keeps expanded descendants, and reports failure without losing the listing', async () => {
+    mocks.workspaceItems = ['local://folder/root']
+    let files = ['local://file/old']
+    let renamed = false
+    mocks.store.getMetadata.mockImplementation(async (uri: string) => {
+      if (uri === 'local://folder/root') return {
+        uri, name: renamed ? 'Renamed root' : 'Root', type: NotebookStoreItemType.Folder,
+        children: ['local://folder/child', ...files], parents: [],
+      }
+      if (uri === 'local://folder/child') return {
+        uri, name: 'Child', type: NotebookStoreItemType.Folder,
+        children: ['local://file/grandchild'], parents: [],
+      }
+      return { uri, name: uri.split('/').pop() + '.runme', type: NotebookStoreItemType.File, children: [], parents: [] }
+    })
+    render(<WorkspaceExplorer />)
+    await screen.findByText('Root')
+    const sync = screen.getByRole('button', { name: 'Sync folders' })
+    fireEvent.click(sync)
+    await screen.findByText('old.runme')
+    act(() => mocks.treeProps.onToggle('local://folder/child'))
+    await screen.findByText('grandchild.runme')
+    files = ['local://file/new']
+    renamed = true
+    fireEvent.click(sync)
+    await screen.findByText('new.runme')
+    await screen.findByText('Renamed root')
+    expect(screen.queryByText('old.runme')).toBeNull()
+    expect(screen.getByText('grandchild.runme')).toBeTruthy()
+    expect(mocks.store.sync).toHaveBeenCalledWith('local://folder/root', { recursive: false })
+    expect(mocks.ensureAccessToken).not.toHaveBeenCalled()
+    await waitFor(() => expect((sync as HTMLButtonElement).disabled).toBe(false))
+    mocks.store.sync.mockRejectedValue(new Error('offline'))
+    fireEvent.click(sync)
+    await screen.findByText(/Could not sync/)
+    expect(screen.getByText('new.runme')).toBeTruthy()
+  })
+
+  it('opens cached folder contents before Drive responds and keeps them after an auth failure', async () => {
+    mocks.workspaceItems = ['local://folder/root']
+    mocks.store.getMetadata.mockImplementation(async (uri: string) => {
+      if (uri === 'local://folder/root') return {
+        uri, name: 'Cached Drive folder', type: NotebookStoreItemType.Folder,
+        children: ['local://file/cached'], parents: [],
+      }
+      if (uri === 'local://file/cached') return {
+        uri, name: 'cached.runme', type: NotebookStoreItemType.File,
+        children: [], parents: [],
+      }
+      return { uri, name: 'Local Notebooks', type: NotebookStoreItemType.Folder, children: [], parents: [] }
+    })
+    let rejectSync!: (error: Error) => void
+    mocks.store.sync.mockImplementation(() => new Promise<void>((_resolve, reject) => {
+      rejectSync = reject
+    }))
+    render(<WorkspaceExplorer />)
+    await screen.findByText('Cached Drive folder')
+    act(() => mocks.treeProps.onToggle('local://folder/root'))
+    await screen.findByText('cached.runme')
+    expect(mocks.store.sync).toHaveBeenCalledWith('local://folder/root', { recursive: false })
+    await act(async () => rejectSync(new Error('Drive authorization expired')))
+    await screen.findByRole('alert')
+    expect(screen.getByText('cached.runme')).toBeTruthy()
+    expect(mocks.ensureAccessToken).not.toHaveBeenCalled()
+  })
+
+  it('disables the sync button while a pass is in progress', async () => {
+    mocks.workspaceItems = ['local://folder/local']
+    let finish!: () => void
+    mocks.store.sync.mockImplementation(() => new Promise<void>((resolve) => { finish = resolve }))
+    render(<WorkspaceExplorer />)
+    await screen.findByText('Local Notebooks')
+    const sync = screen.getByRole('button', { name: 'Sync folders' }) as HTMLButtonElement
+    fireEvent.click(sync)
+    expect(sync.disabled).toBe(true)
+    expect(sync.getAttribute('aria-busy')).toBe('true')
+    await act(async () => finish())
+    expect(sync.disabled).toBe(false)
+  })
+
   it('keeps an explicitly mounted nested folder visible as a root', async () => {
     mocks.workspaceItems = [
       'local://folder/local',
@@ -349,7 +429,7 @@ describe('WorkspaceExplorer current document handling', () => {
     errorLog.mockRestore()
   })
 
-  it('shows a directly created Drive notebook in its mounted folder', async () => {
+  it.each(['metadata', 'sync'])('keeps a directly created Drive notebook while %s is pending', async (pendingStep) => {
     mocks.workspaceItems = ['local://folder/drive']
     let blockFolderLoad = false
     let releaseFolderLoad!: () => void
@@ -357,9 +437,15 @@ describe('WorkspaceExplorer current document handling', () => {
       releaseFolderLoad = resolve
     })
     const folderLoadStarted = vi.fn()
+    mocks.store.sync.mockImplementation(async () => {
+      if (blockFolderLoad && pendingStep === 'sync') {
+        folderLoadStarted()
+        await folderLoadGate
+      }
+    })
     mocks.store.getMetadata.mockImplementation(async (uri: string) => {
       if (uri === 'local://folder/drive') {
-        if (blockFolderLoad) {
+        if (blockFolderLoad && pendingStep === 'metadata') {
           folderLoadStarted()
           await folderLoadGate
         }

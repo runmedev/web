@@ -41,20 +41,27 @@ jobs:
           key: ${{ runner.os }}-pnpm-store-${{ hashFiles('**/pnpm-lock.yaml') }}
           restore-keys: |
             ${{ runner.os }}-pnpm-store-
+      - name: Install Runme CLI
+        shell: bash
+        run: |
+          set -euo pipefail
+          # Avoid the action's release-list lookup, which can return no releases.
+          # Pin the same published CLI and verify its release checksum instead.
+          runme_dir="$RUNNER_TEMP/runme-cli"
+          mkdir -p "$runme_dir"
+          cd "$runme_dir"
+          curl --fail --location --retry 3 --output runme_linux_x86_64.tar.gz \
+            https://github.com/runmedev/runme/releases/download/v3.17.6/runme_linux_x86_64.tar.gz
+          echo '7f0add22316a749f59ec28fd13a7594e4e202f212fe640213f6ef7068403307d  runme_linux_x86_64.tar.gz' | sha256sum --check
+          tar -xzf runme_linux_x86_64.tar.gz runme
+          echo "$runme_dir" >> "$GITHUB_PATH"
+          ./runme --version
       - name: Install dependencies
-        uses: stateful/runme-action@v2
-        with:
-          workflows: |
-            configure
-            setup
+        run: runme run configure setup
       - name: 📦 Bundle
-        uses: stateful/runme-action@v2
-        with:
-          workflows: build
+        run: runme run build
       - name: 🧪 Test
-        uses: stateful/runme-action@v2
-        with:
-          workflows: test
+        run: runme run test
       - name: Test agent widgets and key vault
         run: >-
           pnpm -C app exec vitest run
@@ -67,6 +74,12 @@ jobs:
           pnpm -C app exec vitest run
           src/storage/storageRecovery.test.ts src/lib/storageRecoveryDrafts.test.ts
           src/components/StorageRecoveryBanner.test.tsx
+          --maxWorkers=2 --minWorkers=1
+      - name: Test explorer folder refresh
+        run: >-
+          pnpm -C app exec vitest run
+          src/lib/explorerSync.test.ts
+          src/components/Workspace/WorkspaceExplorer.test.tsx
           --maxWorkers=2 --minWorkers=1
       - name: Test desktop renderer and workload identity integration
         run: >-

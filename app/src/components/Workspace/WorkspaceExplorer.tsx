@@ -5,6 +5,7 @@ import {
   useMemo,
   useRef,
   useState,
+  useSyncExternalStore,
   type CSSProperties,
   type MouseEvent,
 } from "react";
@@ -15,7 +16,7 @@ import {
   type TreeApi,
 } from "react-arborist";
 import { ChevronRightIcon, ChevronDownIcon } from "@heroicons/react/20/solid";
-import { CloudArrowUpIcon, DocumentTextIcon, FolderIcon, FolderPlusIcon } from "@heroicons/react/24/outline";
+import { ArrowPathIcon, CloudArrowUpIcon, DocumentTextIcon, FolderIcon, FolderPlusIcon } from "@heroicons/react/24/outline";
 import useResizeObserver from "use-resize-observer";
 
 import { GoogleDrivePickerButton } from "./GoogleDrivePickerButton";
@@ -26,6 +27,7 @@ import {
 import { useWorkspace } from "../../contexts/WorkspaceContext";
 import { useNotebookStore } from "../../contexts/NotebookStoreContext";
 import { useFilesystemStore } from "../../contexts/FilesystemStoreContext";
+import { explorerSync, syncExplorerFolder } from "../../lib/explorerSync";
 import { appLogger } from "../../lib/logging/runtime";
 import {
   type NotebookFileFormat,
@@ -246,6 +248,7 @@ function setChildrenForFolder(
   nodes: TreeNode[],
   folderUri: string,
   children: TreeNode[],
+  preserveDescendants = false,
 ): TreeNode[] {
   let changed = false;
   const next = nodes.map((node) => {
@@ -253,11 +256,18 @@ function setChildrenForFolder(
       changed = true;
       return {
         ...node,
-        children,
+        children: preserveDescendants
+          ? children.map((child) => {
+              const previous = node.children?.find((entry) => entry.uri === child.uri);
+              return previous?.type === NotebookStoreItemType.Folder && child.type === NotebookStoreItemType.Folder
+                ? { ...child, children: previous.children }
+                : child;
+            })
+          : children,
       };
     }
     if (node.children?.length) {
-      const updated = setChildrenForFolder(node.children, folderUri, children);
+      const updated = setChildrenForFolder(node.children, folderUri, children, preserveDescendants);
       if (updated !== node.children) {
         changed = true;
         return {
@@ -320,7 +330,7 @@ function updateNodeMetadata(
   let changed = false;
   const next = nodes.map((node) => {
     let current = node;
-    if (node.uri === targetUri) {
+    if (node.uri === targetUri && node.type !== "placeholder") {
       changed = true;
       current = { ...node, ...updates };
     }
@@ -453,6 +463,11 @@ export function WorkspaceExplorer() {
   const { ref: containerRef, width = 0, height = 0 } = useResizeObserver<HTMLDivElement>();
 
   const [treeNodes, setTreeNodes] = useState<TreeNode[]>([]);
+  // The scheduler reads current tree state through refs without restarting its timer.
+  const treeNodesRef = useRef(treeNodes);
+  treeNodesRef.current = treeNodes;
+  const listingRequests = useRef(new Map<string, number>());
+  const syncing = useSyncExternalStore(explorerSync.subscribe, explorerSync.getSnapshot);
   const contextMenuRef = useRef<HTMLDivElement>(null);
   const [contextMenu, setContextMenu] = useState<ContextMenuState | null>(null);
   const [errorMessage, setErrorMessage] = useState<string | null>(null);
@@ -810,16 +825,19 @@ export function WorkspaceExplorer() {
   }, [recordFolderChildAddition, store]);
 
   const fetchChildren = useCallback(
-    async (uri: string) => {
+    async (
+      uri: string,
+      quiet = false,
+      mutationVersion = folderMutationVersionsRef.current.get(uri) ?? 0,
+    ) => {
+      const request = (listingRequests.current.get(uri) ?? 0) + 1;
+      listingRequests.current.set(uri, request);
       const targetStore = storeForUri(uri, store, fsStore);
       if (!targetStore) {
         return;
       }
 
-      const mutationVersion =
-        folderMutationVersionsRef.current.get(uri) ?? 0;
-
-      setTreeNodes((prev) =>
+      if (!quiet) setTreeNodes((prev) =>
         setChildrenForFolder(prev, uri, [
           createPlaceholderNode(uri, "Loading…"),
         ]),
@@ -888,9 +906,10 @@ export function WorkspaceExplorer() {
                 ),
               ];
 
+        if (listingRequests.current.get(uri) !== request) return;
         setTreeNodes((prev) =>
           (folderMutationVersionsRef.current.get(uri) ?? 0) === mutationVersion
-            ? setChildrenForFolder(prev, uri, nodes)
+            ? setChildrenForFolder(prev, uri, nodes, true)
             : setChildrenForFolder(
                 prev,
                 uri,
@@ -907,10 +926,16 @@ export function WorkspaceExplorer() {
                     .filter((addition) => addition.version > mutationVersion)
                     .map((addition) => addition.node),
                 ),
+                true,
               ),
         );
       } catch (error) {
-        console.error("Failed to list notebook store items", error);
+        // Background failure leaves the last successful listing usable.
+        if (quiet) throw error;
+        if (listingRequests.current.get(uri) !== request) return;
+        appLogger.warn("Failed to list notebook store items", {
+          attrs: { scope: "storage.explorer", uri, error: String(error) },
+        });
         if (
           (folderMutationVersionsRef.current.get(uri) ?? 0) !== mutationVersion
         ) {
@@ -925,6 +950,54 @@ export function WorkspaceExplorer() {
     },
     [fsStore, store, workspaceUris],
   );
+
+  const refreshFolder = useCallback(async (
+    uri: string,
+    mutationVersion = folderMutationVersionsRef.current.get(uri) ?? 0,
+  ) => {
+    if (!store) throw new Error("Notebook storage is not initialized.");
+    // Protect local additions/removals made during the remote request too, not
+    // just those made while reading the resulting local metadata.
+    await syncExplorerFolder(uri, store, () => fetchChildren(uri, true, mutationVersion));
+    const metadata = await (uri.startsWith("fs://") ? fsStore : store)?.getMetadata(uri);
+    if (metadata) setTreeNodes((nodes) => updateNodeMetadata(nodes, uri, { name: metadata.name }));
+  }, [store, fsStore, fetchChildren]);
+  const refreshFolderRef = useRef(refreshFolder);
+  refreshFolderRef.current = refreshFolder;
+
+  useEffect(() => {
+    if (!store) return;
+    return explorerSync.connect({
+      folders: () => {
+        const uris: string[] = [];
+        const visit = (nodes: TreeNode[], roots = false) => {
+          for (const node of nodes) {
+            if (node.type !== NotebookStoreItemType.Folder) continue;
+            if (roots || treeRef.current?.get(node.id)?.isOpen) uris.push(node.uri);
+            if (treeRef.current?.get(node.id)?.isOpen) visit(node.children ?? []);
+          }
+        };
+        visit(treeNodesRef.current, true);
+        return uris;
+      },
+      refresh: (uri) => refreshFolderRef.current(uri),
+    });
+  }, [store, fsStore]);
+
+  /** Manual sync reports partial failures while the timer stays unobtrusive. */
+  const handleSync = async () => {
+    setErrorMessage(null);
+    try {
+      const result = await explorerSync.sync();
+      if (result.failed.length) {
+        setErrorMessage(`Could not sync ${result.failed.length} folder(s). Check your connection and folder access, then retry.`);
+      } else {
+        showToast({ message: "Folders synced", tone: "success" });
+      }
+    } catch {
+      setErrorMessage("Unable to sync folders. Please try again.");
+    }
+  };
 
   const handleFileOpen = useCallback(
     async (nodeData: TreeNode) => {
@@ -1297,7 +1370,17 @@ function formatShortTimestamp(date: Date): string {
         if (!current?.isOpen) {
           return;
         }
-        fetchChildren(folderUri);
+        void (async () => {
+          const mutationVersion = folderMutationVersionsRef.current.get(folderUri) ?? 0;
+          // Show the local mirror before contacting Drive. Expanding a cached
+          // folder must still work offline or while Drive authorization expires.
+          if (folderUri.startsWith("local://folder/")) {
+            await fetchChildren(folderUri, true, mutationVersion);
+          }
+          await refreshFolder(folderUri, mutationVersion);
+        })().catch(() => {
+          setErrorMessage("Unable to sync folder. Check your connection and folder access, then retry.");
+        });
       };
 
       if (
@@ -1309,7 +1392,7 @@ function formatShortTimestamp(date: Date): string {
         setTimeout(scheduleFetch, 0);
       }
     },
-    [fetchChildren],
+    [fetchChildren, refreshFolder],
   );
 
   const handleRename = useCallback(
@@ -1664,7 +1747,18 @@ function formatShortTimestamp(date: Date): string {
         <h2 className="text-base font-semibold text-nb-text">
           Explorer
         </h2>
-        <div className="flex items-center gap-1">
+        <div id="workspace-explorer-toolbar-actions" className="flex items-center gap-1">
+          <button
+            type="button"
+            className="flex h-11 w-11 items-center justify-center rounded-nb-sm text-nb-text-muted hover:bg-nb-surface-2 hover:text-nb-text disabled:opacity-50 focus-visible:outline focus-visible:outline-2 focus-visible:outline-nb-accent"
+            onClick={() => void handleSync()}
+            aria-label="Sync folders"
+            title="Sync folders"
+            aria-busy={syncing}
+            disabled={syncing}
+          >
+            <ArrowPathIcon className={`h-5 w-5 ${syncing ? "animate-spin" : ""}`} />
+          </button>
           {isFileSystemAccessSupported() && fsStore && (
             <button
               type="button"
@@ -1686,7 +1780,7 @@ function formatShortTimestamp(date: Date): string {
       </div>
 
       {errorMessage && (
-        <p className="text-sm text-nb-error">
+        <p role="alert" className="text-sm text-nb-error">
           {errorMessage}
         </p>
       )}
@@ -1978,13 +2072,9 @@ function formatShortTimestamp(date: Date): string {
 
                     void (async () => {
                       try {
-                        if (store) {
-                          await store.sync(contextMenu.uri);
-                        }
-                      } catch (error) {
-                        console.error("Failed to sync folder", error);
-                      } finally {
-                        await fetchChildren(contextMenu.uri);
+                        await refreshFolder(contextMenu.uri);
+                      } catch {
+                        setErrorMessage("Unable to sync folder. Check your connection and folder access, then retry.");
                       }
                     })();
                   }}

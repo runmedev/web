@@ -144,6 +144,7 @@ class MockSandboxPort {
           method: 'explorer.editName',
           args: ['local://folder/drive'],
         })
+        this.emit({ type: 'host-call', callId: 3, method: 'explorer.sync', args: [] })
       } else if (this.scenario === 'credentials') {
         this.emit({
           type: 'host-call',
@@ -1064,9 +1065,11 @@ describe('SandboxJSKernel', () => {
       [
         "console.log(await explorer.renameFolder('local://folder/drive', 'Renamed Folder'));",
         "console.log(await explorer.editName('local://folder/drive'));",
+        "console.log(await explorer.sync());",
       ].join('\n')
     )
 
+    expect(bridgeCall).toHaveBeenCalledWith('explorer.sync', [])
     expect(bridgeCall).toHaveBeenCalledWith('explorer.renameFolder', [
       'local://folder/drive',
       'Renamed Folder',
