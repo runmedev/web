@@ -19,6 +19,60 @@ describe('appConfig OIDC Google shorthand', () => {
     window.history.replaceState(null, '', '/index.html')
   })
 
+  it('applies the desktop GKE provider without requiring a runner', async () => {
+    const { applyAppConfig } = await loadModules()
+    const identity = await import('../auth/workloadIdentity')
+    const config = {
+      authFlow: 'workload_identity',
+      provider: 'gke_metadata',
+      expectedServiceAccountEmail: 'runme@project.iam.gserviceaccount.com',
+      scopes: ['https://www.googleapis.com/auth/drive'],
+    }
+    applyAppConfig(
+      { googleDrive: config },
+      'http://localhost/configs/app-configs.yaml'
+    )
+    expect(identity.getWorkloadIdentityConfig()).toMatchObject(config)
+    expect(() =>
+      applyAppConfig(
+        { googleDrive: { ...config, provider: 'typo' } },
+        'http://localhost/configs/app-configs.yaml'
+      )
+    ).toThrow()
+    identity.resetWorkloadIdentityForTests()
+  })
+
+  it('uses direct metadata and rejects explicit lifetimes instead of defaulting them', async () => {
+    const { applyAppConfig } = await loadModules()
+    const identity = await import('../auth/workloadIdentity')
+    const config = {
+      authFlow: 'workload_identity',
+      provider: 'gke_metadata',
+      expectedServiceAccountEmail: 'runme@project.iam.gserviceaccount.com',
+      scopes: ['https://www.googleapis.com/auth/drive'],
+    }
+    try {
+      applyAppConfig({ googleDrive: config }, 'inline://direct-mode')
+      expect(identity.getWorkloadIdentityConfig()).toEqual(config)
+      for (const lifetimeSeconds of [900, '900', null]) {
+        expect(() =>
+          applyAppConfig(
+            { googleDrive: { ...config, lifetimeSeconds } },
+            'inline://direct-mode'
+          )
+        ).toThrow('lifetimeSeconds')
+      }
+      expect(() =>
+        applyAppConfig(
+          { googleDrive: { ...config, tokenMode: 'iam_exchange' } },
+          'inline://direct-mode'
+        )
+      ).toThrow('Remove tokenMode')
+    } finally {
+      identity.resetWorkloadIdentityForTests()
+    }
+  })
+
   it('applies Google defaults when oidc.google is configured', async () => {
     const { applyAppConfig } = await loadModules()
 
@@ -218,9 +272,7 @@ describe('appConfig OIDC Google shorthand', () => {
           preserveLocalConfiguration,
         }
       )
-      const { usesImplicitLogin } = await import(
-        '../auth/implicitLogin'
-      )
+      const { usesImplicitLogin } = await import('../auth/implicitLogin')
       expect(usesImplicitLogin(getOidcConfig())).toBe(true)
       expect(Boolean(getOidcConfig().clientSecret)).toBe(false)
       expect(

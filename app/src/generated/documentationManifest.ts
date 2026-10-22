@@ -179,11 +179,19 @@ export const DOCUMENTATION_MANIFEST = [
     path: 'docs/21-storage-recovery.md',
   },
   {
+    name: 'desktop-runtime',
+    title: 'Runme Desktop and local MCP',
+    description:
+      'Build and launch the bundled Electron Runme app, connect Codex to its local MCP endpoint, persist notebooks, and optionally package and start a Runme runner. Explains local authentication, packaging, and Linux executor usage.',
+    order: 22,
+    path: 'docs/22-desktop-runtime.md',
+  },
+  {
     name: 'environment',
     title: 'Environment variables',
     description:
       'Configure browser-local variables and read OpenAI organization and project IDs from JavaScript cells.',
-    order: 22,
-    path: 'docs/22-environment.md',
+    order: 23,
+    path: 'docs/23-environment.md',
   },
 ] as const satisfies readonly DocumentationManifestEntry[]

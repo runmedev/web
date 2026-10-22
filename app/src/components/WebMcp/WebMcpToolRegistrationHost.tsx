@@ -1,5 +1,11 @@
 import { useEffect } from 'react'
 
+import {
+  getDesktopToolContext,
+  type ModelContextLike,
+  type ToolExecuteOptionsLike,
+} from '../../lib/runtime/desktopTools'
+
 import { appLogger } from '../../lib/logging/runtime'
 import { getAppConsoleData } from '../../lib/appConsole/appConsoleController'
 import {
@@ -80,35 +86,12 @@ import {
 import { appState } from '../../lib/runtime/AppState'
 import { runnerAuthTools } from '../../lib/runtime/runnerAuthTools'
 
-type ToolExecuteOptionsLike = {
-  signal?: AbortSignal
-  // Legacy host extension. This is not part of the current WebMCP specification.
-  requestUserInteraction?: (
-    callback: () => Promise<unknown> | unknown
-  ) => Promise<unknown>
-}
-
-type ModelContextLike = {
-  registerTool: (
-    tool: {
-      name: string
-      title: string
-      description: string
-      inputSchema: Record<string, unknown>
-      annotations: {
-        readOnlyHint: boolean
-        untrustedContentHint: boolean
-      }
-      execute: (
-        input: Record<string, unknown>,
-        options: ToolExecuteOptionsLike
-      ) => Promise<string> | string
-    },
-    options?: { signal?: AbortSignal }
-  ) => Promise<undefined> | undefined
-}
-
-function getModelContext(): ModelContextLike | null {
+function getModelContext(
+  waitForOperations: () => Promise<void>
+): ModelContextLike | null {
+  // Desktop uses the same handlers over IPC, independent of experimental browser APIs.
+  const desktopContext = getDesktopToolContext(waitForOperations)
+  if (desktopContext) return desktopContext
   const documentModelContext =
     typeof document === 'undefined'
       ? undefined
@@ -187,7 +170,9 @@ export default function WebMcpToolRegistrationHost() {
   const appConsoleData = getAppConsoleData()
 
   useEffect(() => {
-    const modelContext = getModelContext()
+    const modelContext = getModelContext(() =>
+      codeOperationRegistry.waitForIdle()
+    )
     if (!modelContext) {
       appLogger.debug('WebMCP unavailable; skipping tool registration', {
         attrs: {

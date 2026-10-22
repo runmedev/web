@@ -7,6 +7,7 @@ import {
 import {
   type WorkloadIdentityDriveConfig,
   configureGoogleWorkloadIdentity,
+  desktopRequiredError,
   getWorkloadIdentityAccessToken,
   getWorkloadIdentityConfig,
 } from '../../auth/workloadIdentity'
@@ -103,12 +104,13 @@ export function runnerAuthTools() {
       name: 'configureGoogleWorkloadIdentity',
       title: 'Configure Google Workload Identity',
       description:
-        'Select unattended Drive authentication using an already configured runner. Returns status only, never a Google token.',
+        'Select unattended Drive authentication using a configured runner or the desktop GKE metadata provider. Returns status only, never a Google token.',
       inputSchema: {
         type: 'object',
         additionalProperties: false,
         properties: {
           authFlow: { const: 'workload_identity' },
+          provider: { type: 'string', enum: ['runner', 'gke_metadata'] },
           runnerName: textField,
           expectedServiceAccountEmail: textField,
           scopes: {
@@ -117,14 +119,25 @@ export function runnerAuthTools() {
             maxItems: 32,
             items: textField,
           },
-          lifetimeSeconds: { type: 'integer', minimum: 60, maximum: 3600 },
+          lifetimeSeconds: {
+            type: 'integer',
+            minimum: 60,
+            maximum: 3600,
+            description:
+              'Runner provider only; gke_metadata uses the metadata server expiry.',
+          },
         },
-        required: [
-          'authFlow',
-          'runnerName',
-          'expectedServiceAccountEmail',
-          'scopes',
+        allOf: [
+          {
+            if: {
+              properties: { provider: { const: 'gke_metadata' } },
+              required: ['provider'],
+            },
+            then: { not: { required: ['lifetimeSeconds'] } },
+            else: { required: ['runnerName'] },
+          },
         ],
+        required: ['authFlow', 'expectedServiceAccountEmail', 'scopes'],
       },
       run: (input: Record<string, unknown>) =>
         configureWorkloadDrive(input as unknown as WorkloadIdentityDriveConfig),
@@ -139,7 +152,10 @@ export function runnerAuthTools() {
     execute: async (input: Record<string, unknown>) => {
       try {
         return JSON.stringify(await run(input))
-      } catch {
+      } catch (error) {
+        // This local constant is safe to expose; upstream error bodies are not.
+        if (error instanceof Error && error.message === desktopRequiredError)
+          throw new Error(desktopRequiredError)
         throw new Error(
           'Runner authentication operation failed; verify configuration and availability'
         )

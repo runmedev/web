@@ -2,7 +2,7 @@
 name: environment
 title: Environment variables
 description: Configure browser-local variables and read OpenAI organization and project IDs from JavaScript cells.
-order: 22
+order: 23
 ---
 
 # Environment variables

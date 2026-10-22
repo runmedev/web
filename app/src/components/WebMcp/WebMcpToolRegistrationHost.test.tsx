@@ -48,6 +48,7 @@ vi.mock('../../lib/runtime/useCodeOperationRegistry', () => ({
     start: startOperationMock,
     get: getOperationMock,
     cancel: cancelOperationMock,
+    waitForIdle: async () => {},
   }),
 }))
 
@@ -80,6 +81,13 @@ vi.mock('../../contexts/NotebookContext', () => ({
 }))
 
 import WebMcpToolRegistrationHost from './WebMcpToolRegistrationHost'
+import type {
+  DesktopBridge,
+  ToolDescriptor,
+  ToolRequest,
+  ToolResponse,
+} from '../../../../packages/desktop/src/protocol'
+import type { RegisteredAppTool } from '../../lib/runtime/desktopTools'
 
 describe('WebMcpToolRegistrationHost', () => {
   beforeEach(() => {
@@ -174,6 +182,71 @@ describe('WebMcpToolRegistrationHost', () => {
     cleanup()
     delete (document as Document & { modelContext?: unknown }).modelContext
     delete (navigator as Navigator & { modelContext?: unknown }).modelContext
+  })
+
+  it('publishes the exact WebMCP catalog and invokes the same contract in desktop mode', async () => {
+    const native: RegisteredAppTool[] = []
+    Object.defineProperty(document, 'modelContext', {
+      configurable: true,
+      value: {
+        registerTool: (tool: RegisteredAppTool) => {
+          native.push(tool)
+        },
+      },
+    })
+    const web = render(<WebMcpToolRegistrationHost />)
+    expect(native.length).toBeGreaterThan(0)
+    const input = { code: 'console.log(42)', timeoutMs: 1000 }
+    const expected = await native
+      .find((t) => t.name === 'ExecuteCode')!
+      .execute(input)
+    web.unmount()
+    let catalog: ToolDescriptor[] = []
+    let onRequest!: (request: ToolRequest) => void
+    const responses: ToolResponse[] = []
+    const bridge: DesktopBridge = {
+      publishTools: (tools) => {
+        catalog = tools
+      },
+      onRequest: (listener) => {
+        onRequest = listener
+        return () => {}
+      },
+      respond: (response) => {
+        responses.push(response)
+      },
+    }
+    Object.defineProperty(window, 'runmeDesktop', {
+      configurable: true,
+      value: bridge,
+    })
+    try {
+      const desktop = render(<WebMcpToolRegistrationHost />)
+      // Serialization is the wire contract, excluding only the executable function.
+      expect(JSON.parse(JSON.stringify(catalog))).toEqual(
+        JSON.parse(
+          JSON.stringify(
+            native.map(({ execute, ...descriptor }) => {
+              expect(typeof execute).toBe('function')
+              return descriptor
+            })
+          )
+        )
+      )
+      onRequest({
+        id: 'parity',
+        type: 'call',
+        name: 'ExecuteCode',
+        arguments: input,
+      })
+      await waitFor(() =>
+        expect(responses).toContainEqual({ id: 'parity', result: expected })
+      )
+      desktop.unmount()
+      expect(catalog).toEqual([])
+    } finally {
+      delete (window as Window & { runmeDesktop?: DesktopBridge }).runmeDesktop
+    }
   })
 
   it('skips registration when modelContext is unavailable', () => {

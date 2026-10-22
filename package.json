@@ -17,11 +17,16 @@
     "preview": "pnpm run build:app && pnpm -C app run preview",
     "lint": "eslint .",
     "test": "pnpm --filter @runmedev/react-console run test",
-    "test:run": "pnpm --filter @runmedev/react-console run test:run",
+    "test:run": "pnpm --filter @runmedev/react-console run test:run && pnpm --filter @runmedev/desktop typecheck && pnpm --filter @runmedev/desktop test",
     "test:coverage": "pnpm --filter @runmedev/react-console run test:coverage",
     "changeset": "changeset",
     "version-packages": "changeset version",
-    "publish-packages": "changeset publish"
+    "publish-packages": "changeset publish",
+    "build:desktop": "pnpm run build && pnpm --filter @runmedev/desktop build",
+    "desktop": "pnpm --filter @runmedev/desktop start",
+    "package:desktop": "pnpm run build:desktop && pnpm --filter @runmedev/desktop package",
+    "test:desktop": "pnpm --filter @runmedev/desktop test",
+    "smoke:desktop": "pnpm --filter @runmedev/desktop smoke"
   },
   "dependencies": {
     "@buf/googleapis_googleapis.bufbuild_es": "2.9.0-20251009205305-72c8614f3bd0.1",
