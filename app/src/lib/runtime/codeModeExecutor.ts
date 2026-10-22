@@ -510,6 +510,8 @@ async function handleSandboxAppKernelBridgeCall({
         String(args[0] ?? ''),
         String(args[1] ?? '')
       )
+    case 'explorer.sync':
+      return globals.explorer.sync()
     case 'explorer.listFolders':
       return globals.explorer.listFolders()
     case 'credentials.google.setServiceAccountFromFilePath': {

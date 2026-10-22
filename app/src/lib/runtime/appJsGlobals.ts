@@ -47,6 +47,7 @@ import {
   searchDriveFiles,
   updateDriveFileBytes,
 } from '../driveTransfer'
+import { explorerSync } from '../explorerSync'
 import { googleClientManager } from '../googleClientManager'
 import {
   type EmbeddedImageSource,
@@ -1877,6 +1878,7 @@ export function createAppJsGlobals({
       return message
     },
     explorer: {
+      sync: () => explorerSync.sync(),
       addFolder: (path?: string) => {
         if (path) {
           return 'explorer.addFolder() does not accept a path when using the File System Access API.'
@@ -1962,6 +1964,7 @@ export function createAppJsGlobals({
           'explorer.editName(uri)          - Open inline rename for a workspace item',
           'explorer.renameFolder(uri,name) - Rename a workspace folder programmatically',
           'explorer.listFolders()          - List all workspace folders',
+          'explorer.sync()                 - Sync mounted and expanded folder listings',
           'explorer.help()                 - Show this help',
         ].join('\n')
       },

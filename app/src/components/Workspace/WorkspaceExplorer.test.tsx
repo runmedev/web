@@ -252,6 +252,58 @@ describe('WorkspaceExplorer current document handling', () => {
     expect(mocks.setCurrentDoc).not.toHaveBeenCalledWith(null)
   })
 
+  it('syncs with a tap, keeps expanded descendants, and reports failure without losing the listing', async () => {
+    mocks.workspaceItems = ['local://folder/root']
+    let files = ['local://file/old']
+    let renamed = false
+    mocks.store.getMetadata.mockImplementation(async (uri: string) => {
+      if (uri === 'local://folder/root') return {
+        uri, name: renamed ? 'Renamed root' : 'Root', type: NotebookStoreItemType.Folder,
+        children: ['local://folder/child', ...files], parents: [],
+      }
+      if (uri === 'local://folder/child') return {
+        uri, name: 'Child', type: NotebookStoreItemType.Folder,
+        children: ['local://file/grandchild'], parents: [],
+      }
+      return { uri, name: uri.split('/').pop() + '.runme', type: NotebookStoreItemType.File, children: [], parents: [] }
+    })
+    render(<WorkspaceExplorer />)
+    await screen.findByText('Root')
+    const sync = screen.getByRole('button', { name: 'Sync folders' })
+    fireEvent.click(sync)
+    await screen.findByText('old.runme')
+    act(() => mocks.treeProps.onToggle('local://folder/child'))
+    await screen.findByText('grandchild.runme')
+    files = ['local://file/new']
+    renamed = true
+    fireEvent.click(sync)
+    await screen.findByText('new.runme')
+    await screen.findByText('Renamed root')
+    expect(screen.queryByText('old.runme')).toBeNull()
+    expect(screen.getByText('grandchild.runme')).toBeTruthy()
+    expect(mocks.store.sync).toHaveBeenCalledWith('local://folder/root', { recursive: false })
+    expect(mocks.ensureAccessToken).not.toHaveBeenCalled()
+    await waitFor(() => expect((sync as HTMLButtonElement).disabled).toBe(false))
+    mocks.store.sync.mockRejectedValue(new Error('offline'))
+    fireEvent.click(sync)
+    await screen.findByText(/Could not sync/)
+    expect(screen.getByText('new.runme')).toBeTruthy()
+  })
+
+  it('disables the sync button while a pass is in progress', async () => {
+    mocks.workspaceItems = ['local://folder/local']
+    let finish!: () => void
+    mocks.store.sync.mockImplementation(() => new Promise<void>((resolve) => { finish = resolve }))
+    render(<WorkspaceExplorer />)
+    await screen.findByText('Local Notebooks')
+    const sync = screen.getByRole('button', { name: 'Sync folders' }) as HTMLButtonElement
+    fireEvent.click(sync)
+    expect(sync.disabled).toBe(true)
+    expect(sync.getAttribute('aria-busy')).toBe('true')
+    await act(async () => finish())
+    expect(sync.disabled).toBe(false)
+  })
+
   it('keeps an explicitly mounted nested folder visible as a root', async () => {
     mocks.workspaceItems = [
       'local://folder/local',

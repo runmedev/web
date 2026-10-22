@@ -3,6 +3,7 @@ import { create } from '@bufbuild/protobuf'
 import { afterEach, describe, expect, it, vi } from 'vitest'
 
 import { parser_pb } from '../../runme/client'
+import { explorerSync } from '../explorerSync'
 import { driveLinkCoordinator } from '../driveLinkCoordinator'
 import { GoogleClientManager } from '../googleClientManager'
 import { dismissTour, tourGuideStore } from '../tourGuide'
@@ -445,6 +446,15 @@ describe('createAppJsGlobals notebook reference helpers', () => {
     expect(resolveNotebook).toHaveBeenCalledWith(requested.getUri())
     expect(current.getNotebook().cells).toHaveLength(0)
     expect(requested.getNotebook().cells).toHaveLength(1)
+  })
+
+  it('uses the shared explorer sync command from the console', async () => {
+    const result = { refreshed: ['local://folder/drive'], failed: [] }
+    const sync = vi.spyOn(explorerSync, 'sync').mockResolvedValue(result)
+    const globals = createAppJsGlobals({ runme: createRunme() })
+    expect(await globals.explorer.sync()).toEqual(result)
+    expect(sync).toHaveBeenCalledOnce()
+    expect(globals.explorer.help()).toContain('explorer.sync()')
   })
 
   it('opens inline workspace rename from the explorer runtime API', () => {
