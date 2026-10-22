@@ -145,6 +145,16 @@ jobs:
           agent-browser --version
           agent-browser install
 
+      - name: Use the primary Ubuntu package mirror
+        shell: bash
+        run: |
+          set -euo pipefail
+          # The Azure mirror can stall browser/ffmpeg installs until this job
+          # times out. Use the primary archive with normal apt signature checks.
+          if [[ -f /etc/apt/apt-mirrors.txt ]]; then
+            sudo sed -i 's|http://azure.archive.ubuntu.com/ubuntu|https://archive.ubuntu.com/ubuntu|g' /etc/apt/apt-mirrors.txt
+          fi
+
       - name: Install Playwright browser for OAuth CUJ
         shell: bash
         run: |
