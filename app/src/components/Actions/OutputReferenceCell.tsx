@@ -37,29 +37,49 @@ export function OutputReferenceCell({
   }, [cell.value])
   useEffect(() => {
     let disposed = false
-    let request = 0
+    let inFlight = false
+    let retryRequested = false
+    let resolvedOutput: ResolvedOutputReference | undefined
+    // These values belong to this store/URI/link tuple, not to later edits.
+    setResult(undefined)
+    setError('')
+    setLoading(true)
+    setShowSource(false)
     const refresh = async () => {
-      const current = ++request
-      setLoading(true)
+      if (disposed || (resolvedOutput && !resolvedOutput.provenanceError))
+        return
+      if (inFlight) {
+        retryRequested = true
+        return
+      }
+      inFlight = true
       try {
         if (!store) throw new Error('Notebook storage is unavailable.')
         const resolved = await store.resolveOutputReference(uri, cell.value)
-        if (!disposed && current === request) {
-          setResult(resolved)
+        if (!disposed) {
+          resolvedOutput = resolved
+          setResult(resolvedOutput)
           setError('')
         }
       } catch (error) {
-        if (!disposed && current === request) {
-          setResult(undefined)
+        // Keep an already rendered output if only its provenance needs repair.
+        if (!disposed && !resolvedOutput) {
           setError(String(error))
         }
       } finally {
-        if (!disposed && current === request) setLoading(false)
+        inFlight = false
+        if (!disposed) setLoading(false)
+        if (retryRequested) {
+          retryRequested = false
+          void refresh()
+        }
       }
     }
-    void refresh()
-    // A Drive merge may bring missing history. Never cache a failure forever.
+    // A successful immutable reference cannot change when unrelated cells are
+    // saved/deleted. Retry only missing output/provenance when history arrives;
+    // never unmount a loaded graph for a notebook-wide sync notification.
     const unsubscribe = store?.subscribeSync(uri, () => void refresh())
+    void refresh()
     return () => {
       disposed = true
       unsubscribe?.()

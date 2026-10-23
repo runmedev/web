@@ -1,3 +1,4 @@
+// @vitest-environment node
 import { create } from '@bufbuild/protobuf'
 import { describe, expect, it } from 'vitest'
 
@@ -17,6 +18,7 @@ import {
   referenceForOutput,
   resolveOutputReference,
 } from './outputReference'
+import { outputReferenceSource } from './outputReferenceRuntime'
 
 const bytes = (value: string) => new Uint8Array(new TextEncoder().encode(value))
 
@@ -69,6 +71,59 @@ async function fixture() {
 }
 
 describe('versioned output references', () => {
+  it('copies and resolves an autosaved output without browser DOM globals', async () => {
+    expect(typeof DOMParser).toBe('undefined')
+    expect(typeof HTMLAnchorElement).toBe('undefined')
+    const { operations, notebook, save } = await fixture()
+    const store = {
+      createOutputReference: async (
+        _uri: string,
+        cellId: string,
+        outputIndex: number,
+        itemIndex: number
+      ) =>
+        formatOutputReference(
+          referenceForOutput(operations, cellId, outputIndex, itemIndex)
+        ),
+      resolveOutputReference: async (_uri: string, source: string) =>
+        resolveOutputReference(operations, parseOutputReference(source)),
+    }
+    const source = await outputReferenceSource(
+      store,
+      {
+        getUri: () => 'local://file/scorecard',
+        getName: () => 'scorecard.runme',
+        getNotebook: () => notebook,
+        getCell: () => null,
+        updateCell: () => {},
+        flushPendingPersist: () => save(notebook),
+      },
+      'methods',
+      0,
+      1
+    )
+    const resolved = await store.resolveOutputReference(
+      'local://file/scorecard',
+      source
+    )
+    expect(resolved.item.data).toEqual(
+      notebook.cells[0].outputs[0].items[1].data
+    )
+    expect(resolved.executionId).toBe('run-one')
+  })
+
+  it.each([
+    '<a href="#cell=x&amp;version=operation%3Av&amp;output_item=0.0">Result</a>',
+    " \n<A HREF='#cell=x&#38;version=operation%3Av&#x26;output_item=0.0'>Result &amp; details</A>\n ",
+  ])('decodes HTML attributes without a DOM: %s', (source) => {
+    expect(parseOutputReference(source)).toEqual({
+      cellId: 'x',
+      version: { kind: 'operation', op_id: 'v' },
+      outputIndex: 0,
+      itemIndex: 0,
+    })
+  })
+
   it('pins the autosaved finish without a checkpoint and derives the earlier executed code', async () => {
     const { operations } = await fixture()
     const reference = referenceForOutput(operations, 'methods', 0, 1)
@@ -157,6 +212,11 @@ describe('versioned output references', () => {
   })
 
   it.each([
+    '<frameset><frame src="https://example.com"></frameset>',
+    '<title>extra head content</title><a href="#cell=x&version=operation:v&output_item=0.0">x</a>',
+    '<a href="#cell=x&version=operation:v&output_item=0.0">x</a><a href="#cell=y&version=operation:v&output_item=0.0">y</a>',
+    'extra text<a href="#cell=x&version=operation:v&output_item=0.0">x</a>',
+    '<a href="#cell=x&version=operation:v&output_item=0.0"><template>x</template></a>',
     '<script>alert(1)</script>',
     '<a href="javascript:alert(1)">x</a>',
     '<a href="#cell=x&version=operation:v&output_item=0.0" onclick="alert(1)">x</a>',

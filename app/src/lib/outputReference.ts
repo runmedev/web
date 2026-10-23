@@ -1,4 +1,5 @@
 import { fromJson } from '@bufbuild/protobuf'
+import { defaultTreeAdapter, parse } from 'parse5'
 
 import { parser_pb } from '../runme/client'
 import { materializeOperationLog } from './operationLog/materialize'
@@ -34,26 +35,37 @@ export function isOutputReferenceCell(
   return cell?.languageId?.trim().toLowerCase() === OUTPUT_REFERENCE_LANGUAGE
 }
 
-/** Parse a single inert anchor. Reference source is never inserted into the DOM. */
+/**
+ * Parse a single inert anchor in both the page and the storage SharedWorker.
+ * Keep HTML entity/attribute semantics without depending on browser DOM globals.
+ * Reference source is never inserted into the DOM.
+ */
 export function parseOutputReference(source: string): OutputReference {
-  const document = new DOMParser().parseFromString(source, 'text/html')
-  const nodes = [...document.body.childNodes].filter(
-    (node) => node.nodeType !== 3 || node.textContent?.trim()
-  )
+  const document = parse(source, { scriptingEnabled: false })
+  // HTML parsing supplies html/head; frameset documents may have no body.
+  const html = document.childNodes.find(defaultTreeAdapter.isElementNode)!
+  const elements = html.childNodes.filter(defaultTreeAdapter.isElementNode)
+  const head = elements.find((node) => node.tagName === 'head')!
+  const body = elements.find((node) => node.tagName === 'body')
+  const nodes =
+    body?.childNodes.filter(
+      (node) => !defaultTreeAdapter.isTextNode(node) || node.value.trim()
+    ) ?? []
   const anchor = nodes[0]
   if (
-    document.head.childNodes.length ||
+    head.childNodes.length ||
     nodes.length !== 1 ||
-    !(anchor instanceof HTMLAnchorElement) ||
-    anchor.children.length ||
-    anchor.attributes.length !== 1 ||
-    !anchor.hasAttribute('href')
+    !defaultTreeAdapter.isElementNode(anchor) ||
+    anchor.tagName !== 'a' ||
+    anchor.childNodes.some(defaultTreeAdapter.isElementNode) ||
+    anchor.attrs.length !== 1 ||
+    anchor.attrs[0].name !== 'href'
   ) {
     throw new Error(
       'Enter one HTML link: <a href="#cell=…&amp;version=operation%3A…&amp;output_item=0.0">Result</a>'
     )
   }
-  const href = anchor.getAttribute('href') ?? ''
+  const href = anchor.attrs[0].value
   if (!href.startsWith('#'))
     throw new Error(
       'Reference cells currently support links within this .runme notebook only.'
