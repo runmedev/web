@@ -1,0 +1,13 @@
+/** Diagnostics bypass store initialization and never include notebook contents or credentials. */
+export type StorageOwnerDiagnostics = {
+  version: number
+  instanceId: string
+  uptimeMs: number
+  connectedTabs: number
+  initialization: 'pending' | 'ready' | 'failed'
+  pendingCredentials: number
+  scanning: boolean
+  recovery: 'idle' | 'preparing' | 'draining'
+  activeRequestCount: number
+  oldestRequests: { method: string; elapsedMs: number; stage: string }[]
+}

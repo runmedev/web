@@ -10,7 +10,10 @@ import TourUiStateBridge from '../TourGuide/TourUiStateBridge'
 import { useEffect, useSyncExternalStore } from 'react'
 import StorageRecoveryBanner from '../StorageRecoveryBanner'
 import { storageRecovery } from '../../storage/storageRecovery'
-import { prepareNotebookStorageRestart } from '../../lib/storageRecoveryDrafts'
+import {
+  backupNotebookRecoveryDrafts,
+  prepareNotebookStorageRestart,
+} from '../../lib/storageRecoveryDrafts'
 import { useCurrentDoc } from '../../contexts/CurrentDocContext'
 import { isDriveSyncStatusUri } from '../../lib/workspaceDocuments/workspaceDocumentTypes'
 
@@ -25,7 +28,11 @@ export default function MainPage() {
     storageRecovery.getSnapshot
   )
   useEffect(
-    () => storageRecovery.registerPreparation(prepareNotebookStorageRestart),
+    () =>
+      storageRecovery.registerPreparation(
+        prepareNotebookStorageRestart,
+        backupNotebookRecoveryDrafts
+      ),
     []
   )
   const restarting =

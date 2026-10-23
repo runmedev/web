@@ -8,6 +8,7 @@ import LocalNotebooks, {
   NotebookConflictChangedError,
   OperationLogMutationCommitUncertainError,
 } from './local'
+import type { StorageOwnerDiagnostics } from './storageOwnerDiagnostics'
 import { STORAGE_METHODS, STORAGE_OWNER_VERSION } from './storageOwnerProtocol'
 import { requiresStorageReload, storageRecovery } from './storageRecovery'
 import { StorageRecoveryClient } from './storageRecoveryClient'
@@ -23,6 +24,13 @@ type Pending = {
 export class StorageOwnerClient {
   private pending = new Map<string, Pending>()
   private closed = false
+  private diagnostic?: {
+    id: string
+    timer: ReturnType<typeof setTimeout>
+    resolve: (value: StorageOwnerDiagnostics) => void
+    reject: (error: Error) => void
+    promise: Promise<StorageOwnerDiagnostics>
+  }
   onChange?: (uri: string) => void
   onFailure?: (error: Error) => void
   recovery?: StorageRecoveryClient
@@ -32,6 +40,15 @@ export class StorageOwnerClient {
     private readonly getCredentialBoundary: () => string = () => 'default'
   ) {
     port.onmessage = (event) => {
+      if (event.data?.type === 'storage-owner-diagnostics') {
+        const diagnostic = this.diagnostic
+        if (diagnostic && diagnostic.id === event.data.id) {
+          clearTimeout(diagnostic.timer)
+          diagnostic.resolve(event.data.value)
+          this.diagnostic = undefined
+        }
+        return
+      }
       if (event.data?.type === 'storage-recovery') {
         void this.recovery?.receive(event.data as RecoveryMessage)
         return
@@ -46,6 +63,37 @@ export class StorageOwnerClient {
       )
     port.start()
   }
+  /** Coalesce probes outside the data RPC/hello path; never retry the timed-out mutation. */
+  diagnose(): Promise<StorageOwnerDiagnostics> {
+    if (this.diagnostic) return this.diagnostic.promise
+    if (this.closed)
+      return Promise.reject(new Error('Storage worker disconnected'))
+    const id = crypto.randomUUID()
+    let resolve!: (value: StorageOwnerDiagnostics) => void
+    let reject!: (error: Error) => void
+    const promise = new Promise<StorageOwnerDiagnostics>((res, rej) => {
+      resolve = res
+      reject = rej
+    })
+    const timer = setTimeout(() => {
+      this.diagnostic = undefined
+      reject(
+        new Error(
+          'No diagnostic reply: the worker may be unresponsive, disconnected, or lack diagnostics support.'
+        )
+      )
+    }, 5_000)
+    this.diagnostic = { id, timer, resolve, reject, promise }
+    try {
+      this.port.postMessage({ type: 'storage-owner-diagnostics', id })
+    } catch (error) {
+      clearTimeout(timer)
+      this.diagnostic = undefined
+      reject(error instanceof Error ? error : new Error(String(error)))
+    }
+    return promise
+  }
+
   request(method: string, args: unknown[] = []): Promise<unknown> {
     if (this.closed)
       return Promise.reject(
@@ -54,6 +102,7 @@ export class StorageOwnerClient {
         )
       )
     const id = crypto.randomUUID()
+    const startedAt = Date.now()
     return new Promise((resolve, reject) => {
       const timer = setTimeout(
         () => {
@@ -63,6 +112,31 @@ export class StorageOwnerClient {
               ? 'Storage worker did not respond to queue diagnostics.'
               : 'Storage worker did not acknowledge the request. Its outcome is uncertain; do not repeat creation blindly.'
           )
+          appLogger.warn('Storage owner request timed out', {
+            attrs: {
+              scope: 'storage.owner',
+              method,
+              requestId: id,
+              elapsedMs: Date.now() - startedAt,
+              pendingRequests: this.pending.size,
+            },
+          })
+          // One probe per timeout burst. A response proves message-loop liveness,
+          // not the outcome of a timed-out commit.
+          if (!this.diagnostic)
+            void this.diagnose().then(
+              (diagnostics) =>
+                appLogger.warn('Storage owner diagnostic reply', {
+                  attrs: {
+                    scope: 'storage.owner',
+                    diagnostics: JSON.stringify(diagnostics),
+                  },
+                }),
+              (probeError) =>
+                appLogger.warn('Storage owner diagnostics unavailable', {
+                  attrs: { scope: 'storage.owner', error: String(probeError) },
+                })
+            )
           this.onFailure?.(error)
           reject(error)
         },
@@ -165,6 +239,11 @@ export class StorageOwnerClient {
     this.recovery?.disconnected()
     this.onFailure?.(error)
     this.closed = true
+    if (this.diagnostic) {
+      clearTimeout(this.diagnostic.timer)
+      this.diagnostic.reject(error)
+      this.diagnostic = undefined
+    }
     for (const pending of this.pending.values()) {
       clearTimeout(pending.timer)
       pending.reject(error)

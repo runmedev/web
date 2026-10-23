@@ -26,16 +26,54 @@ export function readRecoveryDrafts(): RecoveryDraft[] {
   return drafts
 }
 
-/** Freeze the editors while each tab acknowledges restart; all editable notebooks get durable recovery copies. */
+/** Read loaded editors directly, without the worker, persistence, or browser storage. */
+export function captureNotebookRecoveryDrafts(): RecoveryDraft[] {
+  return openModels()
+    .filter((model) => !model.isReadOnly())
+    .map((model) => {
+      const snapshot = model.getSnapshot()
+      return {
+        uri: snapshot.uri,
+        name: snapshot.name,
+        content: encodeRunmeNotebook(snapshot.notebook),
+      }
+    })
+}
+
+/** Save every editor before any asynchronous work. Session copies survive reload, not tab closure. */
+export function backupNotebookRecoveryDrafts(): number {
+  const copies = captureNotebookRecoveryDrafts()
+  const drafts = readRecoveryDrafts()
+  for (const draft of copies) {
+    if (
+      !drafts.some(
+        (old) => old.uri === draft.uri && old.content === draft.content
+      )
+    )
+      drafts.push(draft)
+  }
+  sessionStorage.setItem(DRAFTS_KEY, JSON.stringify(drafts))
+  return copies.length
+}
+
+/** Only loaded models contain editor contents; placeholders must not become empty recovery copies. */
+function openModels() {
+  const controller = getNotebookDataController()
+  return controller
+    .getOpenNotebooks()
+    .map((entry) => controller.getNotebookData(entry.uri))
+    .filter(
+      (model): model is NonNullable<typeof model> =>
+        model !== undefined && model.getSnapshot().loaded
+    )
+}
+
+/** Freeze the editors while each tab acknowledges restart; all editable notebooks get tab-local recovery copies. */
 export async function prepareNotebookStorageRestart(
   signal: AbortSignal = new AbortController().signal
 ): Promise<() => void> {
   signal.throwIfAborted()
-  const controller = getNotebookDataController()
-  const models = controller
-    .getOpenNotebooks()
-    .map((entry) => controller.getNotebookData(entry.uri))
-    .filter((model) => model?.getSnapshot().loaded)
+  const models = openModels()
   if (
     models.some(
       (model) =>
@@ -59,24 +97,11 @@ export async function prepareNotebookStorageRestart(
   }
   signal.addEventListener('abort', release, { once: true })
   try {
+    // Copy all notebooks before a stalled first flush can block the rest.
+    backupNotebookRecoveryDrafts()
     for (const model of models) {
       signal.throwIfAborted()
       if (model!.isReadOnly()) continue
-      const snapshot = model!.getSnapshot()
-      const draft = {
-        uri: snapshot.uri,
-        name: snapshot.name,
-        content: encodeRunmeNotebook(snapshot.notebook),
-      }
-      const drafts = readRecoveryDrafts()
-      if (
-        !drafts.some(
-          (old) => old.uri === draft.uri && old.content === draft.content
-        )
-      ) {
-        // Persist first, even if the normal store is absent or its version rejects saves.
-        sessionStorage.setItem(DRAFTS_KEY, JSON.stringify([...drafts, draft]))
-      }
       try {
         await waitForPersist(model!.flushPendingPersist(), signal)
       } catch {
@@ -88,7 +113,7 @@ export async function prepareNotebookStorageRestart(
   } catch (error) {
     release()
     throw new Error(
-      `Could not preserve editor copies; no tabs were reloaded. ${String(error)}`
+      `Could not preserve all editor copies; no automatic reload was performed. ${String(error)}`
     )
   }
 }

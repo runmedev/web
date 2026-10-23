@@ -363,3 +363,86 @@ describe('SharedWorker message boundary', () => {
     )
   })
 })
+
+it('answers diagnostics outside initialization and reports waiting requests without their contents', async () => {
+  let initialize!: () => void
+  const store = {
+    ready: new Promise<void>((resolve) => {
+      initialize = resolve
+    }),
+    setDriveSyncAvailable: vi.fn(),
+    save: vi.fn(async () => {}),
+  }
+  const host = new StorageOwnerHost(store as unknown as LocalNotebooks)
+  const client = connect(host)
+  const saving = client.request('save', [
+    'private-uri',
+    { secret: 'notebook body' },
+  ])
+  const diagnostics = await client.diagnose()
+  expect(diagnostics.initialization).toBe('pending')
+  expect(diagnostics.oldestRequests).toEqual([
+    { method: 'save', elapsedMs: expect.any(Number), stage: 'initializing' },
+  ])
+  expect(JSON.stringify(diagnostics)).not.toContain('private-uri')
+  expect(JSON.stringify(diagnostics)).not.toContain('notebook body')
+  initialize()
+  await saving
+  expect((await client.diagnose()).activeRequestCount).toBe(0)
+})
+
+it('reports executing requests while a commit is hung without retrying it', async () => {
+  const { host, store } = setup()
+  let finish!: () => void
+  store.save.mockImplementation(
+    () =>
+      new Promise<void>((resolve) => {
+        finish = resolve
+      })
+  )
+  const client = connect(host)
+  const saving = client.request('save', ['a', {}])
+  await vi.waitFor(() => expect(store.save).toHaveBeenCalledOnce())
+  const first = client.diagnose()
+  expect(client.diagnose()).toBe(first)
+  expect((await first).oldestRequests[0].stage).toBe('executing')
+  expect(store.save).toHaveBeenCalledOnce()
+  finish()
+  await saving
+})
+
+it('bounds and coalesces probes when a worker does not answer', async () => {
+  vi.useFakeTimers()
+  const port = { postMessage: vi.fn(), start: vi.fn(), close: vi.fn() }
+  const client = new StorageOwnerClient(
+    port as unknown as MessagePort,
+    async () => 'token'
+  )
+  clients.push(client)
+  const probe = client.diagnose()
+  expect(client.diagnose()).toBe(probe)
+  const rejected = expect(probe).rejects.toThrow('may be unresponsive')
+  await vi.advanceTimersByTimeAsync(5_000)
+  await rejected
+  expect(port.postMessage).toHaveBeenCalledOnce()
+})
+
+it('bounds diagnostics to the ten oldest requests while reporting the full backlog', async () => {
+  const { host, store } = setup()
+  let finish!: () => void
+  const blocked = new Promise<void>((resolve) => {
+    finish = resolve
+  })
+  store.save.mockImplementation(() => blocked)
+  const client = connect(host)
+  const writes = Array.from({ length: 12 }, () =>
+    client.request('save', ['a', {}])
+  )
+  const first = await client.diagnose()
+  expect(first.activeRequestCount).toBe(12)
+  expect(first.oldestRequests).toHaveLength(10)
+  expect((await client.diagnose()).instanceId).toBe(first.instanceId)
+  finish()
+  await Promise.all(writes)
+  expect((await client.diagnose()).oldestRequests).toEqual([])
+})
