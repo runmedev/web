@@ -3,6 +3,8 @@ import { afterEach, describe, expect, it, vi } from 'vitest'
 
 import { parser_pb } from '../runme/client'
 import {
+  backupNotebookRecoveryDrafts,
+  captureNotebookRecoveryDrafts,
   prepareNotebookStorageRestart,
   readRecoveryDrafts,
 } from './storageRecoveryDrafts'
@@ -129,3 +131,55 @@ it.each(['[null]', '[{"uri":"local://file/a"}]', '{}'])(
     expect(sessionStorage.getItem('runme/storage-recovery-drafts/v1')).toBe(raw)
   }
 )
+
+it('backs up every notebook before waiting for a hung first save', async () => {
+  const first = model()
+  const second = model()
+  second.getSnapshot = () => ({
+    ...first.getSnapshot(),
+    uri: 'local://second',
+    name: 'second.runme',
+  })
+  mocks.getOpenNotebooks.mockReturnValue([
+    { uri: 'local://first' },
+    { uri: 'local://second' },
+  ])
+  mocks.getNotebookData.mockImplementation((uri) =>
+    uri === 'local://first' ? first : second
+  )
+  first.flushPendingPersist.mockImplementation(() => new Promise(() => {}))
+  const controller = new AbortController()
+  const preparing = prepareNotebookStorageRestart(controller.signal)
+  const rejected = expect(preparing).rejects.toThrow('Could not preserve')
+  expect(readRecoveryDrafts().map((draft) => draft.name)).toEqual([
+    'draft.runme',
+    'second.runme',
+  ])
+  controller.abort()
+  await rejected
+  expect(second.setReleasePending).toHaveBeenLastCalledWith(false)
+})
+
+it('captures fresh editor copies without touching unavailable session storage or persistence', () => {
+  const m = model()
+  const get = vi.spyOn(Storage.prototype, 'getItem').mockImplementation(() => {
+    throw new Error('unavailable')
+  })
+  const set = vi.spyOn(Storage.prototype, 'setItem').mockImplementation(() => {
+    throw new Error('quota')
+  })
+  const copies = captureNotebookRecoveryDrafts()
+  expect(JSON.parse(copies[0].content).cells[0].value).toBe('unsaved edit')
+  expect(get).not.toHaveBeenCalled()
+  expect(set).not.toHaveBeenCalled()
+  expect(m.flushPendingPersist).not.toHaveBeenCalled()
+  expect(m.setReleasePending).not.toHaveBeenCalled()
+})
+
+it('backs up before worker coordination without flushing or locking editors', () => {
+  const m = model()
+  expect(backupNotebookRecoveryDrafts()).toBe(1)
+  expect(readRecoveryDrafts()).toHaveLength(1)
+  expect(m.flushPendingPersist).not.toHaveBeenCalled()
+  expect(m.setReleasePending).not.toHaveBeenCalled()
+})

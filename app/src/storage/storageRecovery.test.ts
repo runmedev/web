@@ -1,6 +1,6 @@
 // @vitest-environment node
 import { MessageChannel } from 'node:worker_threads'
-import { afterEach, describe, expect, it, vi } from 'vitest'
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 
 import type LocalNotebooks from './local'
 import { StorageOwnerClient } from './storageOwnerClient'
@@ -14,6 +14,12 @@ import {
 
 const clients: StorageOwnerClient[] = []
 const ports: MessagePort[] = []
+beforeEach(() => {
+  storageRecovery.registerPreparation(
+    async () => vi.fn(),
+    () => 1
+  )
+})
 afterEach(() => {
   clients.splice(0).forEach((client) => client.close())
   ports.splice(0).forEach((port) => port.close())
@@ -186,7 +192,9 @@ describe('coordinated storage restart', () => {
     const client = new StorageRecoveryClient(vi.fn(), reload)
     client.restart()
     await vi.advanceTimersByTimeAsync(10_000)
-    expect(storageRecovery.getSnapshot().message).toContain('does not support')
+    expect(storageRecovery.getSnapshot().message).toContain(
+      'did not acknowledge restart'
+    )
     expect(reload).not.toHaveBeenCalled()
   })
   it('releases a late preparation after a coordinated abort', async () => {
@@ -298,4 +306,116 @@ it('aborts preparation when the host cancels a round, without acknowledging or r
   expect(signal.aborted).toBe(true)
   expect(send).not.toHaveBeenCalled()
   expect(reload).not.toHaveBeenCalled()
+})
+
+it('backs up before sending restart even when the worker never replies', async () => {
+  vi.useFakeTimers()
+  const backup = vi.fn(() => 2)
+  const prepare = vi.fn(async () => vi.fn())
+  const send = vi.fn(() => expect(backup).toHaveBeenCalledOnce())
+  const reload = vi.fn()
+  const client = new StorageRecoveryClient(send, reload, prepare, backup)
+  client.restart()
+  client.restart()
+  expect(send).toHaveBeenCalledOnce()
+  expect(prepare).not.toHaveBeenCalled()
+  await vi.advanceTimersByTimeAsync(10_000)
+  expect(storageRecovery.getSnapshot().message).toContain('2 editor copies')
+  expect(storageRecovery.getSnapshot().message).toContain(
+    'Other tabs have not confirmed backups'
+  )
+  expect(reload).not.toHaveBeenCalled()
+})
+
+it('does not contact the worker or claim success when preflight backup fails', () => {
+  const send = vi.fn()
+  const client = new StorageRecoveryClient(send, vi.fn(), vi.fn(), () => {
+    throw new Error('quota')
+  })
+  client.restart()
+  expect(send).not.toHaveBeenCalled()
+  expect(storageRecovery.getSnapshot().message).toContain('Get recovery copies')
+  expect(storageRecovery.getSnapshot().message).toContain(
+    'backup has not been confirmed'
+  )
+})
+
+it('keeps confirmed backup status when sending restart fails', () => {
+  const client = new StorageRecoveryClient(
+    () => {
+      throw new Error('closed')
+    },
+    vi.fn(),
+    vi.fn(),
+    () => 1
+  )
+  client.restart()
+  expect(storageRecovery.getSnapshot().message).toContain('1 editor copies')
+  expect(storageRecovery.getSnapshot().message).toContain('No automatic reload')
+})
+
+it('unfreezes a hung preparation when the worker disappears without sending blocked', async () => {
+  vi.useFakeTimers()
+  let signal!: AbortSignal
+  const send = vi.fn()
+  const reload = vi.fn()
+  const client = new StorageRecoveryClient(send, reload, async (incoming) => {
+    signal = incoming
+    await new Promise<void>((_resolve, reject) =>
+      incoming.addEventListener('abort', () => reject(incoming.reason))
+    )
+    return vi.fn()
+  })
+  const preparing = client.receive(recoveryMessage('prepare', 'round'))
+  await client.receive(recoveryMessage('prepare', 'round'))
+  await vi.advanceTimersByTimeAsync(30_000)
+  await preparing
+  expect(signal.aborted).toBe(true)
+  expect(send).not.toHaveBeenCalled()
+  await client.receive(recoveryMessage('reload', 'round'))
+  expect(reload).not.toHaveBeenCalled()
+})
+
+it('rejects a stale preparation result when the host reuses a timed-out round ID', async () => {
+  vi.useFakeTimers()
+  let finishOld!: (release: () => void) => void
+  const oldRelease = vi.fn()
+  const newRelease = vi.fn()
+  const prepare = vi
+    .fn<() => Promise<() => void>>(async () => newRelease)
+    .mockImplementationOnce(
+      () =>
+        new Promise((resolve) => {
+          finishOld = resolve
+        })
+    )
+  const send = vi.fn()
+  const client = new StorageRecoveryClient(send, vi.fn(), prepare)
+  const oldPreparation = client.receive(
+    recoveryMessage('prepare', 'same-round')
+  )
+  await vi.advanceTimersByTimeAsync(30_000)
+  await client.receive(recoveryMessage('prepare', 'same-round'))
+  expect(send).toHaveBeenCalledOnce()
+  finishOld(oldRelease)
+  await oldPreparation
+  expect(oldRelease).toHaveBeenCalledOnce()
+  expect(newRelease).not.toHaveBeenCalled()
+  expect(send).toHaveBeenCalledOnce()
+  client.disconnected()
+  expect(newRelease).toHaveBeenCalledOnce()
+})
+
+it('releases preserved editors if sending the ready acknowledgement throws', async () => {
+  const release = vi.fn()
+  const client = new StorageRecoveryClient(
+    () => {
+      throw new Error('closed')
+    },
+    vi.fn(),
+    async () => release
+  )
+  await client.receive(recoveryMessage('prepare', 'round'))
+  expect(release).toHaveBeenCalledOnce()
+  expect(storageRecovery.getSnapshot().phase).toBe('blocked')
 })

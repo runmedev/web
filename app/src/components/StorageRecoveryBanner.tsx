@@ -1,6 +1,7 @@
 import { useEffect, useState, useSyncExternalStore } from 'react'
 import { storageRecovery } from '../storage/storageRecovery'
 import {
+  captureNotebookRecoveryDrafts,
   readRecoveryDrafts,
   type RecoveryDraft,
 } from '../lib/storageRecoveryDrafts'
@@ -30,6 +31,8 @@ export default function StorageRecoveryBanner({
     storageRecovery.getSnapshot
   )
   const [drafts, setDrafts] = useState<RecoveryDraft[]>([])
+  const [currentDrafts, setCurrentDrafts] = useState<RecoveryDraft[]>([])
+  const [captureMessage, setCaptureMessage] = useState('')
   useEffect(() => {
     try {
       setDrafts(readRecoveryDrafts())
@@ -50,9 +53,32 @@ export default function StorageRecoveryBanner({
           <p className="font-semibold">Runme storage needs to reconnect</p>
           <p>{state.message}</p>
           <p>
-            Restart keeps your tabs open and reloads connected Runme tabs after
-            preserving their editor contents.
+            Restart first backs up this tab’s editors in session storage.
+            Connected tabs reload only after all tabs preserve edits and pending
+            writes finish. Session copies do not survive closing a tab and are
+            not persistent autosave.
           </p>
+          <button
+            type="button"
+            className="mr-2 mt-2 rounded border px-3 py-1 font-semibold"
+            onClick={() => {
+              try {
+                const copies = captureNotebookRecoveryDrafts()
+                setCurrentDrafts(copies)
+                setCaptureMessage(
+                  copies.length
+                    ? 'Current editor snapshots are ready to download below. Capture again after further edits; keep this tab open until downloads are saved.'
+                    : 'No loaded editable notebooks are open in this tab.'
+                )
+              } catch (error) {
+                setCaptureMessage(
+                  `Could not capture editor copies: ${String(error)}. Keep this tab open.`
+                )
+              }
+            }}
+          >
+            Get recovery copies
+          </button>
           <button
             type="button"
             className="mt-2 rounded border px-3 py-1 font-semibold disabled:opacity-50"
@@ -63,12 +89,23 @@ export default function StorageRecoveryBanner({
           </button>
         </>
       )}
+      {captureMessage && <p>{captureMessage}</p>}
+      {currentDrafts.map((draft, index) => (
+        <button
+          type="button"
+          className="mr-2 mt-1 underline"
+          key={`current-${draft.uri}-${index}`}
+          onClick={() => downloadDraft(draft)}
+        >
+          Download {draft.name} current editor copy
+        </button>
+      ))}
       {drafts.length > 0 && (
         <div id={`storage-recovery-copies-${location}`} className="mt-2">
           <p>
-            Recovery copies of your open notebook editors remain in this tab. If
-            edits are missing after restart, download and import the copies as
-            separate notebooks.
+            Earlier recovery snapshots remain in this tab’s session storage.
+            They do not survive closing this tab. If edits are missing after
+            restart, download and import the copies as separate notebooks.
           </p>
           {drafts.map((draft, index) => (
             <button

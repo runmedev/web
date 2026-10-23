@@ -2,8 +2,16 @@ import { cleanup, fireEvent, render, screen } from '@testing-library/react'
 import { afterEach, expect, it, vi } from 'vitest'
 import StorageRecoveryBanner from './StorageRecoveryBanner'
 import { storageRecovery } from '../storage/storageRecovery'
+const capture = vi.hoisted(() =>
+  vi.fn(() => [
+    { uri: 'local://draft', name: 'draft.runme', content: '{"cells":[]}' },
+  ])
+)
 vi.mock('../lib/storageRecoveryDrafts', () => ({
-  readRecoveryDrafts: () => [],
+  readRecoveryDrafts: () => {
+    throw new Error('Storage unavailable')
+  },
+  captureNotebookRecoveryDrafts: capture,
 }))
 afterEach(() => {
   cleanup()
@@ -53,4 +61,26 @@ it('offers retry with the reason when preservation or coordination fails', () =>
       .getByRole('button', { name: 'Restart Runme' })
       .hasAttribute('disabled')
   ).toBe(false)
+})
+
+it('offers current editor downloads while storage is unavailable and restart is busy', () => {
+  storageRecovery.set({ phase: 'preparing', message: 'Waiting for worker' })
+  const createURL = vi.fn(() => 'blob:recovery')
+  vi.stubGlobal('URL', { createObjectURL: createURL, revokeObjectURL: vi.fn() })
+  const click = vi
+    .spyOn(HTMLAnchorElement.prototype, 'click')
+    .mockImplementation(() => {})
+  render(<StorageRecoveryBanner location="notebook" />)
+  fireEvent.click(screen.getByRole('button', { name: 'Get recovery copies' }))
+  expect(capture).toHaveBeenCalled()
+  fireEvent.click(
+    screen.getByRole('button', {
+      name: 'Download draft.runme current editor copy',
+    })
+  )
+  expect(createURL).toHaveBeenCalledWith(expect.any(Blob))
+  expect(click).toHaveBeenCalledOnce()
+  expect(screen.getByText(/Session copies do not survive/)).toBeTruthy()
+  vi.unstubAllGlobals()
+  vi.restoreAllMocks()
 })

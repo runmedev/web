@@ -89,7 +89,24 @@ async function main() {
               args,
             })
           })
+        const diagnose = () =>
+          new Promise<any>((resolve, reject) => {
+            const id = crypto.randomUUID()
+            const timer = setTimeout(
+              () => reject(new Error('Diagnostics timed out')),
+              5000
+            )
+            pending.set(id, {
+              resolve: (value) => {
+                clearTimeout(timer)
+                resolve(value)
+              },
+              reject,
+            })
+            worker.port.postMessage({ type: 'storage-owner-diagnostics', id })
+          })
         ;(window as any).recoveryTest = {
+          diagnose,
           call,
           restart: () =>
             worker.port.postMessage({
@@ -108,6 +125,16 @@ async function main() {
       })
     )
     console.log('Both tabs connected')
+    const diagnostics = await pages[0].evaluate(() =>
+      (window as any).recoveryTest.diagnose()
+    )
+    if (
+      diagnostics.connectedTabs !== 2 ||
+      diagnostics.initialization !== 'ready'
+    )
+      throw new Error(
+        `Unexpected worker diagnostics: ${JSON.stringify(diagnostics)}`
+      )
     const original = await pages[0].evaluate(async () => {
       const { call } = (window as any).recoveryTest
       const file = await call('create', [
@@ -215,9 +242,19 @@ async function main() {
     await status.getByRole('button', { name: 'Restart Runme' }).waitFor()
     await status.getByRole('button', { name: 'Restart Runme' }).click()
     await status
-      .getByText(/does not support coordinated restart/)
+      .getByText(/did not acknowledge restart/)
       .waitFor({ timeout: 15000 })
     await status.getByRole('button', { name: 'Restart Runme' }).waitFor()
+    await status.getByRole('button', { name: 'Get recovery copies' }).click()
+    await status
+      .getByText('No loaded editable notebooks are open in this tab.')
+      .waitFor()
+    if (
+      !(await status
+        .getByText(/Copies do not survive closing this tab/)
+        .count())
+    )
+      throw new Error('Recovery fallback must disclose session-copy lifetime')
     await ui.screenshot({
       path: 'test/browser/test-output/storage-recovery-status.png',
     })

@@ -346,6 +346,10 @@ attachments, and late preparation after abort. `storageRecoveryDrafts.test.ts`
 checks reload-safe notebook copies, retained prior copies, quota failures, and
 running-cell refusal. `StorageRecoveryBanner.test.tsx` covers failures before
 React mounts and matching controls in both notebook and storage-status views.
+The regression suite also verifies preflight copies before any worker message,
+all notebooks copied before a hung first flush, cancellation after worker loss,
+downloads with unavailable session storage, and bounded diagnostic probes outside
+storage initialization. A timeout never retries the uncertain operation.
 
 On an isolated test origin, reproduce a storage protocol mismatch and verify
 **Restart Runme** appears above the notebook and inside Google Drive Sync Status.
@@ -355,6 +359,11 @@ contains the editor content. Block one tab's acknowledgement: neither tab should
 reload. Block a storage/network write: restart must wait for the write to settle.
 Repeat against an older worker without the recovery protocol: show the actionable
 fallback and retain editor content rather than silently reloading in a loop.
+Verify the initiating tab has session copies even without a worker response. Fill
+session storage, click **Get recovery copies**, and download the current editors;
+verify exact cell text in the JSON. The banner must distinguish earlier snapshots
+from current captures, and explain that session copies do not survive tab closure.
+Perform these destructive failure injections only in an isolated test profile.
 
 The emitted-worker/browser check is `test/browser/storage-owner-recovery.ts`.
 Against a production preview on port 5194, compile it with the same `tsc` flags

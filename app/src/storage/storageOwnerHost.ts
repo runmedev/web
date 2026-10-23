@@ -5,6 +5,7 @@ import {
   importLegacyCreationJournal,
 } from './legacyCreationJournal'
 import type LocalNotebooks from './local'
+import type { StorageOwnerDiagnostics } from './storageOwnerDiagnostics'
 import {
   type OwnerRequest,
   STORAGE_METHODS,
@@ -46,6 +47,14 @@ export class StorageOwnerHost {
   private credentialBoundary: string | undefined
   private available = false
   private scanning: Promise<unknown> | undefined
+  private readonly instanceId = crypto.randomUUID()
+  private readonly startedAt = Date.now()
+  private initialization: StorageOwnerDiagnostics['initialization'] = 'pending'
+  private activeRequests = new Set<{
+    method: string
+    startedAt: number
+    stage: string
+  }>()
   private inFlight = new Set<Promise<void>>()
   private recovery?: {
     id: string
@@ -58,7 +67,42 @@ export class StorageOwnerHost {
   constructor(
     private readonly store: LocalNotebooks,
     private readonly shutdown?: () => void
-  ) {}
+  ) {
+    void Promise.resolve(store.ready).then(
+      () => {
+        this.initialization = 'ready'
+      },
+      () => {
+        this.initialization = 'failed'
+      }
+    )
+  }
+
+  /** A bounded memory-only snapshot still answers while IndexedDB or an RPC is stalled. */
+  private diagnostics(): StorageOwnerDiagnostics {
+    return {
+      version: STORAGE_OWNER_VERSION,
+      instanceId: this.instanceId,
+      uptimeMs: Date.now() - this.startedAt,
+      connectedTabs: this.ports.size,
+      initialization: this.initialization,
+      pendingCredentials: this.tokenRequests.size,
+      scanning: Boolean(this.scanning),
+      recovery: this.recovery
+        ? this.recovery.draining
+          ? 'draining'
+          : 'preparing'
+        : 'idle',
+      activeRequestCount: this.activeRequests.size,
+      oldestRequests: Array.from(this.activeRequests)
+        .slice(0, 10)
+        .map((request) => ({
+          method: request.method,
+          elapsedMs: Date.now() - request.startedAt,
+          stage: request.stage,
+        })),
+    }
+  }
 
   attach(port: MessagePort): void {
     this.ports.set(port, {
@@ -68,6 +112,17 @@ export class StorageOwnerHost {
     })
     this.views.set(port, new Map())
     port.onmessage = (event) => {
+      if (
+        event.data?.type === 'storage-owner-diagnostics' &&
+        typeof event.data.id === 'string'
+      ) {
+        port.postMessage({
+          type: 'storage-owner-diagnostics',
+          id: event.data.id,
+          value: this.diagnostics(),
+        })
+        return
+      }
       if (event.data?.type === 'storage-recovery') {
         this.recover(port, event.data)
         return
@@ -314,6 +369,22 @@ export class StorageOwnerHost {
       this.detach(port)
       return
     }
+    const active = {
+      method: [
+        ...STORAGE_METHODS,
+        'hello',
+        'availability',
+        'heartbeat',
+        'createView',
+        'saveView',
+        'releaseView',
+      ].includes(request.method)
+        ? request.method
+        : 'unknown',
+      startedAt: Date.now(),
+      stage: 'initializing',
+    }
+    this.activeRequests.add(active)
     try {
       if (
         request.method !== 'disconnect' &&
@@ -346,6 +417,7 @@ export class StorageOwnerHost {
           'Drive identity differs from the storage owner; use an isolated browser profile'
         )
       await this.store.ready
+      active.stage = 'executing'
       let value: unknown
       switch (request.method) {
         case 'hello':
@@ -501,6 +573,8 @@ export class StorageOwnerHost {
         id: request.id,
         error: encodeStorageError(error),
       })
+    } finally {
+      this.activeRequests.delete(active)
     }
   }
 }
