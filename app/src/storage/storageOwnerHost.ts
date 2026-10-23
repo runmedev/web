@@ -80,6 +80,17 @@ export class StorageOwnerHost {
 
   /** A bounded memory-only snapshot still answers while IndexedDB or an RPC is stalled. */
   private diagnostics(): StorageOwnerDiagnostics {
+    // Stop iterating at the response limit: a stalled owner may have many
+    // outstanding requests, and diagnosis must not copy the whole backlog.
+    const oldestRequests: StorageOwnerDiagnostics['oldestRequests'] = []
+    for (const request of this.activeRequests) {
+      oldestRequests.push({
+        method: request.method,
+        elapsedMs: Date.now() - request.startedAt,
+        stage: request.stage,
+      })
+      if (oldestRequests.length === 10) break
+    }
     return {
       version: STORAGE_OWNER_VERSION,
       instanceId: this.instanceId,
@@ -94,13 +105,7 @@ export class StorageOwnerHost {
           : 'preparing'
         : 'idle',
       activeRequestCount: this.activeRequests.size,
-      oldestRequests: Array.from(this.activeRequests)
-        .slice(0, 10)
-        .map((request) => ({
-          method: request.method,
-          elapsedMs: Date.now() - request.startedAt,
-          stage: request.stage,
-        })),
+      oldestRequests,
     }
   }
 

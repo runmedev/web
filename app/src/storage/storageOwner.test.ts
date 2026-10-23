@@ -426,3 +426,23 @@ it('bounds and coalesces probes when a worker does not answer', async () => {
   await rejected
   expect(port.postMessage).toHaveBeenCalledOnce()
 })
+
+it('bounds diagnostics to the ten oldest requests while reporting the full backlog', async () => {
+  const { host, store } = setup()
+  let finish!: () => void
+  const blocked = new Promise<void>((resolve) => {
+    finish = resolve
+  })
+  store.save.mockImplementation(() => blocked)
+  const client = connect(host)
+  const writes = Array.from({ length: 12 }, () =>
+    client.request('save', ['a', {}])
+  )
+  const first = await client.diagnose()
+  expect(first.activeRequestCount).toBe(12)
+  expect(first.oldestRequests).toHaveLength(10)
+  expect((await client.diagnose()).instanceId).toBe(first.instanceId)
+  finish()
+  await Promise.all(writes)
+  expect((await client.diagnose()).oldestRequests).toEqual([])
+})

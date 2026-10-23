@@ -183,3 +183,21 @@ it('backs up before worker coordination without flushing or locking editors', ()
   expect(m.flushPendingPersist).not.toHaveBeenCalled()
   expect(m.setReleasePending).not.toHaveBeenCalled()
 })
+
+it('keeps earlier bytes on quota failure and still captures the latest editor for download', () => {
+  const m = model()
+  backupNotebookRecoveryDrafts()
+  const before = sessionStorage.getItem('runme/storage-recovery-drafts/v1')
+  m.getSnapshot().notebook.cells[0].value = 'latest unsaved edit'
+  vi.spyOn(Storage.prototype, 'setItem').mockImplementation(() => {
+    throw new Error('QuotaExceededError')
+  })
+  expect(() => backupNotebookRecoveryDrafts()).toThrow('QuotaExceededError')
+  expect(sessionStorage.getItem('runme/storage-recovery-drafts/v1')).toBe(
+    before
+  )
+  const copies = captureNotebookRecoveryDrafts()
+  expect(JSON.parse(copies[0].content).cells[0].value).toBe(
+    'latest unsaved edit'
+  )
+})
