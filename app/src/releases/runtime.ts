@@ -3,6 +3,7 @@ import type {
   CommitReference,
   Control,
   Manifest,
+  ReleaseProgress,
   Selection,
 } from './control'
 
@@ -28,6 +29,7 @@ declare global {
       // Optional because an installed older loader can host a newer app bundle.
       uiVersion?: number
       status?: () => string
+      progress?: () => ReleaseProgress | undefined
       cached?: () => Promise<Manifest[]>
       activate?: (releaseId: string) => Promise<void>
       pin?: () => Promise<void>

@@ -2,6 +2,7 @@ import {
   type Active,
   type Manifest,
   OWNER_LOCK,
+  type ReleaseProgress,
   type Selection,
   control,
   discover,
@@ -25,6 +26,13 @@ panel.style.cssText =
 const status = document.createElement('p')
 status.setAttribute('role', 'status')
 panel.append(status)
+const progressBar = document.createElement('progress')
+progressBar.id = 'runme-release-progress'
+progressBar.setAttribute('aria-label', 'Release files verified')
+progressBar.style.cssText = 'width:100%;height:12px;accent-color:#5a3ae0'
+progressBar.hidden = true
+panel.append(progressBar)
+let progress: ReleaseProgress | undefined
 document.body.append(panel)
 let runtime: ReleaseRuntime | undefined
 let preparation: string | undefined
@@ -42,9 +50,26 @@ let details = location.pathname === '/recovery.html'
 const recovery = details
 
 /** Display diagnostics as text, never executable release metadata or user content. */
-function report(value: unknown): void {
+function report(value: unknown, nextProgress?: ReleaseProgress): void {
   status.textContent = String(value instanceof Error ? value.message : value)
+  progress = nextProgress
+  progressBar.hidden = !progress
+  if (progress) {
+    progressBar.max = progress.total
+    progressBar.value = progress.completed
+  }
   window.dispatchEvent(new Event('runme-release-change'))
+}
+
+/** The bar measures verified files, including reusable cached files, not bytes
+ * transferred. A completed download is distinct from starting the application.
+ */
+function reportProgress(label: string, value: ReleaseProgress): void {
+  const percent = Math.floor((value.completed / value.total) * 100)
+  report(
+    `${label}: ${value.completed} / ${value.total} files (${percent}%)`,
+    value
+  )
 }
 function button(label: string, action: () => unknown): void {
   const b = document.createElement('button')
@@ -170,8 +195,8 @@ async function downloadSelection(selection?: Selection): Promise<void> {
   const selected = (await readControl()).selection
   report('Checking and downloading the selected release…')
   const candidate = await discover(selected)
-  await stage(candidate, ({ completed, total }) =>
-    report(`Downloading and verifying release files: ${completed} / ${total}`)
+  await stage(candidate, (value) =>
+    reportProgress('Downloading and verifying', value)
   )
   await control((s) => {
     if (JSON.stringify(s.selection) === JSON.stringify(selected))
@@ -187,8 +212,8 @@ async function begin(target: Manifest): Promise<void> {
 }
 async function beginLocked(target: Manifest): Promise<void> {
   report('Verifying the downloaded release…')
-  await verifyCache(target, ({ completed, total }) =>
-    report(`Verifying downloaded release files: ${completed} / ${total}`)
+  await verifyCache(target, (value) =>
+    reportProgress('Verifying downloaded release', value)
   )
   const pending = (await readControl()).transition
   if (pending?.phase === 'handoff') {
@@ -454,8 +479,8 @@ async function tick(): Promise<void> {
  * occur after admission; a mid-upgrade new tab cannot construct database readers.
  */
 async function boot(active: Active): Promise<void> {
-  await verifyCache(active.manifest, ({ completed, total }) =>
-    report(`Checking installed release files: ${completed} / ${total}`)
+  await verifyCache(active.manifest, (value) =>
+    reportProgress('Checking installed release', value)
   )
   const admitted = await control((s) => {
     if (s.transition || s.active?.epoch !== active.epoch) return false
@@ -521,7 +546,8 @@ async function render(): Promise<void> {
     s.transition?.phase,
     s.selection,
   ])
-  for (const node of [...panel.children]) if (node !== status) node.remove()
+  for (const node of [...panel.children])
+    if (node !== status && node !== progressBar) node.remove()
   report(
     s.active
       ? `Runme ${s.active.manifest.webCommit.slice(0, 8)} · ${s.selection.kind === 'channel' ? s.selection.name : 'pinned'}`
@@ -703,6 +729,7 @@ async function main(): Promise<void> {
 window.runmeVersions = {
   uiVersion: 1,
   status: () => status.textContent ?? '',
+  progress: () => progress && { ...progress },
   cached: cachedReleases,
   activate: async (id) => {
     const manifest = (await cachedReleases()).find((m) => m.releaseId === id)

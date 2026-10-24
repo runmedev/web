@@ -124,6 +124,12 @@ async function main() {
     assert.equal(await active(one), undefined)
     await legacy.close()
     await one.reload()
+    const downloadProgress = one.getByRole('progressbar', {
+      name: 'Release files verified',
+    })
+    await downloadProgress.waitFor({ state: 'visible', timeout: 30000 })
+    assert.ok(Number(await downloadProgress.getAttribute('max')) > 0)
+    await one.screenshot({ path: output + '/00-download-progress.png' })
     await ready(one)
     console.log(
       'PASS: unknown legacy window blocks new storage ownership until closed'

@@ -1,7 +1,7 @@
 import { fireEvent, render, screen, waitFor } from '@testing-library/react'
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import { ReleaseControls } from './ReleaseControls'
-import type { Control } from '../releases/control'
+import type { Control, ReleaseProgress } from '../releases/control'
 
 vi.mock('../lib/logging/runtime', () => ({ appLogger: { warn: vi.fn() } }))
 afterEach(() => {
@@ -11,7 +11,7 @@ afterEach(() => {
 /** Assert commands at the launcher boundary, rather than mutating active state
  * in the view. A channel switch must never silently activate a downloaded build.
  */
-function setup() {
+function setup(initialProgress?: ReleaseProgress) {
   const id = `${'a'.repeat(40)}-${'b'.repeat(64)}`
   const state = {
     format: 1,
@@ -28,6 +28,7 @@ function setup() {
     cancel: vi.fn(async () => {}),
     prune: vi.fn(async () => 0),
     status: () => 'Installed release available',
+    progress: vi.fn(() => initialProgress),
     pin: vi.fn(async () => {}),
   }
   window.runmeVersions = api
@@ -35,6 +36,17 @@ function setup() {
   return api
 }
 describe('Information release controls', () => {
+  it('shows verified-file progress and clears it when the operation ends', async () => {
+    const api = setup({ completed: 24, total: 511 })
+    const bar = await screen.findByRole('progressbar', {
+      name: 'Release files verified',
+    })
+    expect(bar.getAttribute('value')).toBe('24')
+    expect(bar.getAttribute('max')).toBe('511')
+    api.progress.mockReturnValue(undefined)
+    fireEvent(window, new Event('runme-release-change'))
+    await waitFor(() => expect(screen.queryByRole('progressbar')).toBeNull())
+  })
   it('shows the channel and stages a selection without activating it', async () => {
     const api = setup()
     expect(await screen.findByText('stable')).toBeTruthy()

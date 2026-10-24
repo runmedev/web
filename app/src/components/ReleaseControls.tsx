@@ -5,6 +5,7 @@ import { appLogger } from '../lib/logging/runtime'
 import {
   type Control,
   type Manifest,
+  type ReleaseProgress,
   releaseIdValid,
 } from '../releases/control'
 import '../releases/runtime'
@@ -18,6 +19,7 @@ export function ReleaseControls() {
   const api = window.runmeVersions
   const [state, setState] = useState<Control>()
   const [message, setMessage] = useState('')
+  const [progress, setProgress] = useState<ReleaseProgress>()
   const [error, setError] = useState('')
   const [busy, setBusy] = useState(false)
   const [exact, setExact] = useState('')
@@ -37,6 +39,7 @@ export function ReleaseControls() {
         const next = await api.get()
         if (!disposed) {
           setState(next)
+          setProgress(api.progress?.())
           setMessage(
             api.status?.() ??
               document.querySelector('#runme-release-panel [role="status"]')
@@ -215,6 +218,15 @@ export function ReleaseControls() {
         {busy ? 'Working… ' : ''}
         {message}
       </p>
+      {progress && (
+        <progress
+          id="version-download-progress"
+          aria-label="Release files verified"
+          value={progress.completed}
+          max={progress.total}
+          className="h-3 w-full accent-violet-600"
+        />
+      )}
       <details>
         <summary className="cursor-pointer font-semibold">
           Other releases and recovery
