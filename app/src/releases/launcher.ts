@@ -11,11 +11,12 @@ import {
   releaseIdValid,
   releasePrefix,
   stage,
+  startupMarker,
   validateManifest,
   validateSelection,
   verifyCache,
 } from './control'
-import type { ReleaseRuntime } from './runtime'
+import type { OfflineDownloadStatus, ReleaseRuntime } from './runtime'
 
 const tabId = crypto.randomUUID()
 const panel = document.createElement('section')
@@ -48,6 +49,45 @@ let appReady = false
 let transitioning = false
 let details = location.pathname === '/recovery.html'
 const recovery = details
+let deferredFonts = false
+const startupScope = (): 'startup' | 'all' =>
+  deferredFonts ? 'startup' : 'all'
+const offlineDownloads = new Map<string, OfflineDownloadStatus>()
+const fontJobs = new Map<string, Promise<void>>()
+
+/** Finish optional fonts after the UI is usable. This uses separate progress so
+ * background failures cannot overwrite foreground upgrade or recovery messages.
+ * The shared cache lock prevents pruning while a background job is writing.
+ */
+function completeOffline(manifest: Manifest): Promise<void> {
+  const id = manifest.releaseId
+  const existing = fontJobs.get(id)
+  if (existing) return existing
+  const update = (value: OfflineDownloadStatus) => {
+    offlineDownloads.set(id, value)
+    window.dispatchEvent(new Event('runme-release-change'))
+  }
+  update({ phase: 'downloading', completed: 0, total: 0 })
+  const job = navigator.locks
+    .request('runme-release-cache', { mode: 'shared' }, async () => {
+      await stage(
+        manifest,
+        (value) => update({ ...value, phase: 'downloading' }),
+        'fonts'
+      )
+      update({ ...offlineDownloads.get(id)!, phase: 'ready' })
+    })
+    .catch((error) => {
+      update({
+        ...offlineDownloads.get(id)!,
+        phase: 'error',
+        message: String(error),
+      })
+    })
+    .finally(() => fontJobs.delete(id))
+  fontJobs.set(id, job)
+  return job
+}
 
 /** Display diagnostics as text, never executable release metadata or user content. */
 function report(value: unknown, nextProgress?: ReleaseProgress): void {
@@ -151,6 +191,24 @@ async function installLoader(): Promise<void> {
       channel.port2,
     ])
   })
+  // Older protocol-1 workers do not recognize startup markers. Keep their eager
+  // policy until the controlling worker can verify on-demand font responses.
+  const capability = new MessageChannel()
+  deferredFonts = await new Promise<boolean>((resolve) => {
+    const timer = setTimeout(() => {
+      capability.port1.close()
+      resolve(false)
+    }, 1000)
+    capability.port1.onmessage = (event) => {
+      clearTimeout(timer)
+      capability.port1.close()
+      resolve(event.data === 'deferred-fonts-v1')
+    }
+    navigator.serviceWorker.controller!.postMessage(
+      'runme-loader-font-policy',
+      [capability.port2]
+    )
+  })
   const legacy = new SharedWorker('/storage-owner.js', {
     type: 'module',
     name: 'runme-storage-owner',
@@ -195,14 +253,17 @@ async function downloadSelection(selection?: Selection): Promise<void> {
   const selected = (await readControl()).selection
   report('Checking and downloading the selected release…')
   const candidate = await discover(selected)
-  await stage(candidate, (value) =>
-    reportProgress('Downloading and verifying', value)
+  await stage(
+    candidate,
+    (value) => reportProgress('Downloading and verifying startup files', value),
+    startupScope()
   )
   await control((s) => {
     if (JSON.stringify(s.selection) === JSON.stringify(selected))
       s.candidate = candidate
   })
   await render()
+  if (appReady) void completeOffline(candidate)
 }
 
 async function begin(target: Manifest): Promise<void> {
@@ -212,8 +273,10 @@ async function begin(target: Manifest): Promise<void> {
 }
 async function beginLocked(target: Manifest): Promise<void> {
   report('Verifying the downloaded release…')
-  await verifyCache(target, (value) =>
-    reportProgress('Verifying downloaded release', value)
+  await verifyCache(
+    target,
+    (value) => reportProgress('Verifying downloaded release', value),
+    startupScope()
   )
   const pending = (await readControl()).transition
   if (pending?.phase === 'handoff') {
@@ -301,7 +364,8 @@ async function coordinate(): Promise<void> {
         Object.entries(transition.participants).every(
           ([id, p]) => gone.includes(id) || (p.ready !== undefined && !p.error)
         )
-      if (allReady) await verifyCache(transition.target)
+      if (allReady)
+        await verifyCache(transition.target, undefined, startupScope())
       await control((s) => {
         for (const id of gone) {
           delete s.tabs[id]
@@ -479,8 +543,10 @@ async function tick(): Promise<void> {
  * occur after admission; a mid-upgrade new tab cannot construct database readers.
  */
 async function boot(active: Active): Promise<void> {
-  await verifyCache(active.manifest, (value) =>
-    reportProgress('Checking installed release', value)
+  await verifyCache(
+    active.manifest,
+    (value) => reportProgress('Checking installed release', value),
+    startupScope()
   )
   const admitted = await control((s) => {
     if (s.transition || s.active?.epoch !== active.epoch) return false
@@ -500,6 +566,7 @@ async function boot(active: Active): Promise<void> {
     ready: () => {
       appReady = true
       panel.hidden = !recovery && !transitioning
+      void completeOffline(active.manifest)
       void control((s) => {
         if (s.active?.epoch === active.epoch)
           s.healthy = active.manifest.releaseId
@@ -633,11 +700,14 @@ async function render(): Promise<void> {
       if (!name.startsWith('runme-release-v1-')) continue
       const cache = await caches.open(name)
       const id = name.slice('runme-release-v1-'.length)
-      const response = await cache.match(releasePrefix(id) + 'release.json')
+      const response =
+        (await cache.match(releasePrefix(id) + 'release.json')) ||
+        (deferredFonts ? await cache.match(startupMarker(id)) : undefined)
       if (generation !== renderGeneration) return
       if (!response) continue
       try {
         const manifest = validateManifest(await response.json())
+        if (manifest.releaseId !== id) continue
         if (generation !== renderGeneration) return
         if (
           id !== s.active?.manifest.releaseId ||
@@ -730,10 +800,19 @@ window.runmeVersions = {
   uiVersion: 1,
   status: () => status.textContent ?? '',
   progress: () => progress && { ...progress },
+  offline: (id) => {
+    const value = offlineDownloads.get(id)
+    return value && { ...value }
+  },
+  retryOffline: async () => {
+    const active = (await readControl()).active
+    if (active) await completeOffline(active.manifest)
+  },
   cached: cachedReleases,
   activate: async (id) => {
     const manifest = (await cachedReleases()).find((m) => m.releaseId === id)
-    if (!manifest) throw new Error('This release is not completely downloaded')
+    if (!manifest)
+      throw new Error('This release does not have cached startup files')
     await begin(manifest)
   },
   pin: async () => {
@@ -760,18 +839,22 @@ window.runmeVersions = {
   },
 }
 
-/** Enumerate completion markers without importing the application or its stores. */
+/** Startup-ready releases remain recovery choices even when optional fonts are
+ * unavailable. Activation rechecks code bytes; this does not claim full offline readiness.
+ */
 async function cachedReleases(): Promise<Manifest[]> {
   const releases: Manifest[] = []
   for (const name of await caches.keys()) {
     if (!name.startsWith('runme-release-v1-')) continue
     const id = name.slice('runme-release-v1-'.length)
-    const response = await (
-      await caches.open(name)
-    ).match(releasePrefix(id) + 'release.json')
+    const cache = await caches.open(name)
+    const response =
+      (await cache.match(releasePrefix(id) + 'release.json')) ||
+      (deferredFonts ? await cache.match(startupMarker(id)) : undefined)
     if (!response) continue
     try {
-      releases.push(validateManifest(await response.json()))
+      const manifest = validateManifest(await response.json())
+      if (manifest.releaseId === id) releases.push(manifest)
     } catch {
       /* Incomplete caches are not eligible. */
     }

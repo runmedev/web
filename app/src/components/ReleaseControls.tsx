@@ -9,6 +9,7 @@ import {
   releaseIdValid,
 } from '../releases/control'
 import '../releases/runtime'
+import type { OfflineDownloadStatus } from '../releases/runtime'
 
 /** The launcher remains the authority for downloads and coordinated activation.
  * This view only issues commands and observes state; it never changes the active
@@ -20,6 +21,7 @@ export function ReleaseControls() {
   const [state, setState] = useState<Control>()
   const [message, setMessage] = useState('')
   const [progress, setProgress] = useState<ReleaseProgress>()
+  const [offline, setOffline] = useState<OfflineDownloadStatus>()
   const [error, setError] = useState('')
   const [busy, setBusy] = useState(false)
   const [exact, setExact] = useState('')
@@ -40,6 +42,9 @@ export function ReleaseControls() {
         if (!disposed) {
           setState(next)
           setProgress(api.progress?.())
+          setOffline(
+            next.active && api.offline?.(next.active.manifest.releaseId)
+          )
           setMessage(
             api.status?.() ??
               document.querySelector('#runme-release-panel [role="status"]')
@@ -133,7 +138,7 @@ export function ReleaseControls() {
         )}
         {candidate && (
           <>
-            <dt>Downloaded release</dt>
+            <dt>Available release</dt>
             <dd className="break-all font-mono text-xs">
               {candidate.releaseId}
             </dd>
@@ -226,6 +231,37 @@ export function ReleaseControls() {
           max={progress.total}
           className="h-3 w-full accent-violet-600"
         />
+      )}
+      {offline && (
+        <div
+          id="version-offline-readiness"
+          className="space-y-2 text-nb-text-muted"
+        >
+          <p className="font-medium">Installed release offline readiness</p>
+          <p>
+            {offline.phase === 'ready'
+              ? 'All release files are verified and cached for offline use.'
+              : offline.phase === 'error'
+                ? 'The app is ready. Some fonts are not yet available offline.'
+                : `The app is ready. Preparing fonts for offline use: ${offline.completed} / ${offline.total} files.`}
+          </p>
+          {offline.phase === 'downloading' && (
+            <progress
+              aria-label="Fonts cached for offline use"
+              value={offline.total ? offline.completed : undefined}
+              max={offline.total || 1}
+              className="h-3 w-full accent-violet-600"
+            />
+          )}
+          {offline.phase === 'error' && api.retryOffline && (
+            <Button
+              disabled={busy || !!state.transition}
+              onClick={() => void run(api.retryOffline!)}
+            >
+              Retry offline font download
+            </Button>
+          )}
+        </div>
       )}
       <details>
         <summary className="cursor-pointer font-semibold">

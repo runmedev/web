@@ -123,6 +123,7 @@ async function main() {
       .waitFor({ timeout: 30000 })
     assert.equal(await active(one), undefined)
     await legacy.close()
+    await fetch(base + '/test/fonts?blocked=1', { method: 'POST' })
     await one.reload()
     const downloadProgress = one.getByRole('progressbar', {
       name: 'Release files verified',
@@ -131,6 +132,37 @@ async function main() {
     assert.ok(Number(await downloadProgress.getAttribute('max')) > 0)
     await one.screenshot({ path: output + '/00-download-progress.png' })
     await ready(one)
+    await one.waitForFunction(() => {
+      const api = (window as any).runmeVersions
+      const id = (window as any).runmeRelease?.active.manifest.releaseId
+      return id && api.offline(id)?.phase === 'error'
+    })
+    assert.ok(
+      await one.evaluate(async () => {
+        const id = (window as any).runmeRelease.active.manifest.releaseId
+        const choices = await (window as any).runmeVersions.cached()
+        const full = await (
+          await caches.open(`runme-release-v1-${id}`)
+        ).match(`/version/${id}/release.json`)
+        return !full && choices.some((choice: any) => choice.releaseId === id)
+      }),
+      'Startup-ready release must remain a recovery choice without its fonts'
+    )
+    await openVersions(one)
+    await one
+      .getByText('The app is ready. Some fonts are not yet available offline.')
+      .waitFor()
+    await one.screenshot({ path: output + '/00-app-ready-without-fonts.png' })
+    await fetch(base + '/test/fonts?blocked=0', { method: 'POST' })
+    await one
+      .getByRole('button', { name: 'Retry offline font download' })
+      .click()
+    await one
+      .getByText('All release files are verified and cached for offline use.')
+      .waitFor({ timeout: 60000 })
+    console.log(
+      'PASS: app opens with fonts unavailable; background retry completes offline cache'
+    )
     console.log(
       'PASS: unknown legacy window blocks new storage ownership until closed'
     )
@@ -323,6 +355,16 @@ async function main() {
     )
     await one.screenshot({ path: output + '/03-upgraded-b.png' })
     console.log('PASS: all tabs upgraded and notebook edits retained')
+    await one.waitForFunction(
+      () => {
+        const id = (window as any).runmeRelease?.active.manifest.releaseId
+        return (
+          id && (window as any).runmeVersions.offline(id)?.phase === 'ready'
+        )
+      },
+      undefined,
+      { timeout: 60000 }
+    )
     await context.setOffline(true)
     await one.reload()
     await ready(one)

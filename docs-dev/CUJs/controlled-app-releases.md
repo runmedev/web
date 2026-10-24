@@ -9,6 +9,9 @@ CUJs in `run-cuj-scenarios.ts`.
 Acceptance:
 
 - An uncontrolled legacy window blocks initial admission until it closes.
+- Startup shows verified-file progress. Blocking every font request still allows
+  the app to open and report incomplete offline readiness. Retrying after fonts
+  become available completes the offline cache without activating another release.
 - The floating launcher disappears after startup. The left Information icon opens version controls inside the Version Information document.
 - Deploy B while A is installed. Refresh and new tabs still use A.
 - Channel changes and exact pins only stage; activation requires Upgrade all tabs.
@@ -18,7 +21,7 @@ Acceptance:
 - Freeze a tab and explicitly withhold its readiness acknowledgement: it retains membership. A new tab waits outside the app.
 - Close the initiating tab: another launcher resumes the persisted transition.
 - All admitted tabs move to B under a new storage-owner epoch.
-- Offline restart uses B; offline rollback to A preserves edits made on B.
+- After full offline readiness, offline restart uses B; offline rollback to A preserves edits made on B.
 - The recovery selector works independently of React/application imports.
 - A checksum-valid but throwing app entry can be recovered through the selector
   after failed app tabs close, retaining current notebook content.

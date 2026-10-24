@@ -16,6 +16,12 @@ export type ReleaseRuntime = {
   prepare?: () => Promise<CommitReference[]>
   ready?: () => void
 }
+export type OfflineDownloadStatus = {
+  phase: 'downloading' | 'ready' | 'error'
+  completed: number
+  total: number
+  message?: string
+}
 declare global {
   interface Window {
     runmeRelease?: ReleaseRuntime
@@ -30,6 +36,8 @@ declare global {
       uiVersion?: number
       status?: () => string
       progress?: () => ReleaseProgress | undefined
+      offline?: (releaseId: string) => OfflineDownloadStatus | undefined
+      retryOffline?: () => Promise<void>
       cached?: () => Promise<Manifest[]>
       activate?: (releaseId: string) => Promise<void>
       pin?: () => Promise<void>

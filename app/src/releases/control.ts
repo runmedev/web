@@ -114,6 +114,29 @@ export async function control<T>(
 export const readControl = () => control((state) => state, false)
 export const releasePrefix = (id: string) => `/version/${id}/`
 export const cacheName = (id: string) => `runme-release-v1-${id}`
+// Separate from the legacy full-offline completion marker. Older loaders still
+// require every asset; they cannot mistake startup readiness for a complete cache.
+export const startupMarker = (id: string) => `/__runme-startup/${id}`
+type AssetScope = 'all' | 'startup' | 'fonts'
+
+/** Only passive font resources may be deferred. Executable and style entrypoints
+ * remain mandatory even if a malformed manifest gives them a font extension.
+ */
+function scopedAssets(
+  manifest: Manifest,
+  scope: AssetScope
+): Manifest['assets'] {
+  const entries = new Set([
+    manifest.appEntry,
+    manifest.owner.entry,
+    ...manifest.styles,
+  ])
+  return manifest.assets.filter((asset) => {
+    const font =
+      /\.(woff2?|ttf|otf)$/i.test(asset.path) && !entries.has(asset.path)
+    return scope === 'all' || (scope === 'fonts' ? font : !font)
+  })
+}
 export const releaseIdValid = (id: unknown): id is string =>
   typeof id === 'string' && /^[a-f0-9]{40}-[a-f0-9]{64}$/.test(id)
 
@@ -218,20 +241,22 @@ async function processAssets(
   if (failed) throw failure
 }
 
-/** Stage into a release-specific cache. The completion marker is written last;
- * activation also checks every byte, because storage can be evicted afterwards.
+/** Stage verified files into a release-specific cache. Startup and full-offline
+ * readiness have distinct markers; each is written after its required files.
+ * Activation rechecks the selected scope because storage can be evicted later.
  */
 export async function stage(
   manifest: Manifest,
-  progress?: (value: ReleaseProgress) => void
+  progress?: (value: ReleaseProgress) => void,
+  scope: AssetScope = 'all'
 ): Promise<void> {
   validateManifest(manifest)
   await navigator.locks.request(
-    `runme-release-download-${manifest.releaseId}`,
+    `runme-release-download-${manifest.releaseId}-${scope}`,
     async () => {
       const cache = await caches.open(cacheName(manifest.releaseId))
       await processAssets(
-        manifest.assets,
+        scopedAssets(manifest, scope),
         async (asset) => {
           const url = releasePrefix(manifest.releaseId) + asset.path
           const old = await cache.match(url, { ignoreVary: true })
@@ -247,8 +272,13 @@ export async function stage(
         },
         progress
       )
+      // Background fonts never certify offline readiness without checking the
+      // required code too. Concurrent writes contain identical verified bytes.
+      if (scope === 'fonts') await verifyCache(manifest)
       await cache.put(
-        releasePrefix(manifest.releaseId) + 'release.json',
+        scope === 'startup'
+          ? startupMarker(manifest.releaseId)
+          : releasePrefix(manifest.releaseId) + 'release.json',
         new Response(JSON.stringify(manifest), {
           headers: { 'Content-Type': 'application/json' },
         })
@@ -270,12 +300,13 @@ async function validResponse(
 
 export async function verifyCache(
   manifest: Manifest,
-  progress?: (value: ReleaseProgress) => void
+  progress?: (value: ReleaseProgress) => void,
+  scope: AssetScope = 'all'
 ): Promise<void> {
   validateManifest(manifest)
   const cache = await caches.open(cacheName(manifest.releaseId))
   await processAssets(
-    manifest.assets,
+    scopedAssets(manifest, scope),
     async (asset) => {
       const response = await cache.match(
         releasePrefix(manifest.releaseId) + asset.path,
