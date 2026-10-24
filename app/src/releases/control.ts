@@ -182,28 +182,71 @@ export async function digest(bytes: ArrayBuffer): Promise<string> {
   ).join('')
 }
 
+/** Files verified so far, including reusable files from an interrupted download. */
+export interface ReleaseProgress {
+  completed: number
+  total: number
+}
+
+/** Bound network and hashing work. Drain in-flight operations on failure before
+ * releasing the download lock, so a retry cannot race writes from a failed run.
+ */
+async function processAssets(
+  assets: Manifest['assets'],
+  process: (asset: Manifest['assets'][number]) => Promise<void>,
+  progress?: (value: ReleaseProgress) => void
+): Promise<void> {
+  let next = 0
+  let completed = 0
+  let failed = false
+  let failure: unknown
+  progress?.({ completed, total: assets.length })
+  await Promise.all(
+    Array.from({ length: Math.min(6, assets.length) }, async () => {
+      while (!failed && next < assets.length) {
+        const asset = assets[next++]
+        try {
+          await process(asset)
+          progress?.({ completed: ++completed, total: assets.length })
+        } catch (error) {
+          if (!failed) failure = error
+          failed = true
+        }
+      }
+    })
+  )
+  if (failed) throw failure
+}
+
 /** Stage into a release-specific cache. The completion marker is written last;
  * activation also checks every byte, because storage can be evicted afterwards.
  */
-export async function stage(manifest: Manifest): Promise<void> {
+export async function stage(
+  manifest: Manifest,
+  progress?: (value: ReleaseProgress) => void
+): Promise<void> {
   validateManifest(manifest)
   await navigator.locks.request(
     `runme-release-download-${manifest.releaseId}`,
     async () => {
       const cache = await caches.open(cacheName(manifest.releaseId))
-      for (const asset of manifest.assets) {
-        const url = releasePrefix(manifest.releaseId) + asset.path
-        const old = await cache.match(url, { ignoreVary: true })
-        if (old && (await validResponse(old, asset))) continue
-        const response = await fetch(url, {
-          cache: 'no-store',
-          credentials: 'omit',
-          redirect: 'error',
-        })
-        if (!(await validResponse(response.clone(), asset)))
-          throw new Error(`Download verification failed: ${asset.path}`)
-        await cache.put(url, response)
-      }
+      await processAssets(
+        manifest.assets,
+        async (asset) => {
+          const url = releasePrefix(manifest.releaseId) + asset.path
+          const old = await cache.match(url, { ignoreVary: true })
+          if (old && (await validResponse(old, asset))) return
+          const response = await fetch(url, {
+            cache: 'no-store',
+            credentials: 'omit',
+            redirect: 'error',
+          })
+          if (!(await validResponse(response.clone(), asset)))
+            throw new Error(`Download verification failed: ${asset.path}`)
+          await cache.put(url, response)
+        },
+        progress
+      )
       await cache.put(
         releasePrefix(manifest.releaseId) + 'release.json',
         new Response(JSON.stringify(manifest), {
@@ -225,19 +268,26 @@ async function validResponse(
   )
 }
 
-export async function verifyCache(manifest: Manifest): Promise<void> {
+export async function verifyCache(
+  manifest: Manifest,
+  progress?: (value: ReleaseProgress) => void
+): Promise<void> {
   validateManifest(manifest)
   const cache = await caches.open(cacheName(manifest.releaseId))
-  for (const asset of manifest.assets) {
-    const response = await cache.match(
-      releasePrefix(manifest.releaseId) + asset.path,
-      { ignoreVary: true }
-    )
-    if (!response || !(await validResponse(response, asset)))
-      throw new Error(
-        `Release cache incomplete: ${asset.path}. Reconnect and retry download.`
+  await processAssets(
+    manifest.assets,
+    async (asset) => {
+      const response = await cache.match(
+        releasePrefix(manifest.releaseId) + asset.path,
+        { ignoreVary: true }
       )
-  }
+      if (!response || !(await validResponse(response, asset)))
+        throw new Error(
+          `Release cache incomplete: ${asset.path}. Reconnect and retry download.`
+        )
+    },
+    progress
+  )
 }
 
 /** Validate selections from URLs, UI and the automation bridge before persistence. */

@@ -170,7 +170,9 @@ async function downloadSelection(selection?: Selection): Promise<void> {
   const selected = (await readControl()).selection
   report('Checking and downloading the selected release…')
   const candidate = await discover(selected)
-  await stage(candidate)
+  await stage(candidate, ({ completed, total }) =>
+    report(`Downloading and verifying release files: ${completed} / ${total}`)
+  )
   await control((s) => {
     if (JSON.stringify(s.selection) === JSON.stringify(selected))
       s.candidate = candidate
@@ -185,7 +187,9 @@ async function begin(target: Manifest): Promise<void> {
 }
 async function beginLocked(target: Manifest): Promise<void> {
   report('Verifying the downloaded release…')
-  await verifyCache(target)
+  await verifyCache(target, ({ completed, total }) =>
+    report(`Verifying downloaded release files: ${completed} / ${total}`)
+  )
   const pending = (await readControl()).transition
   if (pending?.phase === 'handoff') {
     // Recovery can replace a failed candidate only while no storage owner exists.
@@ -450,7 +454,9 @@ async function tick(): Promise<void> {
  * occur after admission; a mid-upgrade new tab cannot construct database readers.
  */
 async function boot(active: Active): Promise<void> {
-  await verifyCache(active.manifest)
+  await verifyCache(active.manifest, ({ completed, total }) =>
+    report(`Checking installed release files: ${completed} / ${total}`)
+  )
   const admitted = await control((s) => {
     if (s.transition || s.active?.epoch !== active.epoch) return false
     s.tabs[tabId] = {
