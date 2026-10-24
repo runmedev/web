@@ -29,7 +29,9 @@ export class StorageOwnerClient {
   private unresolvedCommit = false
   private closed = false
   private unregisterReleaseBlocker = registerUpgradeBlocker(() =>
-    this.uncertain.size || this.unresolvedCommit ? 'A storage operation has an unconfirmed outcome; resolve it before upgrading' : undefined
+    this.uncertain.size || this.unresolvedCommit
+      ? 'A storage operation has an unconfirmed outcome; resolve it before upgrading'
+      : undefined
   )
   private diagnostic?: {
     id: string
@@ -102,8 +104,15 @@ export class StorageOwnerClient {
   }
 
   request(method: string, args: unknown[] = []): Promise<unknown> {
-    if ((this.uncertain.size || this.unresolvedCommit) && !['disconnect', 'heartbeat', 'hello'].includes(method))
-      return Promise.reject(new Error('A previous storage operation is still unconfirmed. Wait for its original acknowledgement or use explicit recovery; it will not be replayed.'))
+    if (
+      (this.uncertain.size || this.unresolvedCommit) &&
+      !['disconnect', 'heartbeat', 'hello'].includes(method)
+    )
+      return Promise.reject(
+        new Error(
+          'A previous storage operation is still unconfirmed. Wait for its original acknowledgement or use explicit recovery; it will not be replayed.'
+        )
+      )
     if (this.closed)
       return Promise.reject(
         new Error(
@@ -117,7 +126,15 @@ export class StorageOwnerClient {
         () => {
           // Keep the original correlation until its late acknowledgement. An
           // upgrade retry must not turn a timed-out mutation into a new mutation.
-          if (!['hello', 'heartbeat', 'disconnect', 'getDriveQueueMetrics'].includes(method)) this.uncertain.add(id)
+          if (
+            ![
+              'hello',
+              'heartbeat',
+              'disconnect',
+              'getDriveQueueMetrics',
+            ].includes(method)
+          )
+            this.uncertain.add(id)
           else this.pending.delete(id)
           const error = new Error(
             method === 'getDriveQueueMetrics'
@@ -165,8 +182,14 @@ export class StorageOwnerClient {
           method,
           args,
           credentialBoundary: this.getCredentialBoundary(),
-          epoch: typeof window !== 'undefined' ? window.runmeRelease?.active.epoch : undefined,
-          tabId: typeof window !== 'undefined' ? window.runmeRelease?.tabId : undefined,
+          epoch:
+            typeof window !== 'undefined'
+              ? window.runmeRelease?.active.epoch
+              : undefined,
+          tabId:
+            typeof window !== 'undefined'
+              ? window.runmeRelease?.tabId
+              : undefined,
         })
       } catch (error) {
         clearTimeout(timer)
@@ -256,7 +279,12 @@ export class StorageOwnerClient {
     this.recovery?.disconnected()
     this.onFailure?.(error)
     this.closed = true
-    this.unregisterReleaseBlocker()
+    // Losing the transport does not settle an outstanding effect. Keep the
+    // upgrade blocker until document reload/recovery; never turn disconnect
+    // into an acknowledgement of an uncertain save or create.
+    if (this.pending.size || this.uncertain.size || this.unresolvedCommit)
+      this.unresolvedCommit = true
+    else this.unregisterReleaseBlocker()
     if (this.diagnostic) {
       clearTimeout(this.diagnostic.timer)
       this.diagnostic.reject(error)
@@ -333,9 +361,24 @@ export function createSharedNotebookStore(
         creationMigrationError,
       },
     ])
-    const handshake = hello as {version: number; instanceId?: string; release?: {releaseId: string; epoch: number; capabilities: string[]}}
-    if (release && (handshake.version !== STORAGE_OWNER_VERSION || !handshake.instanceId || handshake.release?.releaseId !== release.manifest.releaseId || handshake.release.epoch !== release.epoch || RELEASE_CAPABILITIES.some(c => !handshake.release?.capabilities?.includes(c))))
-      throw new Error('Storage owner identity or lifecycle capabilities do not match this tab')
+    const handshake = hello as {
+      version: number
+      instanceId?: string
+      release?: { releaseId: string; epoch: number; capabilities: string[] }
+    }
+    if (
+      release &&
+      (handshake.version !== STORAGE_OWNER_VERSION ||
+        !handshake.instanceId ||
+        handshake.release?.releaseId !== release.manifest.releaseId ||
+        handshake.release.epoch !== release.epoch ||
+        RELEASE_CAPABILITIES.some(
+          (c) => !handshake.release?.capabilities?.includes(c)
+        ))
+    )
+      throw new Error(
+        'Storage owner identity or lifecycle capabilities do not match this tab'
+      )
     for (const record of attempts) {
       // Cleanup is optional after durable import. Failure cannot disconnect an
       // otherwise healthy editor or discard its notebook persistence channel.

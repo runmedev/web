@@ -77,10 +77,22 @@ export async function startStorageOwner(identity?: {
 
   try {
     await store.ready
+    if (identity) {
+      const pending = (await readControl()).transition
+      if (
+        pending?.phase === 'handoff' &&
+        pending.epoch === identity.epoch &&
+        pending.target.releaseId === identity.releaseId
+      )
+        await store.verifyReleaseCommits(
+          Object.values(pending.participants).flatMap((p) => p.ready ?? [])
+        )
+    }
   } catch (error) {
     clearInterval(timer)
     await store.drainForStorageRestart()
     store.close()
+    closeReleaseDatabases()
     throw error
   }
   return {

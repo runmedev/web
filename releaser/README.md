@@ -208,3 +208,11 @@ Go fixture, and verifies coordination, offline restart, current-data rollback an
 independent recovery. Screenshots, recordings and machine-readable results go to
 `app/test/browser/test-output/controlled-releases/`. CI runs this gate on every PR
 and main update. Do not promote a release when this gate fails.
+
+Production reconciliation additionally snapshots its real build and passes that
+snapshot as `RUNME_RELEASE_CANDIDATE` to the browser suite. Fixture builds cannot
+change the candidate directory. Only a passing candidate is archived and
+published; no build runs after acceptance. Publication rejects archives without
+a matching acceptance receipt. Existing verified releases remain declarative
+no-ops. The initial contract permits only the same storage schema; this suite
+does not qualify historical releases with different schemas for rollback.

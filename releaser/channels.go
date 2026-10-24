@@ -155,6 +155,13 @@ func writeMutable(ctx context.Context, bucket, name string, data []byte, generat
 
 // Verify the completed archive, publish the activatable manifest last, then
 // advance channel pointers. Source-head checks plus CAS reject slower old jobs.
+// Written into the candidate before testing, archived only after the suite passes.
+type releaseAcceptance struct {
+	Format    int    `json:"format"`
+	ReleaseID string `json:"releaseId"`
+	Suite     string `json:"suite"`
+}
+
 func publishRuntime(ctx context.Context, inputs buildInputs, followStable bool, out io.Writer) error {
 	id, err := inputs.id()
 	if err != nil {
@@ -165,6 +172,15 @@ func publishRuntime(ctx context.Context, inputs buildInputs, followStable bool, 
 		return fmt.Errorf("release archive unavailable: %v", err)
 	}
 	prefix := "version/" + id + "/"
+	acceptance, _, err := readObject(ctx, inputs.Bucket, prefix+"release-acceptance.json")
+	if err != nil {
+		return err
+	}
+	var receipt releaseAcceptance
+	if err := json.Unmarshal(acceptance, &receipt); err != nil || receipt.Format != 1 || receipt.ReleaseID != id || receipt.Suite != "controlled-releases-v1" {
+		return errors.New("release missing exact-candidate acceptance receipt")
+	}
+
 	raw, _, err := readObject(ctx, inputs.Bucket, prefix+archiveManifestName)
 	if err != nil {
 		return err
@@ -218,7 +234,7 @@ func publishRuntime(ctx context.Context, inputs buildInputs, followStable bool, 
 	for _, asset := range archive.Assets {
 		paths[asset.Path] = true
 	}
-	for _, path := range append([]string{manifest.AppEntry, manifest.Owner.Entry, "launcher.html", "sw.js"}, manifest.Styles...) {
+	for _, path := range append([]string{manifest.AppEntry, manifest.Owner.Entry, "launcher.html", "sw.js", "release-acceptance.json"}, manifest.Styles...) {
 		if !paths[path] {
 			return fmt.Errorf("missing runtime asset %s", path)
 		}

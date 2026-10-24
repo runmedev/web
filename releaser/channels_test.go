@@ -58,6 +58,8 @@ func TestRuntimePublicationAndStablePin(t *testing.T) {
 		buildID, _ := inputs.id()
 		id := inputs.WebCommit + "-" + buildID
 		metadata := map[string]any{"releaseId": id, "appEntry": "app.js", "styles": []string{}, "requiredCapabilities": []string{"durable-prepare-v1", "epoch-fence-v1", "owner-lock-v1"}, "owner": map[string]any{"buildId": strings.Split(id, "-")[1], "entry": "storage-owner.js", "rpcMin": 8, "rpcMax": 8}, "launcherProtocol": map[string]any{"min": 1, "max": 1}, "storageCompatibilityId": "runme-schema9-oplog2-payload1-console1"}
+		receipt, _ := json.Marshal(releaseAcceptance{1, id, "controlled-releases-v1"})
+		writeArchiveFixture(t, dist, "release-acceptance.json", string(receipt))
 		raw, _ := json.Marshal(metadata)
 		writeArchiveFixture(t, dist, "release-metadata.json", string(raw))
 		for _, name := range []string{"app.js", "storage-owner.js", "launcher.html", "sw.js"} {
@@ -110,5 +112,19 @@ func TestRuntimePublicationAndStablePin(t *testing.T) {
 	after, _ := os.ReadFile(filepath.Join(inputs.Bucket, "index.html"))
 	if string(before) != string(after) {
 		t.Fatal("stale job overwrote launcher")
+	}
+}
+
+func TestPublicationRequiresCandidateAcceptance(t *testing.T) {
+	inputs := buildInputsFixture(t.TempDir())
+	dist := desiredBuildFixture(t, inputs)
+	if err := runArchive(context.Background(), archiveConfig{dist: dist, bucket: inputs.Bucket, inputs: &inputs}, io.Discard); err != nil {
+		t.Fatal(err)
+	}
+	if err := publishRuntime(context.Background(), inputs, true, io.Discard); err == nil || !strings.Contains(err.Error(), "acceptance receipt") {
+		t.Fatalf("unaccepted archive was not rejected: %v", err)
+	}
+	if _, err := os.Stat(filepath.Join(inputs.Bucket, "channels", "latest.json")); !os.IsNotExist(err) {
+		t.Fatal("unaccepted archive changed latest")
 	}
 }

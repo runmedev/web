@@ -13,8 +13,30 @@ self.addEventListener('install', event => {
   })());
 });
 self.addEventListener('activate', event => event.waitUntil(self.clients.claim()));
+/** Retire every pre-contract window, including uncontrolled historical tabs.
+ * Known loader clients remain eligible while frozen; a missed probe is never
+ * evidence that an unknown old writer stopped. Client IDs are browser assigned.
+ */
 self.addEventListener('message', event => {
-  if (event.data === 'runme-loader-version') event.ports[0]?.postMessage('runme-loader-1');
+  if (event.data !== 'runme-loader-version' || !event.source?.id) return;
+  event.waitUntil((async () => {
+    const registry = await caches.open('runme-loader-clients-v1');
+    const key = id => `/__runme-loader-client/${encodeURIComponent(id)}`;
+    await registry.put(key(event.source.id), new Response('1'));
+    const peers = await self.clients.matchAll({type: 'window', includeUncontrolled: true});
+    for (const peer of peers) {
+      if (await registry.match(key(peer.id))) continue;
+      const compatible = await new Promise(resolve => {
+        const channel = new MessageChannel();
+        const timer = setTimeout(() => {channel.port1.close(); resolve(false)}, 2000);
+        channel.port1.onmessage = e => {clearTimeout(timer); channel.port1.close(); resolve(e.data === 'runme-loader-1')};
+        peer.postMessage('runme-loader-probe', [channel.port2]);
+      });
+      if (!compatible) throw new Error('Preserve edits, close all older Runme tabs, then reload to install controlled upgrades.');
+      await registry.put(key(peer.id), new Response('1'));
+    }
+    event.ports[0]?.postMessage('runme-loader-1');
+  })().catch(error => event.ports[0]?.postMessage(String(error.message || error))));
 });
 /** Exact release matches only. Never cache runner/API/auth or user documents. */
 async function releaseAsset(request, url) {

@@ -1107,6 +1107,20 @@ describe('LocalNotebooks operation-log storage', () => {
     ).toHaveLength(2)
   })
 
+  it('verifies acknowledged history across later commits and rejects missing commits before owner activation', async () => {
+    const actor = vi.spyOn(actorIdentity, 'getNotebookActorId').mockResolvedValue('release_writer')
+    const store = createTestStore({}, { operationLogStorage: new MemoryOperationLogStorage() })
+    await store.folders.put({ id: LOCAL_FOLDER_URI, name: 'Local Notebooks', remoteId: '', children: [], lastSynced: '' })
+    const created = await store.create(LOCAL_FOLDER_URI, 'release.runme')
+    const first = await store.checkpointNotebookRevision(created.uri)
+    await store.checkpointNotebookRevision(created.uri, { snapshot_heads: [first.revision_id] })
+    const before = await store.loadContent(created.uri)
+    await expect(store.verifyReleaseCommits([{uri: created.uri, heads: [first.revision_id]}])).resolves.toBeUndefined()
+    await expect(store.verifyReleaseCommits([{uri: created.uri, heads: ['missing-acknowledged-commit']}])).rejects.toThrow('commits are missing')
+    expect(await store.loadContent(created.uri)).toBe(before)
+    actor.mockRestore()
+  })
+
   it('stores a minimal snapshot frontier and reuses equivalent explicit checkpoints', async () => {
     const actor = vi
       .spyOn(actorIdentity, 'getNotebookActorId')

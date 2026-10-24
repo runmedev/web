@@ -22,6 +22,7 @@ func main() {
 	a := flag.String("a", "", "first emitted build")
 	b := flag.String("b", "", "second emitted build")
 	broken := flag.String("broken", "", "optional broken application release")
+	brokenOwner := flag.String("broken-owner", "", "optional broken storage owner release")
 	addr := flag.String("addr", "127.0.0.1:5198", "listen address")
 	flag.Parse()
 	type release struct {
@@ -75,9 +76,18 @@ func main() {
 	if *broken != "" {
 		releases = append(releases, load(*broken))
 	}
+	var ownerFailure release
+	if *brokenOwner != "" {
+		ownerFailure = load(*brokenOwner)
+		releases = append(releases, ownerFailure)
+	}
 	current := first
 	var mu sync.RWMutex
 	mux := http.NewServeMux()
+	mux.HandleFunc("/test/releases", func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		json.NewEncoder(w).Encode(map[string]string{"a": first.id, "b": second.id})
+	})
 	mux.HandleFunc("/test/promote", func(w http.ResponseWriter, r *http.Request) {
 		if r.Method != "POST" {
 			w.WriteHeader(405)
@@ -87,6 +97,8 @@ func main() {
 		defer mu.Unlock()
 		if r.URL.Query().Get("release") == "a" {
 			current = first
+		} else if r.URL.Query().Get("release") == "broken-owner" && ownerFailure.id != "" {
+			current = ownerFailure
 		} else if r.URL.Query().Get("release") == "broken" && len(releases) > 2 {
 			current = releases[2]
 		} else {
@@ -99,6 +111,11 @@ func main() {
 		selected := current
 		mu.RUnlock()
 		w.Header().Set("Cache-Control", "no-store")
+		if r.URL.Path == "/test/legacy-page" {
+			w.Header().Set("Content-Type", "text/html")
+			fmt.Fprint(w, "<!doctype html><title>Legacy Runme</title><p>Uncontrolled historical app window</p>")
+			return
+		}
 		if strings.HasPrefix(r.URL.Path, "/channels/") {
 			sum := sha256.Sum256(selected.manifest)
 			w.Header().Set("Content-Type", "application/json")

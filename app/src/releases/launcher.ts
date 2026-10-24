@@ -35,6 +35,7 @@ let preparing = false
 let ticking = false
 let owner: SharedWorker | undefined
 let ownerKey = ''
+let dismissedCandidate: string | undefined
 let details = location.pathname === '/recovery.html'
 const recovery = details
 
@@ -109,13 +110,14 @@ async function installLoader(): Promise<void> {
             'Close all Runme tabs, then reopen Runme to finish installing the controlled loader. Preserve unsaved edits first.'
           )
         ),
-      3000
+      10000
     )
     channel.port1.onmessage = (e) => {
       clearTimeout(timer)
       channel.port1.close()
       if (e.data === 'runme-loader-1') resolve()
-      else reject(new Error('Unsupported loader service worker'))
+      else
+        reject(new Error(String(e.data || 'Unsupported loader service worker')))
     }
     navigator.serviceWorker.controller!.postMessage('runme-loader-version', [
       channel.port2,
@@ -160,6 +162,7 @@ async function downloadSelection(selection?: Selection): Promise<void> {
   if (selection)
     await control((s) => {
       s.selection = validateSelection(selection)
+      delete s.candidate
     })
   const selected = (await readControl()).selection
   report('Checking and downloading the selected release…')
@@ -307,10 +310,20 @@ function startOwner(active: Active): void {
     if (e.data?.type === 'release-owner-error') report(e.data.error)
   }
   owner.onerror = () => {
-    ownerKey = ''
-    report(
-      'Storage startup failed. Retry from Versions; current notebook data has been retained.'
-    )
+    const message =
+      'Storage startup failed. Retry from Versions or select a cached compatible release; current notebook data has been retained.'
+    // A module-load failure happens before the worker can persist diagnostics.
+    // Record it here so recovery can replace a failed handoff under OWNER_LOCK.
+    // Do not retry endlessly: the user can explicitly resume or choose recovery.
+    void control((s) => {
+      if (
+        s.transition?.phase === 'handoff' &&
+        s.transition.target.releaseId === active.manifest.releaseId &&
+        s.transition.epoch === active.epoch
+      )
+        s.ownerError = { transitionId: s.transition.id, message }
+    }).catch(report)
+    report(message)
   }
   owner.port.start()
 }
@@ -420,7 +433,7 @@ async function tick(): Promise<void> {
         ([, p]) => !p.ready || p.error
       )
       report(
-        `Upgrade ${latest.transition.phase}: ${blocked.length ? blocked.map(([id, p]) => `${id.slice(0, 8)}: ${p.error ?? 'waiting for tab'}`).join('; ') : 'waiting for exclusive storage ownership'}`
+        `Upgrade ${latest.transition.phase}: ${blocked.length ? blocked.map(([id, p]) => `${latest.tabs[id]?.label ?? id.slice(0, 8)}: ${p.error ?? 'waiting for tab'}`).join('; ') : 'waiting for exclusive storage ownership'}`
       )
     }
   } catch (error) {
@@ -440,6 +453,9 @@ async function boot(active: Active): Promise<void> {
     s.tabs[tabId] = {
       epoch: active.epoch,
       releaseId: active.manifest.releaseId,
+      label:
+        new URLSearchParams(location.search).get('session') ??
+        tabId.slice(0, 8),
     }
     return true
   })
@@ -451,6 +467,10 @@ async function boot(active: Active): Promise<void> {
       void control((s) => {
         if (s.active?.epoch === active.epoch)
           s.healthy = active.manifest.releaseId
+        if (s.tabs[tabId])
+          s.tabs[tabId].label =
+            new URLSearchParams(location.search).get('session') ??
+            tabId.slice(0, 8)
       })
     },
   }
@@ -496,11 +516,17 @@ async function render(): Promise<void> {
     details = !details
     return render()
   })
-  if (s.candidate && s.candidate.releaseId !== s.active?.manifest.releaseId) {
+  if (
+    s.candidate &&
+    s.candidate.releaseId !== s.active?.manifest.releaseId &&
+    (details || dismissedCandidate !== s.candidate.releaseId)
+  ) {
     button('Upgrade all tabs', () => begin(s.candidate!))
-    button('Later', () => {
-      report('Update downloaded. Your installed version stays active.')
+    button('Later', async () => {
+      dismissedCandidate = s.candidate!.releaseId
       details = false
+      await render()
+      report('Update downloaded. Your installed version stays active.')
     })
   }
   if (details || s.transition) {
@@ -542,6 +568,7 @@ async function render(): Promise<void> {
             kind: 'pinned',
             releaseId: s.active!.manifest.releaseId,
           }
+          delete s.candidate
         })
         await render()
       })
@@ -571,7 +598,10 @@ async function render(): Promise<void> {
       try {
         const manifest = validateManifest(await response.json())
         if (generation !== renderGeneration) return
-        if (id !== s.active?.manifest.releaseId)
+        if (
+          id !== s.active?.manifest.releaseId ||
+          s.transition?.phase === 'handoff'
+        )
           button(
             `Use cached ${manifest.webCommit.slice(0, 8)} / ${manifest.buildId.slice(0, 8)}`,
             () => begin(manifest)
@@ -616,10 +646,16 @@ async function main(): Promise<void> {
     : query.has('channel')
       ? ({ kind: 'channel', name: query.get('channel')! } as Selection)
       : undefined
-  if (requested)
-    await control((s) => {
-      s.selection = validateSelection(requested)
-    })
+  if (requested) {
+    try {
+      await control((s) => {
+        s.selection = validateSelection(requested)
+        delete s.candidate
+      })
+    } catch (error) {
+      report(error)
+    }
+  }
   const s = await readControl()
   if (!s.active && !s.transition) {
     await check()
@@ -665,4 +701,10 @@ window.runmeVersions = {
     await tick()
   },
 }
+// This listener is installed before startup awaits. An old uncontrolled window
+// cannot satisfy this probe, while another starting launcher can respond safely.
+navigator.serviceWorker?.addEventListener('message', (event) => {
+  if (event.data === 'runme-loader-probe')
+    event.ports[0]?.postMessage('runme-loader-1')
+})
 void main().catch(report)

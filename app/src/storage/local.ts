@@ -3296,6 +3296,28 @@ export class LocalNotebooks extends Dexie {
     )
   }
 
+  /** Verify saved causal references before committing a new owner epoch. Read
+   * authoritative local history only: a remote refetch must not hide lost commits.
+   * Newer operations may supersede these heads without invalidating their history.
+   */
+  async verifyReleaseCommits(refs: { uri: string; heads: string[] }[]): Promise<void> {
+    const byUri = new Map<string, Set<string>>()
+    for (const ref of refs) {
+      if (!ref.heads.length) continue
+      const heads = byUri.get(ref.uri) ?? new Set<string>()
+      ref.heads.forEach(head => heads.add(head))
+      byUri.set(ref.uri, heads)
+    }
+    for (const [uri, heads] of byUri) {
+      const record = await this.files.get(uri)
+      if (!record?.operationLogRef) throw new Error(`Confirmed notebook history is unavailable for ${uri}`)
+      const stored = await this.operationLogStorage.read(record.operationLogRef)
+      const operations = new Set(parseOperationLog(stored.document).operations.map(op => op.op_id))
+      if ([...heads].some(head => !operations.has(head)))
+        throw new Error(`Confirmed notebook commits are missing for ${uri}; preserve the existing data and use recovery`)
+    }
+  }
+
   private async readMaterializedOperationLog(uri: string) {
     const record = await this.files.get(uri)
     if (!record?.operationLogRef) {

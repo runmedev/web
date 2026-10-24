@@ -96,8 +96,13 @@ async function main() {
   const active = (page: Page) =>
     page.evaluate(() => (window as any).runmeRelease?.active.manifest.releaseId)
   try {
+    const expected = (await fetch(base + '/test/releases').then((r) =>
+      r.json()
+    )) as { a: string; b: string }
     await fetch(base + '/test/promote?release=a', { method: 'POST' })
     console.log('Published fixture A')
+    const legacy = await context.newPage()
+    await legacy.goto(base + '/test/legacy-page')
     let one = await context.newPage()
     pages.push(one)
     console.log('Page created')
@@ -105,7 +110,17 @@ async function main() {
       waitUntil: 'domcontentloaded',
     })
     console.log('Launcher loaded')
+    await one
+      .getByRole('status')
+      .filter({ hasText: 'close all older Runme tabs' })
+      .waitFor({ timeout: 30000 })
+    assert.equal(await active(one), undefined)
+    await legacy.close()
+    await one.reload()
     await ready(one)
+    console.log(
+      'PASS: unknown legacy window blocks new storage ownership until closed'
+    )
     const a = await active(one)
     assert.match(a, /^a{40}-b{64}$/)
     const two = await context.newPage()
@@ -117,7 +132,7 @@ async function main() {
     await one.reload()
     await ready(one)
     assert.equal(await active(one), a)
-    await waitControl(one, (s) => s.candidate?.webCommit === 'c'.repeat(40))
+    await waitControl(one, (s) => s.candidate?.releaseId === expected.b)
     const three = await context.newPage()
     pages.push(three)
     await three.goto(base + '/?session=release-three')
@@ -130,6 +145,50 @@ async function main() {
       a
     )
     console.log('PASS: deploy B; refresh and new tabs retain A')
+    await one.getByRole('button', { name: 'Later', exact: true }).click()
+    assert.equal(
+      await one
+        .getByRole('button', { name: 'Upgrade all tabs', exact: true })
+        .count(),
+      0
+    )
+    await one.getByRole('button', { name: 'Versions', exact: true }).click()
+    await one
+      .getByRole('button', { name: 'Pin installed release', exact: true })
+      .click()
+    await waitControl(
+      one,
+      (s) =>
+        s.selection.kind === 'pinned' &&
+        s.selection.releaseId === a &&
+        !s.candidate
+    )
+    await one
+      .getByRole('button', { name: 'Check for updates', exact: true })
+      .click()
+    await waitControl(one, (s) => s.candidate?.releaseId === a)
+    assert.equal(await active(one), a)
+    await one
+      .getByRole('button', { name: 'Follow latest', exact: true })
+      .click()
+    await waitControl(
+      one,
+      (s) =>
+        s.selection.name === 'latest' && s.candidate?.releaseId === expected.b
+    )
+    await one
+      .getByRole('button', { name: 'Follow stable', exact: true })
+      .click()
+    await waitControl(
+      one,
+      (s) =>
+        s.selection.name === 'stable' && s.candidate?.releaseId === expected.b
+    )
+    assert.equal(await active(one), a)
+    console.log(
+      'PASS: Later, exact pin and channel selection never activate implicitly'
+    )
+
     const created = await execute(
       one,
       `const d=await notebooks.createLocal('upgrade-one.runme'); await notebooks.appendCell({target:{uri:d.handle.uri},kind:'markup',value:'Before upgrade: durable edit'}); await notebooks.show(d.handle.uri); console.log(d.handle.uri);`
@@ -183,11 +242,20 @@ async function main() {
       /Before upgrade/
     )
     console.log('PASS: cancellation reloads prepared tabs from durable state')
-    // A genuinely frozen tab keeps its lifetime lock. Killing the initiating tab
-    // cannot turn lack of a heartbeat into permission to reload the frozen tab.
+    // Hold readiness as well as requesting browser freeze: Chromium may wake a
+    // frozen page when another tab opens. Neither missing readiness nor loss of
+    // the initiating tab permits the coordinator to discard this participant.
     await ready(two)
     await ready(three)
     await waitControl(three, (s) => !s.transition)
+    await two.evaluate(() => {
+      const real = (window as any).runmeRelease.prepare
+      ;(window as any).runmeRelease.prepare = () =>
+        new Promise((resolve, reject) => {
+          ;(window as any).__resumeReleasePreparation = () =>
+            real().then(resolve, reject)
+        })
+    })
     const suspended = await context.newCDPSession(two)
     await suspended.send('Page.setWebLifecycleState', { state: 'frozen' })
     await one
@@ -217,16 +285,18 @@ async function main() {
     assert.equal(await active(one), undefined)
     await one.screenshot({ path: output + '/02-frozen-tab-new-tab-waits.png' })
     await suspended.send('Page.setWebLifecycleState', { state: 'active' })
+    await two.waitForFunction(
+      () => typeof (window as any).__resumeReleasePreparation === 'function'
+    )
+    await two.evaluate(() => (window as any).__resumeReleasePreparation())
     await suspended.detach()
     console.log(
       'PASS: frozen tab blocks; new tab waits; another coordinator resumes after initiator closes'
     )
     for (const page of pages) {
       await page.waitForFunction(
-        () =>
-          (window as any).runmeRelease?.active.manifest.webCommit ===
-          'c'.repeat(40),
-        undefined,
+        (id) => (window as any).runmeRelease?.active.manifest.releaseId === id,
+        expected.b,
         { timeout: 60000 }
       )
       await ready(page)
@@ -338,6 +408,42 @@ async function main() {
       )
       console.log(
         'PASS: broken entry recovery retains current notebook contents'
+      )
+      await fetch(base + '/test/promote?release=broken-owner', {
+        method: 'POST',
+      })
+      await restored.evaluate(() => (window as any).runmeVersions.check())
+      await restored
+        .getByRole('button', { name: 'Upgrade all tabs', exact: true })
+        .click()
+      await waitControl(
+        recovery,
+        (s) => s.transition?.phase === 'handoff' && Boolean(s.ownerError)
+      )
+      assert.equal(await active(restored), a)
+      await recovery.screenshot({
+        path: output + '/08-broken-owner-selector.png',
+      })
+      await recovery
+        .getByRole('button', {
+          name: 'Use cached aaaaaaaa / bbbbbbbb',
+          exact: true,
+        })
+        .click()
+      await waitControl(
+        recovery,
+        (s) => !s.transition && s.active?.manifest.releaseId === a
+      )
+      await ready(restored)
+      assert.match(
+        await execute(
+          restored,
+          `console.log((await notebooks.get({uri:${JSON.stringify(uri)}})).notebook.cells.map(c=>c.value).join('\\n'))`
+        ),
+        /Edited on B/
+      )
+      console.log(
+        'PASS: broken owner handoff recovers to the prior release without losing current data'
       )
     }
     await writeFile(

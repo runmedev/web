@@ -59,7 +59,7 @@ export type Control = {
     epoch: number
     phase: 'initializing' | 'ready'
   }
-  tabs: Record<string, { epoch: number; releaseId: string }>
+  tabs: Record<string, { epoch: number; releaseId: string; label?: string }>
   healthy?: string
   emergencyRestart?: { epoch: number; id: string }
   ownerError?: { transitionId?: string; message: string }

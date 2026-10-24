@@ -14,7 +14,8 @@ const ports: MessagePort[] = []
 let attach: ((port: MessagePort) => void) | undefined
 scope.onconnect = (event) => {
   const port = event.ports[0]
-  port.start()
+  // Keep delivery paused until the host installs onmessage. Starting a port
+  // while imports/lock acquisition are pending can discard the initial hello.
   if (attach) attach(port)
   else ports.push(port)
 }

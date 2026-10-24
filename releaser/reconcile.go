@@ -176,13 +176,38 @@ func buildResolvedArchive(ctx context.Context, cfg config, source repoSource, in
 		}
 		version := releaseVersion{BuildDate: strings.TrimSpace(string(date)), WebRepo: inputs.WebRepo, WebBranch: inputs.WebBranch, WebCommit: sha, Bucket: inputs.Bucket}
 		env := declarativeBuildEnv(inputs, version)
-		for _, args := range [][]string{{"install", "--frozen-lockfile"}, {"run", "build:renderers"}, {"run", "build:app"}} {
+		for _, args := range [][]string{{"install", "--frozen-lockfile"}, {"run", "build:renderers"}, {"run", "build:console"}, {"run", "build:app"}} {
 			if err := runCmd(ctx, webDir, env, "pnpm", args...); err != nil {
 				return "", err
 			}
 		}
 		dist := filepath.Join(webDir, "app", "dist")
-		return dist, writeVersionYAML(dist, version)
+		if err := writeVersionYAML(dist, version); err != nil {
+			return "", err
+		}
+		// Test a frozen snapshot. The driver builds other fixtures in app/dist,
+		// so publishing that mutable directory would publish untested bytes.
+		candidate := filepath.Join(workDir, "candidate")
+		if _, err := snapshotArchive(dist, candidate); err != nil {
+			return "", err
+		}
+		buildID, _ := inputs.id()
+		receipt := releaseAcceptance{1, sha + "-" + buildID, "controlled-releases-v1"}
+		raw, err := json.Marshal(receipt)
+		if err != nil {
+			return "", err
+		}
+		if err := os.WriteFile(filepath.Join(candidate, "release-acceptance.json"), raw, 0644); err != nil {
+			return "", err
+		}
+		testEnv := append(append([]string{}, env...), "RUNME_RELEASE_CANDIDATE="+candidate)
+		if chromium := os.Getenv("CHROMIUM_PATH"); chromium != "" {
+			testEnv = append(testEnv, "CHROMIUM_PATH="+chromium)
+		}
+		if err := runCmd(ctx, webDir, testEnv, "pnpm", "-C", "app", "run", "cuj:releases"); err != nil {
+			return "", fmt.Errorf("candidate acceptance failed; nothing published: %w", err)
+		}
+		return candidate, nil
 	})
 }
 

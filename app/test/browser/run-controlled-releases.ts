@@ -16,8 +16,13 @@ async function main() {
     'a'.repeat(40) + '-' + 'b'.repeat(64),
     'c'.repeat(40) + '-' + 'd'.repeat(64),
     'e'.repeat(40) + '-' + 'f'.repeat(64),
+    '1'.repeat(40) + '-' + '2'.repeat(64),
   ]
-  for (const [index, name] of ['a', 'b', 'broken'].entries()) {
+  // Preserve the production snapshot before fixture builds mutate app/dist.
+  const candidate = process.env.RUNME_RELEASE_CANDIDATE
+  if (candidate) await cp(candidate, join(dir, 'b'), { recursive: true })
+  for (const [index, name] of ['a', 'b', 'broken', 'broken-owner'].entries()) {
+    if (name === 'b' && candidate) continue
     const result = spawnSync('pnpm', ['exec', 'vite', 'build'], {
       env: { ...process.env, VITE_RUNME_RELEASE_ID: ids[index] },
       encoding: 'utf8',
@@ -42,6 +47,15 @@ async function main() {
     join(broken, 'broken-entry.js'),
     "throw new Error('Injected broken application entry')"
   )
+  const brokenOwner = join(dir, 'broken-owner')
+  const ownerMetadataPath = join(brokenOwner, 'release-metadata.json')
+  const ownerMetadata = JSON.parse(await readFile(ownerMetadataPath, 'utf8'))
+  ownerMetadata.owner.entry = 'broken-owner.js'
+  await writeFile(ownerMetadataPath, JSON.stringify(ownerMetadata))
+  await writeFile(
+    join(brokenOwner, 'broken-owner.js'),
+    "throw new Error('Injected broken storage owner entry')"
+  )
   const serverBinary = join(dir, 'release-server')
   const compiled = spawnSync(
     'go',
@@ -55,6 +69,7 @@ async function main() {
       `--a=${join(dir, 'a')}`,
       `--b=${join(dir, 'b')}`,
       `--broken=${broken}`,
+      `--broken-owner=${brokenOwner}`,
       '--addr=127.0.0.1:5198',
     ],
     { cwd: root, stdio: 'inherit' }

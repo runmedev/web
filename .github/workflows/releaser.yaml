@@ -97,6 +97,12 @@ jobs:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: node releaser/wait-for-acceptance.mjs
 
+      - name: Install candidate acceptance browser
+        if: github.event_name != 'pull_request' && github.event.inputs.dry_run != 'true'
+        run: |
+          pnpm install --frozen-lockfile
+          pnpm -C app exec playwright install --with-deps chromium
+
       - name: Run releaser
         shell: bash
         env:
