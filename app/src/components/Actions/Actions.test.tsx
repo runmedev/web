@@ -2778,7 +2778,7 @@ describe('Actions tabs', () => {
     expect(
       screen.getByRole('tab', { name: 'Version Information' })
     ).toBeTruthy()
-    expect(screen.getByText('Release')).toBeTruthy()
+    expect(screen.getByText('Build metadata')).toBeTruthy()
     expect(screen.getByText('version.yaml')).toBeTruthy()
   })
 

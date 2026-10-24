@@ -1,4 +1,5 @@
 import { ScrollArea, Text } from '@radix-ui/themes'
+import { ReleaseControls } from './ReleaseControls'
 
 import {
   formatRunmeVersionYaml,
@@ -32,30 +33,40 @@ export function VersionInfoTab() {
       className="flex-1 p-4"
       data-testid="version-info-scroll"
     >
-      <div className="mx-auto flex h-full max-w-3xl flex-col gap-6 text-sm">
-        <div className="space-y-2">
+      <div
+        id="version-information"
+        className="mx-auto flex max-w-3xl flex-col gap-6 text-sm"
+      >
+        <div id="version-information-heading" className="space-y-2">
           <Text size="5" weight="bold" as="p" className="text-nb-text">
             Version Information
           </Text>
           <Text size="2" as="p" className="text-nb-text-muted">
-            These values are baked into the loaded JavaScript bundle at build
-            time and mirror the deployment marker served as version.yaml.
+            View your installed release, choose a channel, and manage upgrades.
           </Text>
         </div>
 
+        <ReleaseControls />
+
         {!hasVersionInfo ? (
-          <div className="rounded-lg border border-amber-200 bg-amber-50 p-4 text-sm text-amber-900">
+          <div
+            id="version-metadata-unavailable"
+            className="rounded-lg border border-amber-200 bg-amber-50 p-4 text-sm text-amber-900"
+          >
             Version metadata was not provided for this build.
           </div>
         ) : null}
 
-        <div className="rounded-lg border border-nb-border bg-white p-4">
+        <div
+          id="version-build-metadata"
+          className="rounded-lg border border-nb-border bg-white p-4"
+        >
           <Text size="3" weight="bold" as="p" className="text-nb-text">
-            Release
+            Build metadata
           </Text>
           <dl className="mt-4 grid grid-cols-[minmax(120px,180px)_1fr] gap-x-4 gap-y-3">
             {FIELD_LABELS.map(([key, label]) => (
-              <div key={key} className="contents">
+              <div id={`version-field-${key}`} key={key} className="contents">
                 <dt className="text-xs font-semibold uppercase tracking-wide text-nb-text-faint">
                   {label}
                 </dt>
@@ -67,7 +78,10 @@ export function VersionInfoTab() {
           </dl>
         </div>
 
-        <div className="rounded-lg border border-nb-border bg-nb-surface-2 p-4">
+        <div
+          id="version-yaml"
+          className="rounded-lg border border-nb-border bg-nb-surface-2 p-4"
+        >
           <Text size="3" weight="bold" as="p" className="text-nb-text">
             version.yaml
           </Text>

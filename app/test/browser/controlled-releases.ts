@@ -93,6 +93,13 @@ async function main() {
     }
     throw new Error('Timed out waiting for durable release state')
   }
+  const openVersions = async (page: Page) => {
+    await page
+      .getByRole('button', { name: 'Open Version Information', exact: true })
+      .click()
+    await page.getByRole('region', { name: 'Application versions' }).waitFor()
+    await page.locator('#runme-release-panel').waitFor({ state: 'hidden' })
+  }
   const active = (page: Page) =>
     page.evaluate(() => (window as any).runmeRelease?.active.manifest.releaseId)
   try {
@@ -145,11 +152,8 @@ async function main() {
       a
     )
     console.log('PASS: deploy B; refresh and new tabs retain A')
-    await one.getByRole('button', { name: 'Later', exact: true }).click()
-    await one
-      .getByRole('button', { name: 'Upgrade all tabs', exact: true })
-      .waitFor({ state: 'detached' })
-    await one.getByRole('button', { name: 'Versions', exact: true }).click()
+    await openVersions(one)
+    await one.screenshot({ path: output + '/00-version-information.png' })
     await one
       .getByRole('button', { name: 'Pin installed release', exact: true })
       .click()
@@ -183,7 +187,7 @@ async function main() {
     )
     assert.equal(await active(one), a)
     console.log(
-      'PASS: Later, exact pin and channel selection never activate implicitly'
+      'PASS: Information view owns controls; exact pin and channel selection never activate implicitly'
     )
 
     const created = await execute(
@@ -204,10 +208,12 @@ async function main() {
         throw new Error('Injected durable-save failure')
       }
     })
+    await openVersions(one)
     await one
       .getByRole('button', { name: 'Upgrade all tabs', exact: true })
       .click()
     await one
+      .locator('#runme-release-panel')
       .getByRole('status')
       .filter({ hasText: 'Injected durable-save failure' })
       .waitFor({ timeout: 30000 })
@@ -255,6 +261,7 @@ async function main() {
     })
     const suspended = await context.newCDPSession(two)
     await suspended.send('Page.setWebLifecycleState', { state: 'frozen' })
+    await openVersions(one)
     await one
       .getByRole('button', { name: 'Upgrade all tabs', exact: true })
       .click()
@@ -319,7 +326,8 @@ async function main() {
       one,
       `await notebooks.appendCell({target:{uri:${JSON.stringify(uri)}},kind:'markup',value:'Edited on B and retained after rollback'});`
     )
-    await one.getByRole('button', { name: 'Versions', exact: true }).click()
+    await openVersions(one)
+    await one.getByText('Other releases and recovery', { exact: true }).click()
     await one
       .getByRole('button', {
         name: 'Use cached aaaaaaaa / bbbbbbbb',
@@ -360,6 +368,7 @@ async function main() {
       await context.setOffline(false)
       await fetch(base + '/test/promote?release=broken', { method: 'POST' })
       await one.evaluate(() => (window as any).runmeVersions.check())
+      await openVersions(one)
       await one
         .getByRole('button', { name: 'Upgrade all tabs', exact: true })
         .click()
@@ -410,6 +419,7 @@ async function main() {
         method: 'POST',
       })
       await restored.evaluate(() => (window as any).runmeVersions.check())
+      await openVersions(restored)
       await restored
         .getByRole('button', { name: 'Upgrade all tabs', exact: true })
         .click()

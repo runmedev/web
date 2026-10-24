@@ -36,12 +36,15 @@ let ticking = false
 let owner: SharedWorker | undefined
 let ownerKey = ''
 let dismissedCandidate: string | undefined
+let appReady = false
+let transitioning = false
 let details = location.pathname === '/recovery.html'
 const recovery = details
 
 /** Display diagnostics as text, never executable release metadata or user content. */
 function report(value: unknown): void {
   status.textContent = String(value instanceof Error ? value.message : value)
+  window.dispatchEvent(new Event('runme-release-change'))
 }
 function button(label: string, action: () => unknown): void {
   const b = document.createElement('button')
@@ -464,6 +467,8 @@ async function boot(active: Active): Promise<void> {
     active,
     tabId,
     ready: () => {
+      appReady = true
+      panel.hidden = !recovery && !transitioning
       void control((s) => {
         if (s.active?.epoch === active.epoch)
           s.healthy = active.manifest.releaseId
@@ -499,6 +504,10 @@ async function render(): Promise<void> {
   const generation = ++renderGeneration
   const s = await readControl()
   if (generation !== renderGeneration) return
+  transitioning = Boolean(s.transition)
+  // Normal management belongs to Information. Startup/recovery and frozen-app
+  // transitions retain independent controls, including cancel/resume.
+  panel.hidden = appReady && !recovery && !transitioning
   uiKey = JSON.stringify([
     s.active?.epoch,
     s.candidate?.releaseId,
@@ -686,6 +695,22 @@ async function main(): Promise<void> {
     )
 }
 window.runmeVersions = {
+  uiVersion: 1,
+  status: () => status.textContent ?? '',
+  cached: cachedReleases,
+  activate: async (id) => {
+    const manifest = (await cachedReleases()).find((m) => m.releaseId === id)
+    if (!manifest) throw new Error('This release is not completely downloaded')
+    await begin(manifest)
+  },
+  pin: async () => {
+    await control((s) => {
+      if (!s.active) throw new Error('No installed release')
+      s.selection = { kind: 'pinned', releaseId: s.active.manifest.releaseId }
+      delete s.candidate
+    })
+    await render()
+  },
   get: readControl,
   check,
   upgrade: async () => {
@@ -700,6 +725,25 @@ window.runmeVersions = {
     ownerKey = ''
     await tick()
   },
+}
+
+/** Enumerate completion markers without importing the application or its stores. */
+async function cachedReleases(): Promise<Manifest[]> {
+  const releases: Manifest[] = []
+  for (const name of await caches.keys()) {
+    if (!name.startsWith('runme-release-v1-')) continue
+    const id = name.slice('runme-release-v1-'.length)
+    const response = await (
+      await caches.open(name)
+    ).match(releasePrefix(id) + 'release.json')
+    if (!response) continue
+    try {
+      releases.push(validateManifest(await response.json()))
+    } catch {
+      /* Incomplete caches are not eligible. */
+    }
+  }
+  return releases
 }
 // This listener is installed before startup awaits. An old uncontrolled window
 // cannot satisfy this probe, while another starting launcher can respond safely.

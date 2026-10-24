@@ -1755,13 +1755,17 @@ export function createAppJsGlobals({
     },
     app: {
       releases: {
+        cached: () => { if (!window.runmeVersions?.cached) throw new Error('Update the release loader to list cached releases'); return window.runmeVersions.cached() },
+        activate: (releaseId: string) => { if (!window.runmeVersions?.activate) throw new Error('Update the release loader or use recovery to activate cached releases'); return window.runmeVersions.activate(releaseId) },
+        pin: () => { if (!window.runmeVersions?.pin) throw new Error('Update the release loader to pin without downloading'); return window.runmeVersions.pin() },
+        status: () => window.runmeVersions?.status?.() ?? 'Release status is unavailable',
         prune: () => { if (!window.runmeVersions) throw new Error('Release launcher is unavailable'); return window.runmeVersions.prune() },
         get: () => { if (!window.runmeVersions) throw new Error('Release launcher is unavailable'); return window.runmeVersions.get() },
         check: (selection?: import('../../releases/control').Selection) => { if (!window.runmeVersions) throw new Error('Release launcher is unavailable'); return window.runmeVersions.check(selection) },
         upgrade: () => { if (!window.runmeVersions) throw new Error('Release launcher is unavailable'); return window.runmeVersions.upgrade() },
         cancel: () => { if (!window.runmeVersions) throw new Error('Release launcher is unavailable'); return window.runmeVersions.cancel() },
         retry: () => { if (!window.runmeVersions) throw new Error('Release launcher is unavailable'); return window.runmeVersions.retry() },
-        help: () => 'app.releases.get(), check({kind:"channel",name:"stable"|"latest"}), check({kind:"pinned",releaseId}), upgrade(), retry(), cancel(), prune(). Downloading never activates. Upgrade preserves edits and reloads all tabs.',
+        help: () => 'app.releases.get(), check({kind:"channel",name:"stable"|"latest"}), check({kind:"pinned",releaseId}), upgrade(), cached(), activate(releaseId), pin(), status(), retry(), cancel(), prune(). Downloading never activates. Upgrade preserves edits and reloads all tabs.',
       },
       getVersion: getRunmeVersionInfo,
       getSessionId: () => getClaimedSessionId(),

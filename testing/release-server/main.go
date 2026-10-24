@@ -68,7 +68,9 @@ func main() {
 			log.Fatal(err)
 		}
 		m["assets"] = assets
-		manifest, _ := json.Marshal(m)
+		// Match production's formatted bytes so reserializing a cached marker
+		// cannot accidentally satisfy a channel's manifest digest in this CUJ.
+		manifest, _ := json.MarshalIndent(m, "", "  ")
 		return release{dir, id, manifest}
 	}
 	first, second := load(*a), load(*b)

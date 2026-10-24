@@ -9,7 +9,9 @@ CUJs in `run-cuj-scenarios.ts`.
 Acceptance:
 
 - An uncontrolled legacy window blocks initial admission until it closes.
+- The floating launcher disappears after startup. The left Information icon opens version controls inside the Version Information document.
 - Deploy B while A is installed. Refresh and new tabs still use A.
+- Channel changes and exact pins only stage; activation requires Upgrade all tabs.
 - Pending notebook edits in multiple tabs persist before upgrade readiness.
 - A failed preparation blocks activation and leaves that tab editable.
 - Cancel before handoff: prepared tabs reopen their durable A state.

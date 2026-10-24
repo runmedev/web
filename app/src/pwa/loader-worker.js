@@ -43,6 +43,10 @@ async function releaseAsset(request, url) {
   const parts = url.pathname.split('/');
   const id = parts[2];
   const path = parts.slice(3).join('/');
+  // release.json in CacheStorage is a local completion marker, serialized by
+  // the launcher. Channel digests authenticate the original published bytes,
+  // so discovery must never receive that reserialized marker as a response.
+  if (path === 'release.json') return fetch(request);
   const cache = await caches.open(`runme-release-v1-${id}`);
   const cached = await cache.match(url.pathname, { ignoreVary: true });
   if (cached) return cached;
