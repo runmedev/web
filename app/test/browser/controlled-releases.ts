@@ -146,12 +146,9 @@ async function main() {
     )
     console.log('PASS: deploy B; refresh and new tabs retain A')
     await one.getByRole('button', { name: 'Later', exact: true }).click()
-    assert.equal(
-      await one
-        .getByRole('button', { name: 'Upgrade all tabs', exact: true })
-        .count(),
-      0
-    )
+    await one
+      .getByRole('button', { name: 'Upgrade all tabs', exact: true })
+      .waitFor({ state: 'detached' })
     await one.getByRole('button', { name: 'Versions', exact: true }).click()
     await one
       .getByRole('button', { name: 'Pin installed release', exact: true })
@@ -421,6 +418,10 @@ async function main() {
         (s) => s.transition?.phase === 'handoff' && Boolean(s.ownerError)
       )
       assert.equal(await active(restored), a)
+      await recovery
+        .getByRole('status')
+        .filter({ hasText: 'Storage startup failed' })
+        .waitFor({ timeout: 30000 })
       await recovery.screenshot({
         path: output + '/08-broken-owner-selector.png',
       })
