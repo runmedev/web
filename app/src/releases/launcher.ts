@@ -564,9 +564,12 @@ async function boot(active: Active): Promise<void> {
     active,
     tabId,
     ready: () => {
+      // Notebook subscriptions repeat readiness after edits. Start background
+      // caching once per page, not another full cache verification per edit.
+      const firstReady = !appReady
       appReady = true
       panel.hidden = !recovery && !transitioning
-      void completeOffline(active.manifest)
+      if (firstReady) void completeOffline(active.manifest)
       void control((s) => {
         if (s.active?.epoch === active.epoch)
           s.healthy = active.manifest.releaseId

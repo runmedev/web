@@ -160,6 +160,19 @@ async function main() {
     await one
       .getByText('All release files are verified and cached for offline use.')
       .waitFor({ timeout: 60000 })
+    assert.equal(
+      await one.evaluate(() => {
+        const runtime = (window as any).runmeRelease
+        // Notebook edits repeat this notification. They must not restart a
+        // completed font job and rehash the whole release on every edit.
+        runtime.ready()
+        return (window as any).runmeVersions.offline(
+          runtime.active.manifest.releaseId
+        )?.phase
+      }),
+      'ready',
+      'Repeated app readiness must not restart completed offline caching'
+    )
     console.log(
       'PASS: app opens with fonts unavailable; background retry completes offline cache'
     )
