@@ -79,12 +79,16 @@ jobs:
         with:
           run_install: false
 
+      - name: Test releaser
+        working-directory: releaser
+        run: go test -race ./...
+
       - name: Build releaser
         shell: bash
         run: |
           set -euo pipefail
           cd releaser
-          go build -o ../releaser-bin .
+          go build -trimpath -o ../releaser-bin .
 
       - name: Run releaser
         shell: bash
