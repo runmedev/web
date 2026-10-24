@@ -259,7 +259,7 @@ func publishArchiveAsset(ctx context.Context, bucket, prefix, staging string, as
 		return nil
 	}
 	args := []string{"storage", "cp", "--if-generation-match=0", "--cache-control=" + immutableCacheControl}
-	if asset.Path == archiveManifestName {
+	if asset.Path == archiveManifestName || asset.Path == "release.json" {
 		args = append(args, "--content-type=application/json")
 	}
 	args = append(args, source, destination)
@@ -313,7 +313,7 @@ func verifyGCSArchiveAsset(ctx context.Context, destination string, asset archiv
 	if object.Generation == "" || strings.Trim(object.Generation, "0123456789") != "" || object.CacheControl != immutableCacheControl {
 		return fmt.Errorf("unexpected archive metadata at %s", destination)
 	}
-	if asset.Path == archiveManifestName && object.ContentType != "application/json" {
+	if (asset.Path == archiveManifestName || asset.Path == "release.json") && object.ContentType != "application/json" {
 		return fmt.Errorf("unexpected manifest content type at %s", destination)
 	}
 	h := sha256.New()

@@ -1,3 +1,4 @@
+import { registerReleaseDatabase } from '../releases/databases'
 import Dexie, { type Table } from 'dexie'
 
 import { LinkedResourceError, parseGoogleDriveFileId } from './linkedResource'
@@ -53,6 +54,7 @@ export class LinkedResourceCacheDatabase
 
   constructor(name = 'runme-linked-resource-cache') {
     super(name)
+    registerReleaseDatabase(this)
     this.version(1).stores({
       records: '&key, principalKey, sourceUri, versionKey, lastAccessedAt',
     })

@@ -1,3 +1,4 @@
+import { registerReleaseDatabase } from '../releases/databases'
 import Dexie, { type Table } from 'dexie'
 
 import {
@@ -275,6 +276,7 @@ export class LocalComments extends Dexie {
     databaseName = 'runme-local-comments-v1'
   ) {
     super(databaseName)
+    registerReleaseDatabase(this)
     this.version(1).stores({
       cachedComments: '&id, remoteUri, commentId, modifiedTime',
       desiredComments: '&id, remoteUri, notebookUri, status, createdAt',

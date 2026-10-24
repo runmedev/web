@@ -60,6 +60,9 @@ function resolveWebCommit(): string | undefined {
   }
 }
 
+const releaseId = process.env.VITE_RUNME_RELEASE_ID;
+if (releaseId && !/^[a-f0-9]{40}-[a-f0-9]{64}$/.test(releaseId)) throw new Error('Invalid release ID');
+const assetBase = releaseId ? `/version/${releaseId}/` : '/';
 const webCommit = resolveWebCommit();
 const webRepository =
   process.env.VITE_RUNME_VERSION_WEB_REPO?.trim() || "runmedev/web";
@@ -164,6 +167,38 @@ function pwaServiceWorkerPlugin(): Plugin {
     name: "runme-pwa-service-worker",
     apply: "build",
     async generateBundle(_outputOptions, bundle) {
+      if (releaseId) {
+        const launcher = Object.values(bundle).find(output => output.type === 'chunk' && output.name === 'launcher');
+        const entry = Object.values(bundle).find(output => output.type === 'chunk' && output.isEntry && output.name !== 'launcher');
+        if (!launcher || launcher.type !== 'chunk' || !entry || entry.type !== 'chunk') this.error('Missing release entries');
+        const bootstrap = new Set<string>();
+        const collect = (name: string) => {
+          if (bootstrap.has(name)) return;
+          bootstrap.add(name);
+          const chunk = bundle[name];
+          if (chunk?.type === 'chunk') chunk.imports.forEach(collect);
+        };
+        collect(launcher.fileName);
+        const shell = `<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>Runme</title><link rel="manifest" href="${assetBase}manifest.webmanifest"></head><body><div id="root"></div><script type="module" src="${assetBase}${launcher.fileName}"></script></body></html>`;
+        this.emitFile({ type: 'asset', fileName: 'launcher.html', source: shell });
+        // Direct visits to an immutable index must also pass launcher admission.
+        const html = bundle['index.html'];
+        if (html?.type === 'asset') html.source = shell;
+        this.emitFile({ type: 'asset', fileName: 'release-metadata.json', source: JSON.stringify({
+          releaseId, appEntry: entry.fileName,
+          styles: [...(entry.viteMetadata?.importedCss ?? [])],
+          requiredCapabilities: ['durable-prepare-v1', 'epoch-fence-v1', 'owner-lock-v1'], testedRollbackTargets: [],
+          owner: { buildId: releaseId.split('-')[1], entry: 'storage-owner.js', rpcMin: 8, rpcMax: 8 },
+          launcherProtocol: { min: 1, max: 1 },
+          storageCompatibilityId: 'runme-schema9-oplog2-payload1-console1',
+        }) });
+        const template = await readFile(new URL('./src/pwa/loader-worker.js', import.meta.url), 'utf8');
+        this.emitFile({ type: 'asset', fileName: 'sw.js', source: template
+          .replace('__RUNME_LOADER_SHELL__', JSON.stringify(shell))
+          .replace('__RUNME_LOADER_BOOTSTRAP__', JSON.stringify([...bootstrap].map(name => assetBase + name)))
+          .replace('__RUNME_LOADER_CACHE__', `runme-loader-v1-${releaseId}`) });
+        return;
+      }
       const generatedAssets = Object.keys(bundle)
         .filter((fileName) => !fileName.endsWith(".map"))
         .map((fileName) => `/${fileName}`);
@@ -212,7 +247,7 @@ function pwaServiceWorkerPlugin(): Plugin {
 // https://vite.dev/config/
 export default defineConfig({
   // Use root-relative assets so LB rewrites to /index.html still load bundles from /.
-  base: "/",
+  base: assetBase,
   cacheDir: ".vite",
   define: {
     "import.meta.env.VITE_RUNME_VERSION_WEB_REPO":
@@ -235,6 +270,9 @@ export default defineConfig({
     format: "es",
     rollupOptions: {
       output: {
+        // Runtime imports must not import the worker entry back without its
+        // epoch query and execute the entry a second time.
+        manualChunks: (id) => id.endsWith('/releases/control.ts') ? 'release-control' : undefined,
         entryFileNames: (chunk) =>
           chunk.name === "storageOwner.worker"
             ? "storage-owner.js"
@@ -298,6 +336,7 @@ export default defineConfig({
   build: {
     chunkSizeWarningLimit: 999999,
     rollupOptions: {
+      input: releaseId ? { app: path.resolve('index.html'), launcher: path.resolve('src/releases/launcher.ts') } : undefined,
       output: {
         manualChunks: undefined,
         // Use hash in file names for cache busting. This ensures that when the user clicks
@@ -305,7 +344,7 @@ export default defineConfig({
         // will be reloaded since the file names will be different.
         // This turns out to be much easier than trying to inject the git commit with bazel stamping.
         // Its also ensures reproducible builds.
-        entryFileNames: `index.[hash].js`,
+        entryFileNames: `[name].[hash].js`,
         chunkFileNames: `index.[hash].js`,
         assetFileNames: `[name].[hash].[ext]`,
       },

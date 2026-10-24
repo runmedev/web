@@ -41,7 +41,7 @@ func (inputs buildInputs) id() (string, error) {
 		return "", errors.New("incomplete build inputs")
 	}
 	for name := range inputs.PublicEnv {
-		if !strings.HasPrefix(name, "VITE_") || strings.HasPrefix(name, "VITE_RUNME_VERSION_") || strings.ContainsAny(name, "=\x00") {
+		if !strings.HasPrefix(name, "VITE_") || (strings.HasPrefix(name, "VITE_RUNME_VERSION_") || name == "VITE_RUNME_RELEASE_ID") || strings.ContainsAny(name, "=\x00") {
 			return "", fmt.Errorf("unsupported public build variable %q", name)
 		}
 	}
@@ -58,17 +58,24 @@ func validDigest(value string) bool {
 	return len(value) == 64 && strings.Trim(value, "0123456789abcdef") == ""
 }
 
-// newReconcileCmd provides the opt-in declarative path while the root publisher
-// remains unchanged. It archives builds; it does not activate application releases.
+// newReconcileCmd archives declarative builds and optionally publishes eligible
+// releases after the caller supplies the exact acceptance-tested source commit.
 func newReconcileCmd() *cobra.Command {
 	cfg := config{}
-	var revision string
+	var revision, validatedCommit string
+	var publish, followStable bool
 	cmd := &cobra.Command{
 		Use:   "reconcile --web=<branch> --bucket=<destination>",
 		Short: "Ensure an immutable build exists for the resolved inputs (no activation)",
 		Args:  cobra.NoArgs,
 		RunE: func(cmd *cobra.Command, _ []string) error {
-			return runReconcile(cmd.Context(), cfg, revision, cmd.OutOrStdout())
+			if !publish {
+				return runReconcile(cmd.Context(), cfg, revision, cmd.OutOrStdout())
+			}
+			if !cfg.dryRun && !commitPattern.MatchString(validatedCommit) {
+				return errors.New("--validated-commit is required when publishing channels")
+			}
+			return reconcileRuntime(cmd.Context(), cfg, revision, followStable, validatedCommit, cmd.OutOrStdout())
 		},
 	}
 	cmd.Flags().StringVar(&cfg.webBranch, "web", "", "source branch to resolve to an exact commit")
@@ -77,6 +84,9 @@ func newReconcileCmd() *cobra.Command {
 	cmd.Flags().StringVar(&cfg.tmpBase, "tmpdir", os.TempDir(), "base temporary directory")
 	cmd.Flags().StringVar(&revision, "build-revision", "1", "declarative rebuild revision; change to rebuild unchanged sources")
 	cmd.Flags().BoolVar(&cfg.dryRun, "dry-run", false, "resolve and check desired state without building or uploading")
+	cmd.Flags().StringVar(&validatedCommit, "validated-commit", "", "exact source commit whose release acceptance checks passed")
+	cmd.Flags().BoolVar(&publish, "publish-channels", false, "publish eligible runtime manifest, channels and root loader")
+	cmd.Flags().BoolVar(&followStable, "stable-follow-latest", true, "advance stable with latest; disable to retain the stable pointer")
 	_ = cmd.MarkFlagRequired("web")
 	_ = cmd.MarkFlagRequired("bucket")
 	return cmd
@@ -104,7 +114,7 @@ func resolveBuildInputs(ctx context.Context, cfg config, source repoSource, sha,
 	public := map[string]string{}
 	for _, entry := range os.Environ() {
 		name, value, _ := strings.Cut(entry, "=")
-		if strings.HasPrefix(name, "VITE_") && !strings.HasPrefix(name, "VITE_RUNME_VERSION_") {
+		if strings.HasPrefix(name, "VITE_") && !(strings.HasPrefix(name, "VITE_RUNME_VERSION_") || name == "VITE_RUNME_RELEASE_ID") {
 			public[name] = value
 		}
 	}
@@ -127,6 +137,14 @@ func runReconcile(ctx context.Context, cfg config, revision string, out io.Write
 	if err != nil {
 		return err
 	}
+	return buildResolvedArchive(ctx, cfg, source, inputs, out)
+}
+
+// Build exactly the declared source; resolving the branch a second time would
+// race a new commit and publish different inputs than those checked above.
+func buildResolvedArchive(ctx context.Context, cfg config, source repoSource, inputs buildInputs, out io.Writer) error {
+	var err error
+	sha := inputs.WebCommit
 	var workDir string
 	defer func() {
 		if workDir != "" {
@@ -181,6 +199,8 @@ func declarativeBuildEnv(inputs buildInputs, version releaseVersion) []string {
 	for name, value := range inputs.PublicEnv {
 		env = append(env, name+"="+value)
 	}
+	buildID, _ := inputs.id()
+	env = append(env, "VITE_RUNME_RELEASE_ID="+inputs.WebCommit+"-"+buildID)
 	return append(env, versionBuildEnv(version)...)
 }
 
@@ -280,4 +300,30 @@ func verifyBuildArchive(ctx context.Context, inputs buildInputs, releaseID strin
 		}
 	}
 	return true, nil
+}
+
+// Resolve once for publication; a concurrent source advance is rejected.
+func reconcileRuntime(ctx context.Context, cfg config, revision string, followStable bool, validatedCommit string, out io.Writer) error {
+	source, err := resolveRepoSource(cfg.webRepo)
+	if err != nil {
+		return err
+	}
+	sha, err := gitRemoteBranchHead(ctx, source.cloneSource, cfg.webBranch)
+	if err != nil {
+		return err
+	}
+	if !cfg.dryRun && sha != validatedCommit {
+		return errors.New("source advanced beyond the validated commit; refusing publication")
+	}
+	inputs, err := resolveBuildInputs(ctx, cfg, source, sha, revision)
+	if err != nil {
+		return err
+	}
+	if err = buildResolvedArchive(ctx, cfg, source, inputs, out); err != nil {
+		return err
+	}
+	if cfg.dryRun {
+		return nil
+	}
+	return publishRuntime(ctx, inputs, followStable, out)
 }

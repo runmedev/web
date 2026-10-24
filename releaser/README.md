@@ -156,3 +156,55 @@ These tests do not substitute for a real staging-bucket/CDN check before rollout
 
 GCS command contracts: [storage cp](https://cloud.google.com/sdk/gcloud/reference/storage/cp)
 and [objects describe](https://cloud.google.com/sdk/gcloud/reference/storage/objects/describe).
+
+## Controlled application releases
+
+Production uses `reconcile --publish-channels --stable-follow-latest=true
+--validated-commit=<SHA>`. The workflow waits for the exact commit’s unit and
+production-bundle browser checks before publishing. A source advance causes a
+visible retry on the next reconciliation instead of publishing untested code.
+Both `latest` and `stable` initially follow the newest successfully published
+source branch commit. `STABLE_FOLLOW_LATEST=false` in repository Actions variables
+retains the current stable pointer on later runs. A channel change downloads a
+candidate; it never changes the version already installed in a browser.
+
+The optional `--publish-channels` phase verifies the completed immutable archive,
+then publishes `release.json`, channel pointers, `releases/catalog.json`, and the
+root launcher/service worker. Archives without lifecycle metadata are rejected.
+Every immutable object uses create-only publication. Every mutable object uses
+its observed GCS generation; a conflicting publisher fails visibly. A source
+head check before each channel/root write prevents an older commit from replacing
+a newer release. The workflow serializes production jobs. Keep external publishers
+serialized too; changing the build revision is an explicit desired-state change.
+
+`RELEASE_ID` is the full Git SHA plus the full SHA-256 build-input digest. The
+build revision, toolchain versions, builder binary, platform and public Vite
+configuration participate. CI run numbers and publication time do not. The same
+ID is passed to Vite, producing absolute `/version/<RELEASE_ID>/` asset URLs.
+`buildId` and `buildInputsDigest` are aliases for this digest. Publication time is
+recorded once in the immutable runtime manifest and retained on reconciliation.
+
+Loader protocol 1 accepts only RPC 8 owners with durable preparation, epoch
+fencing and lifetime-lock capabilities, using the reviewed schema-9 storage
+contract. This release deliberately performs no cross-schema upgrade or downgrade.
+Future schema changes require a new compatibility contract, resumable migration,
+and real old/new artifact tests before eligibility changes. `testedRollbackTargets`
+records individually qualified historical releases; an empty list makes no
+historical qualification claim. Previous locally healthy releases with the same
+storage contract remain usable through the coordinated selector.
+
+The root loader has its own service-worker lifecycle and cache. It never calls
+`skipWaiting`: existing pre-contract tabs must close before initial installation.
+A legacy-worker retirement handshake blocks versioned owners until the old owner
+is gone. This one-time transition may require saving recovery copies and closing
+all Runme tabs. Application upgrades afterwards use the durable coordinator.
+
+### Release acceptance gate
+
+Run `pnpm -C app run cuj:releases` after building workspace packages and installing
+Playwright Chromium. The driver creates independent immutable A/B bundles and a
+third bundle with a deliberately broken application entry, serves them with the
+Go fixture, and verifies coordination, offline restart, current-data rollback and
+independent recovery. Screenshots, recordings and machine-readable results go to
+`app/test/browser/test-output/controlled-releases/`. CI runs this gate on every PR
+and main update. Do not promote a release when this gate fails.

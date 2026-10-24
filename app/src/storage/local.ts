@@ -1,3 +1,4 @@
+import { registerReleaseDatabase } from '../releases/databases'
 import { create, fromJsonString, toJsonString } from '@bufbuild/protobuf'
 import Dexie, { Table } from 'dexie'
 import md5 from 'md5'
@@ -649,8 +650,11 @@ export class LocalNotebooks extends Dexie {
   /** Quiesce background work without replacing the closed queue during worker shutdown. */
   async drainForStorageRestart(): Promise<void> {
     this.workQueue?.close()
+    await this.payloadMaintenance
     await this.workQueue?.drain()
+    await Promise.allSettled([...this.inFlightSyncs.values()])
   }
+  private payloadMaintenance: Promise<void> = Promise.resolve()
 
   /** Read bounded owner-side diagnostics without scanning files or touching OPFS. */
   async getDriveQueueMetrics() {
@@ -751,6 +755,7 @@ export class LocalNotebooks extends Dexie {
     } = {}
   ) {
     super(databaseName)
+    registerReleaseDatabase(this)
     this.runtime = runtime
 
     // Define the database schema. Version(1) gives us a clear starting point
@@ -897,7 +902,7 @@ export class LocalNotebooks extends Dexie {
           () => {
             // Large legacy databases must not block the hello handshake. Immutable
             // writes and per-record CAS let migration coexist with normal saves.
-            void this.migrateFilePayloads()
+            this.payloadMaintenance = this.migrateFilePayloads()
               .then(async () => {
                 // Migration visits every durable reference. Only a single owner
                 // may collect, and only once per worker lifetime: references used
@@ -905,14 +910,14 @@ export class LocalNotebooks extends Dexie {
                 if (runtime.owner)
                   await this.payloadStorage.collectUnreferenced?.()
               })
-              .catch((error) =>
+              .catch((error) => {
                 appLogger.error(
                   'Notebook payload migration interrupted; reload to retry',
                   {
                     attrs: { scope: 'storage.payloads', error: String(error) },
                   }
                 )
-              )
+              })
           }
         )
   }

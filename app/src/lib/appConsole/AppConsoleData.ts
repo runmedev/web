@@ -46,6 +46,8 @@ export class AppConsoleData {
   private persistTimer: ReturnType<typeof setTimeout> | null = null;
   private hydratePromise: Promise<void> | null = null;
   private persistenceEnabled = true;
+  private persistChain: Promise<void> = Promise.resolve();
+  private releaseFrozen = false;
   private snapshotCache: AppConsoleSnapshot = {
     sessionId: null,
     hydrated: false,
@@ -87,6 +89,7 @@ export class AppConsoleData {
   }
 
   setDraftSource(source: string): void {
+    if (this.releaseFrozen) throw new Error('App Console is frozen for an upgrade');
     this.updateCells((cells) => {
       const draftIndex = this.findDraftIndex(cells);
       if (draftIndex < 0) {
@@ -117,6 +120,7 @@ export class AppConsoleData {
   }
 
   startDraftExecution(): AppConsoleExecutionHandle | null {
+    if (this.releaseFrozen) throw new Error('App Console is frozen for an upgrade');
     const draft = this.getCurrentDraftCell();
     if (!draft || draft.source.trim() === "") {
       return null;
@@ -149,6 +153,7 @@ export class AppConsoleData {
   }
 
   startExternalExecution(source: string): AppConsoleExecutionHandle | null {
+    if (this.releaseFrozen) throw new Error('App Console is frozen for an upgrade');
     if (source.trim() === "") {
       return null;
     }
@@ -419,12 +424,30 @@ export class AppConsoleData {
     }, this.persistDelayMs);
   }
 
-  private async persist(): Promise<void> {
+  /** Flush the latest draft after earlier writes; failure is an upgrade blocker. */
+  async flushForRelease(): Promise<void> {
+    if (this.hydratePromise) await this.hydratePromise;
+    if (!this.snapshotCache.hydrated) return;
+    if (!this.persistenceEnabled) throw new Error('App Console drafts cannot be saved');
+    if (this.snapshotCache.cells.some(cell => cell.status === 'running')) throw new Error('App Console is running');
+    if (this.persistTimer) clearTimeout(this.persistTimer);
+    this.persistTimer = null;
+    this.releaseFrozen = true;
+    try { await this.persist(); }
+    catch (error) { this.releaseFrozen = false; throw error; }
+  }
+
+  /** A failed preparation leaves this tab editable; no reload was authorized. */
+  resumeAfterFailedPreparation(): void { this.releaseFrozen = false; }
+
+  private persist(): Promise<void> {
     const sessionId = this.snapshotCache.sessionId;
     if (!this.persistenceEnabled || !sessionId) {
-      return;
+      return Promise.resolve();
     }
-    await this.persistRows(this.snapshotCache.cells, sessionId, new Date().toISOString());
+    const cells = this.snapshotCache.cells;
+    this.persistChain = this.persistChain.catch(() => {}).then(() => this.persistRows(cells, sessionId, new Date().toISOString()));
+    return this.persistChain;
   }
 
   private async persistRows(

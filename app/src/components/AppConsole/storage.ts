@@ -1,4 +1,6 @@
+import { registerReleaseDatabase } from '../../releases/databases'
 import Dexie, { type Table } from "dexie";
+import { getClaimedSessionId } from '../../lib/tabIdentity';
 
 import type {
   PersistedConsoleCellRow,
@@ -23,6 +25,7 @@ class AppConsoleDatabase extends Dexie implements AppConsoleStorageLike {
 
   constructor(databaseName = "runme-app-console") {
     super(databaseName);
+    registerReleaseDatabase(this)
 
     this.version(1).stores({
       sessions: "&id, updatedAt, createdAt",
@@ -35,7 +38,7 @@ class AppConsoleDatabase extends Dexie implements AppConsoleStorageLike {
 
   async createSession(now = new Date().toISOString()): Promise<PersistedConsoleSessionRow> {
     const session: PersistedConsoleSessionRow = {
-      id: globalThis.crypto?.randomUUID?.() ?? `app-console-session-${Date.now()}`,
+      id: `tab:${await getClaimedSessionId()}`,
       createdAt: now,
       updatedAt: now,
     };
@@ -44,7 +47,21 @@ class AppConsoleDatabase extends Dexie implements AppConsoleStorageLike {
   }
 
   async loadLatestSession(): Promise<LoadedConsoleSession | null> {
-    const session = await this.sessions.orderBy("updatedAt").last();
+    const id = `tab:${await getClaimedSessionId()}`;
+    let session = await this.sessions.get(id);
+    if (!session) {
+      // Copy a legacy global console once per tab. Retain its original rows;
+      // two tabs must never overwrite each other's unsent console drafts.
+      const legacy = await this.sessions.orderBy('updatedAt').reverse().filter(row => !row.id.startsWith('tab:')).first();
+      if (!legacy) return null;
+      const original = await this.cells.where('sessionId').equals(legacy.id).sortBy('index');
+      session = { ...legacy, id };
+      const cells = original.map(cell => ({ ...cell, id: crypto.randomUUID(), sessionId: id }));
+      await this.transaction('rw', this.sessions, this.cells, async () => {
+        await this.sessions.put(session!);
+        await this.cells.bulkPut(cells);
+      });
+    }
     if (!session) {
       return null;
     }

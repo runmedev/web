@@ -25,10 +25,11 @@ on:
 permissions:
   id-token: write
   contents: read
+  checks: read
 
 concurrency:
-  group: releaser-${{ github.workflow }}-${{ github.ref }}
-  cancel-in-progress: true
+  group: releaser-production
+  cancel-in-progress: false
 
 jobs:
   releaser:
@@ -90,10 +91,19 @@ jobs:
           cd releaser
           go build -trimpath -o ../releaser-bin .
 
+      - name: Wait for release acceptance checks
+        if: github.event_name != 'pull_request' && github.event.inputs.dry_run != 'true'
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: node releaser/wait-for-acceptance.mjs
+
       - name: Run releaser
         shell: bash
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          REQUESTED_WEB_BRANCH: ${{ github.event.inputs.web_branch }}
+          REQUESTED_DRY_RUN: ${{ github.event.inputs.dry_run }}
+          STABLE_FOLLOW_LATEST: ${{ vars.STABLE_FOLLOW_LATEST || 'true' }}
         run: |
           set -euo pipefail
 
@@ -102,10 +112,10 @@ jobs:
           DRY_RUN="false"
 
           if [ "${{ github.event_name }}" = "workflow_dispatch" ]; then
-            if [ -n "${{ github.event.inputs.web_branch }}" ]; then
-              WEB_BRANCH="${{ github.event.inputs.web_branch }}"
+            if [ -n "${REQUESTED_WEB_BRANCH}" ]; then
+              WEB_BRANCH="${REQUESTED_WEB_BRANCH}"
             fi
-            if [ "${{ github.event.inputs.dry_run }}" = "true" ]; then
+            if [ "${REQUESTED_DRY_RUN}" = "true" ]; then
               DRY_RUN="true"
             fi
           fi
@@ -115,7 +125,10 @@ jobs:
             BUCKET="${RUNNER_TEMP}/releaser-pr-bucket"
           fi
 
-          ./releaser-bin \
+          ./releaser-bin reconcile \
+            --publish-channels \
+            --validated-commit="${GITHUB_SHA}" \
+            --stable-follow-latest="${STABLE_FOLLOW_LATEST}" \
             --web="${WEB_BRANCH}" \
             --web-repo="${RELEASER_WEB_REPO}" \
             --bucket="${BUCKET}" \

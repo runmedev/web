@@ -531,6 +531,8 @@ export function getDefaultAppConfigUrl(): string {
   if (typeof window === 'undefined') {
     return APP_CONFIG_PATH_DEFAULT
   }
+  if (import.meta.env.VITE_RUNME_RELEASE_ID)
+    return new URL(`${import.meta.env.BASE_URL}${APP_CONFIG_PATH_DEFAULT}`, window.location.origin).toString()
   return resolveAppUrl(APP_CONFIG_PATH_DEFAULT).toString()
 }
 
