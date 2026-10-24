@@ -101,7 +101,7 @@ jobs:
         if: github.event_name != 'pull_request' && github.event.inputs.dry_run != 'true'
         run: |
           pnpm install --frozen-lockfile
-          pnpm -C app exec playwright install --with-deps chromium
+          pnpm -C app exec playwright-core install --with-deps chromium
 
       - name: Run releaser
         shell: bash
