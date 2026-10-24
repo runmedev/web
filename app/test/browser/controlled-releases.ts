@@ -228,6 +228,7 @@ async function main() {
       () => (window as any).runmeRelease.tabId
     )
     await one
+      .locator('#runme-release-panel')
       .getByRole('button', { name: 'Cancel upgrade', exact: true })
       .click()
     await one.waitForFunction(
