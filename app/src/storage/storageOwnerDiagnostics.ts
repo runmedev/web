@@ -1,5 +1,6 @@
 /** Diagnostics bypass store initialization and never include notebook contents or credentials. */
 export type StorageOwnerDiagnostics = {
+  release?: { releaseId: string; epoch: number; capabilities: string[] }
   version: number
   instanceId: string
   uptimeMs: number

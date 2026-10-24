@@ -1,6 +1,8 @@
 import { getWorkloadIdentityConfig } from '../auth/workloadIdentity'
 import { getGoogleDriveBaseUrl } from '../lib/googleDriveRuntime'
 import { appLogger } from '../lib/logging/runtime'
+import { RELEASE_CAPABILITIES, releasePrefix } from '../releases/control'
+import { registerUpgradeBlocker } from '../releases/runtime'
 import { DriveCreateNotCommittedError, type DriveNotebookStore } from './drive'
 import { FilesystemEntryAlreadyExistsError } from './fs'
 import { readLegacyCreationJournal } from './legacyCreationJournal'
@@ -23,7 +25,14 @@ type Pending = {
 /** Tab-side RPC transport. No automatic mutation retries after an uncertain result. */
 export class StorageOwnerClient {
   private pending = new Map<string, Pending>()
+  private uncertain = new Set<string>()
+  private unresolvedCommit = false
   private closed = false
+  private unregisterReleaseBlocker = registerUpgradeBlocker(() =>
+    this.uncertain.size || this.unresolvedCommit
+      ? 'A storage operation has an unconfirmed outcome; resolve it before upgrading'
+      : undefined
+  )
   private diagnostic?: {
     id: string
     timer: ReturnType<typeof setTimeout>
@@ -95,6 +104,15 @@ export class StorageOwnerClient {
   }
 
   request(method: string, args: unknown[] = []): Promise<unknown> {
+    if (
+      (this.uncertain.size || this.unresolvedCommit) &&
+      !['disconnect', 'heartbeat', 'hello'].includes(method)
+    )
+      return Promise.reject(
+        new Error(
+          'A previous storage operation is still unconfirmed. Wait for its original acknowledgement or use explicit recovery; it will not be replayed.'
+        )
+      )
     if (this.closed)
       return Promise.reject(
         new Error(
@@ -106,7 +124,18 @@ export class StorageOwnerClient {
     return new Promise((resolve, reject) => {
       const timer = setTimeout(
         () => {
-          this.pending.delete(id)
+          // Keep the original correlation until its late acknowledgement. An
+          // upgrade retry must not turn a timed-out mutation into a new mutation.
+          if (
+            ![
+              'hello',
+              'heartbeat',
+              'disconnect',
+              'getDriveQueueMetrics',
+            ].includes(method)
+          )
+            this.uncertain.add(id)
+          else this.pending.delete(id)
           const error = new Error(
             method === 'getDriveQueueMetrics'
               ? 'Storage worker did not respond to queue diagnostics.'
@@ -153,6 +182,14 @@ export class StorageOwnerClient {
           method,
           args,
           credentialBoundary: this.getCredentialBoundary(),
+          epoch:
+            typeof window !== 'undefined'
+              ? window.runmeRelease?.active.epoch
+              : undefined,
+          tabId:
+            typeof window !== 'undefined'
+              ? window.runmeRelease?.tabId
+              : undefined,
         })
       } catch (error) {
         clearTimeout(timer)
@@ -210,6 +247,7 @@ export class StorageOwnerClient {
     const pending = this.pending.get(message.id)
     if (!pending) return
     this.pending.delete(message.id)
+    this.uncertain.delete(message.id)
     clearTimeout(pending.timer)
     if (message.error) {
       const error = Object.assign(
@@ -218,6 +256,8 @@ export class StorageOwnerClient {
       )
       this.onFailure?.(error)
       // Preserve error types that drive editor recovery and creation UI choices.
+      if (error.name === 'OperationLogMutationCommitUncertainError')
+        this.unresolvedCommit = true
       if (error.name === 'OperationLogMutationCommitUncertainError')
         Object.setPrototypeOf(
           error,
@@ -239,6 +279,12 @@ export class StorageOwnerClient {
     this.recovery?.disconnected()
     this.onFailure?.(error)
     this.closed = true
+    // Losing the transport does not settle an outstanding effect. Keep the
+    // upgrade blocker until document reload/recovery; never turn disconnect
+    // into an acknowledgement of an uncertain save or create.
+    if (this.pending.size || this.uncertain.size || this.unresolvedCommit)
+      this.unresolvedCommit = true
+    else this.unregisterReleaseBlocker()
     if (this.diagnostic) {
       clearTimeout(this.diagnostic.timer)
       this.diagnostic.reject(error)
@@ -261,10 +307,19 @@ export class StorageOwnerClient {
 export function createSharedNotebookStore(
   drive: DriveNotebookStore
 ): LocalNotebooks {
-  const worker = new SharedWorker(
-    new URL('./storageOwner.worker.ts', import.meta.url),
-    { type: 'module', name: 'runme-storage-owner' }
-  )
+  const release = window.runmeRelease?.active
+  const worker = release
+    ? new SharedWorker(
+        `${releasePrefix(release.manifest.releaseId)}${release.manifest.owner.entry}`,
+        {
+          type: 'module',
+          name: `runme-storage-owner-${release.manifest.releaseId}-${release.epoch}`,
+        }
+      )
+    : new SharedWorker(new URL('./storageOwner.worker.ts', import.meta.url), {
+        type: 'module',
+        name: 'runme-storage-owner',
+      })
   const client = new StorageOwnerClient(
     worker.port,
     (options) => drive.getAccessToken(options),
@@ -295,7 +350,7 @@ export function createSharedNotebookStore(
     } catch (error) {
       creationMigrationError = String(error)
     }
-    await client.request('hello', [
+    const hello = await client.request('hello', [
       {
         driveBaseUrl: getGoogleDriveBaseUrl(),
         credentialBoundary: credentialBoundary(),
@@ -306,6 +361,24 @@ export function createSharedNotebookStore(
         creationMigrationError,
       },
     ])
+    const handshake = hello as {
+      version: number
+      instanceId?: string
+      release?: { releaseId: string; epoch: number; capabilities: string[] }
+    }
+    if (
+      release &&
+      (handshake.version !== STORAGE_OWNER_VERSION ||
+        !handshake.instanceId ||
+        handshake.release?.releaseId !== release.manifest.releaseId ||
+        handshake.release.epoch !== release.epoch ||
+        RELEASE_CAPABILITIES.some(
+          (c) => !handshake.release?.capabilities?.includes(c)
+        ))
+    )
+      throw new Error(
+        'Storage owner identity or lifecycle capabilities do not match this tab'
+      )
     for (const record of attempts) {
       // Cleanup is optional after durable import. Failure cannot disconnect an
       // otherwise healthy editor or discard its notebook persistence channel.
@@ -369,6 +442,7 @@ export function createSharedNotebookStore(
   const methods = new Set<string>(STORAGE_METHODS)
   return new Proxy(local, {
     get(target, key) {
+      if (key === 'ready') return ready
       if (key === 'setFilesystemStore' || key === 'stopSyncQueue')
         return () => {}
       if (key === 'operationLogSupportsConcurrentWriters') return () => true

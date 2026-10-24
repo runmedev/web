@@ -1,3 +1,4 @@
+import { registerReleaseDatabase } from '../../releases/databases'
 import Dexie, { type Table } from 'dexie'
 
 import type {
@@ -24,6 +25,7 @@ class CodeOperationDatabase extends Dexie implements CodeOperationStorageLike {
 
   constructor(databaseName = 'runme-code-operations') {
     super(databaseName)
+    registerReleaseDatabase(this)
 
     this.version(1).stores({
       operations:

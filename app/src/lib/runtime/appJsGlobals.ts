@@ -1754,6 +1754,15 @@ export function createAppJsGlobals({
       oidc: oidcConfigManager,
     },
     app: {
+      releases: {
+        prune: () => { if (!window.runmeVersions) throw new Error('Release launcher is unavailable'); return window.runmeVersions.prune() },
+        get: () => { if (!window.runmeVersions) throw new Error('Release launcher is unavailable'); return window.runmeVersions.get() },
+        check: (selection?: import('../../releases/control').Selection) => { if (!window.runmeVersions) throw new Error('Release launcher is unavailable'); return window.runmeVersions.check(selection) },
+        upgrade: () => { if (!window.runmeVersions) throw new Error('Release launcher is unavailable'); return window.runmeVersions.upgrade() },
+        cancel: () => { if (!window.runmeVersions) throw new Error('Release launcher is unavailable'); return window.runmeVersions.cancel() },
+        retry: () => { if (!window.runmeVersions) throw new Error('Release launcher is unavailable'); return window.runmeVersions.retry() },
+        help: () => 'app.releases.get(), check({kind:"channel",name:"stable"|"latest"}), check({kind:"pinned",releaseId}), upgrade(), retry(), cancel(), prune(). Downloading never activates. Upgrade preserves edits and reloads all tabs.',
+      },
       getVersion: getRunmeVersionInfo,
       getSessionId: () => getClaimedSessionId(),
       getSessionID: () => getClaimedSessionId(),

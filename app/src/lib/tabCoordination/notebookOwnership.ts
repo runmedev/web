@@ -1,3 +1,4 @@
+import { registerReleaseDatabase } from '../../releases/databases'
 import Dexie, { type Table } from 'dexie'
 
 import { getClaimedSessionId, getTabId } from '../tabIdentity'
@@ -87,6 +88,7 @@ class NotebookOwnershipDatabase extends Dexie {
 
   constructor(databaseName = 'runme-tab-coordination') {
     super(databaseName)
+    registerReleaseDatabase(this)
     this.version(1).stores({
       ownership: '&notebookUri, ownerTabId, epoch',
     })

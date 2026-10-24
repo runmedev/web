@@ -26,6 +26,8 @@ function stripTrailingSlash(pathname: string): string {
 
 function getBasePathFromModuleUrl(moduleUrl: string): string {
   const url = new URL(moduleUrl);
+  // Immutable asset prefixes must never become routes or OAuth callbacks.
+  if (url.pathname.startsWith('/version/')) return ROOT_PATH;
   if (!["http:", "https:"].includes(url.protocol)) {
     return ROOT_PATH;
   }

@@ -1,3 +1,4 @@
+import { control } from '../releases/control'
 import { setGoogleDriveBaseUrl } from '../lib/googleDriveRuntime'
 import type { parser_pb } from '../runme/client'
 import {
@@ -66,7 +67,9 @@ export class StorageOwnerHost {
 
   constructor(
     private readonly store: LocalNotebooks,
-    private readonly shutdown?: () => void
+    private readonly shutdown?: () => void,
+    private readonly authorize?: (request: OwnerRequest) => Promise<void>,
+    private readonly release?: StorageOwnerDiagnostics['release']
   ) {
     void Promise.resolve(store.ready).then(
       () => {
@@ -77,6 +80,18 @@ export class StorageOwnerHost {
       }
     )
   }
+
+  /** Close admission before draining; timeouts never prove a write stopped. */
+  async drainForRelease(): Promise<void> {
+    this.releaseDraining = true
+    await this.store.ready
+    await Promise.allSettled([
+      ...this.inFlight,
+      ...(this.scanning ? [this.scanning] : []),
+    ])
+    await this.store.drainForStorageRestart()
+  }
+  private releaseDraining = false
 
   /** A bounded memory-only snapshot still answers while IndexedDB or an RPC is stalled. */
   private diagnostics(): StorageOwnerDiagnostics {
@@ -93,6 +108,7 @@ export class StorageOwnerHost {
     }
     return {
       version: STORAGE_OWNER_VERSION,
+      release: this.release,
       instanceId: this.instanceId,
       uptimeMs: Date.now() - this.startedAt,
       connectedTabs: this.ports.size,
@@ -129,7 +145,7 @@ export class StorageOwnerHost {
         return
       }
       if (event.data?.type === 'storage-recovery') {
-        this.recover(port, event.data)
+        void this.recover(port, event.data).catch(error => port.postMessage(recoveryMessage('blocked', event.data.id, String(error))))
         return
       }
       const operation = this.receive(port, event.data)
@@ -148,9 +164,14 @@ export class StorageOwnerHost {
   }
 
   /** Unversioned control plane: every attached tab must preserve its editor before shutdown. */
-  private recover(port: MessagePort, message: RecoveryMessage): void {
+  private async recover(port: MessagePort, message: RecoveryMessage): Promise<void> {
+    if (this.releaseDraining) return
     if (!this.ports.has(port) || message.protocol !== 1) return
     if (message.action === 'restart') {
+      if (this.release) await control(s => {
+        if (s.transition || s.active?.epoch !== this.release!.epoch) throw new Error('A release transition is pending; use Versions recovery')
+        s.emergencyRestart = {epoch: this.release!.epoch, id: this.recovery?.id ?? message.id}
+      })
       if (this.recovery && !this.recovery.draining) {
         port.postMessage(recoveryMessage('prepare', this.recovery.id))
         return
@@ -203,7 +224,10 @@ export class StorageOwnerHost {
     clearTimeout(round.timer)
     // Once draining starts the queue must stay closed, but a later retry can
     // gather new editor acknowledgements after a late tab fixes its backup error.
-    if (!round.draining) this.recovery = undefined
+    if (!round.draining) {
+      this.recovery = undefined
+      if (this.release) void control(s => { if (s.emergencyRestart?.epoch === this.release!.epoch && s.emergencyRestart.id === round.id) delete s.emergencyRestart }).catch(() => {})
+    }
     else round.ready.clear()
     for (const port of this.ports.keys())
       port.postMessage(recoveryMessage('blocked', round.id, error))
@@ -279,7 +303,8 @@ export class StorageOwnerHost {
 
   /** Recover keys from durable state; concurrent tab wake-ups share one scan. */
   rescan(retryErrors = false): Promise<unknown> {
-    if (this.recovery?.draining) return Promise.resolve()
+    if (this.releaseDraining || this.recovery?.draining)
+      return Promise.resolve()
     if (!this.scanning) {
       this.scanning = this.store
         .reconcileDriveBackedFiles({ retryErrors })
@@ -391,6 +416,9 @@ export class StorageOwnerHost {
     }
     this.activeRequests.add(active)
     try {
+      if (this.releaseDraining)
+        throw new Error('Release handoff is draining storage')
+      await this.authorize?.(request)
       if (
         request.method !== 'disconnect' &&
         request.method !== 'heartbeat' &&
@@ -422,6 +450,9 @@ export class StorageOwnerHost {
           'Drive identity differs from the storage owner; use an isolated browser profile'
         )
       await this.store.ready
+      if (this.releaseDraining)
+        throw new Error('Release handoff is draining storage')
+      await this.authorize?.(request)
       active.stage = 'executing'
       let value: unknown
       switch (request.method) {
@@ -479,7 +510,7 @@ export class StorageOwnerHost {
             )?.creationMigrationError
             this.configuredBaseUrl = baseUrl
             setGoogleDriveBaseUrl(baseUrl)
-            value = { version: STORAGE_OWNER_VERSION }
+            value = { version: STORAGE_OWNER_VERSION, instanceId: this.instanceId, release: this.release }
           }
           break
         case 'heartbeat':

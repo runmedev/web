@@ -8,6 +8,8 @@ from `docs-dev/cujs/`.
 
 ## Current CUJs
 
+- [controlled-app-releases.md](../CUJs/controlled-app-releases.md) — immutable production bundles, multi-tab handoff, offline rollback and independent recovery; runs in a separate isolated release job.
+
 - [agent-monitor.md](agent-monitor.md) — JavaScript widget rendering, live history, Edit/Render, and observation lifecycle using the Go Agents API fixture.
 
 - `authentication-settings-persistence.md` — saved OAuth scopes survive refresh under production config precedence.

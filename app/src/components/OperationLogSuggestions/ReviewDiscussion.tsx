@@ -8,6 +8,7 @@ import {
 } from '../../lib/operationLog/diffCommentAnchor'
 import { parseCommentAnchor } from '../../lib/notebookComments'
 import type { DriveComment, DriveUser } from '../../storage/drive'
+import { registerUpgradeBlocker } from '../../releases/runtime'
 
 /** Share click/keyboard submission and retain drafts on failure. The ref closes
  * the gap before the parent's busy state renders, preventing duplicate sends.
@@ -18,6 +19,9 @@ function useCommentDraft(
 ) {
   const [draft, setDraft] = useState('')
   const sending = useRef(false)
+  const draftRef = useRef(draft)
+  draftRef.current = draft
+  useEffect(() => registerUpgradeBlocker(() => draftRef.current.trim() || sending.current ? 'Finish or save the unsent review comment before upgrading' : undefined), [])
   const send = async () => {
     if (disabled || sending.current || !draft.trim()) return
     sending.current = true

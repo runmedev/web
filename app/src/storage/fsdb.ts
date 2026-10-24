@@ -1,3 +1,4 @@
+import { registerReleaseDatabase } from '../releases/databases'
 import Dexie, { Table } from "dexie";
 
 /**
@@ -54,6 +55,7 @@ export class FsDatabase extends Dexie {
 
   constructor(databaseName: string = "runme-fs-workspaces") {
     super(databaseName);
+    registerReleaseDatabase(this)
 
     this.version(1).stores({
       workspaces: "&id, name, lastOpened",

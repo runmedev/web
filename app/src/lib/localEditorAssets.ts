@@ -20,4 +20,4 @@ self.MonacoEnvironment = {
 loader.config({ monaco })
 // The package does not expose this window extension in its public typings.
 const excalidrawWindow: Window & { EXCALIDRAW_ASSET_PATH?: string } = window
-excalidrawWindow.EXCALIDRAW_ASSET_PATH = '/assets/excalidraw/0.18.1/'
+excalidrawWindow.EXCALIDRAW_ASSET_PATH = `${import.meta.env.BASE_URL}assets/excalidraw/0.18.1/`

@@ -1,3 +1,4 @@
+import { assertReleaseWritable, registerUpgradeBlocker } from '../../releases/runtime'
 import { appLogger } from '../logging/runtime'
 import { getClaimedSessionId } from '../tabIdentity'
 import type {
@@ -212,7 +213,9 @@ export class CodeOperationRegistry {
   }
 
   async start(input: StartOptions): Promise<ExecuteCodeOperation> {
+    assertReleaseWritable()
     const sessionId = await this.ensureInitialized()
+    assertReleaseWritable()
     const idempotencyKey = normalizeIdempotencyKey(input.idempotencyKey)
     if (idempotencyKey) {
       const reservationKey = `${sessionId}\u0000${idempotencyKey}`
@@ -432,7 +435,9 @@ export class CodeOperationRegistry {
     live: LiveOperation
   ): Promise<void> {
     const operationId = record.id
+    const releaseBlocker = registerUpgradeBlocker(() => 'Wait for running code operations before upgrading', true)
     try {
+      assertReleaseWritable()
       await this.updateRecord(operationId, {
         status: 'running',
         startedAt: this.now().toISOString(),
@@ -523,6 +528,7 @@ export class CodeOperationRegistry {
       }
       live.resolveCompletion()
       this.notify(operationId)
+      releaseBlocker()
       this.live.delete(operationId)
     }
   }

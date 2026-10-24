@@ -1,5 +1,5 @@
 // @vitest-environment jsdom
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 
 import type {
   PersistedConsoleCellRow,
@@ -101,3 +101,20 @@ describe("AppConsoleData", () => {
     expect(getRows()).toHaveLength(2);
   });
 });
+
+
+it('waits for draft persistence and retains the draft when saving fails', async () => {
+  const {storage, getRows} = createStorageStub()
+  const data = new AppConsoleData({storage, persistDelayMs: 60000})
+  try {
+    await data.hydrate(); data.setDraftSource('unsent private draft')
+    const save = vi.spyOn(storage, 'saveCells').mockRejectedValueOnce(new Error('quota'))
+    await expect(data.flushForRelease()).rejects.toThrow('quota')
+    data.setDraftSource('recovered draft')
+    await data.flushForRelease()
+    expect(save).toHaveBeenCalledTimes(2)
+    expect(getRows().some(row => row.source === 'recovered draft')).toBe(true)
+    expect(() => data.startExternalExecution('new operation')).toThrow('frozen')
+    data.resumeAfterFailedPreparation(); data.setDraftSource('still editable')
+  } finally {data.dispose()}
+})

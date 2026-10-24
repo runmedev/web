@@ -30,6 +30,7 @@ export function registerPwaServiceWorker(
   options: RegisterPwaServiceWorkerOptions = {}
 ): void {
   const enabled = options.enabled ?? import.meta.env.PROD
+  if (typeof window !== 'undefined' && window.runmeRelease) return
   const serviceWorker =
     options.serviceWorker ??
     (typeof navigator !== 'undefined' ? navigator.serviceWorker : undefined)

@@ -10,7 +10,7 @@ export const EXCALIDRAW_ASSET_BASE = '/assets/excalidraw/0.18.1/'
 function localizeFontFallback(code: string): string {
   return code.replace(
     /`https:\/\/esm\.sh\/.*?\/dist\/prod\/`/g,
-    `new URL(${JSON.stringify(EXCALIDRAW_ASSET_BASE)}, window.location.origin).href`
+    `new URL(${JSON.stringify((process.env.VITE_RUNME_RELEASE_ID ? `/version/${process.env.VITE_RUNME_RELEASE_ID}` : '') + EXCALIDRAW_ASSET_BASE)}, window.location.origin).href`
   )
 }
 

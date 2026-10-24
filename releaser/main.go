@@ -84,6 +84,8 @@ func newRootCmd() *cobra.Command {
 	cmd.Flags().BoolVar(&cfg.dryRun, "dry-run", false, "build and evaluate publish state without uploading")
 	cmd.Flags().StringVar(&cfg.tmpBase, "tmpdir", os.TempDir(), "base temporary directory")
 	_ = cmd.MarkFlagRequired("web")
+	cmd.AddCommand(newArchiveCmd())
+	cmd.AddCommand(newReconcileCmd())
 
 	return cmd
 }

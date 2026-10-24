@@ -19,6 +19,7 @@ import {
 import { appLogger } from "../lib/logging/runtime";
 import { appState } from "../lib/runtime/AppState";
 import { isNotebookDocumentUri } from "../lib/workspaceDocuments/workspaceDocumentTypes";
+import { prepareRelease } from '../releases/prepare';
 import { useCurrentDoc } from "./CurrentDocContext";
 import { useNotebookStore } from "./NotebookStoreContext";
 
@@ -58,6 +59,30 @@ export function NotebookProvider({ children }: { children: ReactNode }) {
 
   useEffect(() => {
     controller.configureStores({ localNotebooks: store });
+  }, [controller, store]);
+
+  // Publish preparation only after the storage handshake and model restoration.
+  // Failed notebook loads remain visible and do not mark the build healthy.
+  useEffect(() => {
+    if (!store || !window.runmeRelease) return;
+    const runtime = window.runmeRelease;
+    let disposed = false;
+    const check = () => {
+      if (disposed) return;
+      const entries = controller.getOpenNotebooks();
+      if (entries.some(entry => entry.state === 'loading' || entry.state === 'resolving')) return;
+      runtime.prepare = prepareRelease;
+      if (entries.every(entry => entry.state === 'loaded' || entry.state === 'blocked')) runtime.ready?.();
+    };
+    let unsubscribe: (() => void) | undefined;
+    void store.ready.then(() => {
+      if (disposed) return;
+      unsubscribe = controller.subscribe(check);
+      check();
+    }).catch(error => appLogger.warn('Release startup did not become healthy', {
+      attrs: { scope: 'release.startup', error: String(error) },
+    }));
+    return () => { disposed = true; unsubscribe?.(); delete runtime.prepare; };
   }, [controller, store]);
 
   const getNotebookData = useCallback(

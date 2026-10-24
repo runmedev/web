@@ -446,3 +446,117 @@ it('bounds diagnostics to the ten oldest requests while reporting the full backl
   await Promise.all(writes)
   expect((await client.diagnose()).oldestRequests).toEqual([])
 })
+
+it('rechecks release admission after initialization before allowing effects', async () => {
+  const { store } = setup()
+  let initialize!: () => void
+  Object.assign(store, {
+    ready: new Promise<void>((resolve) => {
+      initialize = resolve
+    }),
+  })
+  let allowed = true
+  const authorize = vi.fn(async () => {
+    if (!allowed) throw new Error('stale epoch')
+  })
+  const host = new StorageOwnerHost(
+    store as unknown as LocalNotebooks,
+    undefined,
+    authorize
+  )
+  const client = connect(host)
+  const result = expect(client.request('save', ['a', {}])).rejects.toThrow(
+    'stale epoch'
+  )
+  await vi.waitFor(() => expect(authorize).toHaveBeenCalledOnce())
+  allowed = false
+  initialize()
+  await result
+  expect(store.save).not.toHaveBeenCalled()
+})
+
+it('keeps handoff draining until an admitted write and maintenance complete', async () => {
+  const { store } = setup()
+  let finishWrite!: () => void, finishMaintenance!: () => void
+  store.save.mockImplementation(
+    () =>
+      new Promise((resolve) => {
+        finishWrite = resolve
+      })
+  )
+  const drain = vi.fn(
+    () =>
+      new Promise<void>((resolve) => {
+        finishMaintenance = resolve
+      })
+  )
+  Object.assign(store, { drainForStorageRestart: drain })
+  const host = new StorageOwnerHost(store as unknown as LocalNotebooks)
+  const client = connect(host)
+  const write = client.request('save', ['a', {}])
+  await vi.waitFor(() => expect(store.save).toHaveBeenCalledOnce())
+  let drained = false
+  const handoff = host.drainForRelease().then(() => {
+    drained = true
+  })
+  await expect(client.request('save', ['b', {}])).rejects.toThrow('draining')
+  expect(drained).toBe(false)
+  finishWrite()
+  await write
+  await vi.waitFor(() => expect(drain).toHaveBeenCalledOnce())
+  expect(drained).toBe(false)
+  finishMaintenance()
+  await handoff
+  expect(drained).toBe(true)
+})
+
+it('blocks upgrade and mutation replay after a timeout until the original acknowledgement', async () => {
+  vi.useFakeTimers()
+  const channel = new MessageChannel()
+  ports.push(channel.port1 as unknown as MessagePort)
+  const client = new StorageOwnerClient(
+    channel.port2 as unknown as MessagePort,
+    async () => 'token'
+  )
+  clients.push(client)
+  const sent: any[] = []
+  channel.port1.on('message', (message) => sent.push(message))
+  const outcome = expect(
+    client.request('save', ['original', {}])
+  ).rejects.toThrow('uncertain')
+  await vi.advanceTimersByTimeAsync(300_000)
+  await outcome
+  const { assertNoUpgradeBlockers } = await import('../releases/runtime')
+  expect(assertNoUpgradeBlockers).toThrow('unconfirmed')
+  await expect(client.request('save', ['retry', {}])).rejects.toThrow(
+    'unconfirmed'
+  )
+  await vi.waitFor(() =>
+    expect(sent.some((m) => m.method === 'save')).toBe(true)
+  )
+  const original = sent.find((m) => m.method === 'save')
+  channel.port1.postMessage({
+    type: 'result',
+    id: original.id,
+    value: undefined,
+  })
+  await vi.waitFor(() => expect(assertNoUpgradeBlockers).not.toThrow())
+  expect(sent.filter((m) => m.method === 'save')).toHaveLength(1)
+})
+
+it('does not treat disconnect as acknowledgement of an outstanding write', async () => {
+  const channel = new MessageChannel()
+  ports.push(channel.port1 as unknown as MessagePort)
+  const client = new StorageOwnerClient(
+    channel.port2 as unknown as MessagePort,
+    async () => 'token'
+  )
+  clients.push(client)
+  const saving = expect(
+    client.request('save', ['pending', {}])
+  ).rejects.toThrow('disconnected')
+  client.close()
+  await saving
+  const { assertNoUpgradeBlockers } = await import('../releases/runtime')
+  expect(assertNoUpgradeBlockers).toThrow('unconfirmed')
+})

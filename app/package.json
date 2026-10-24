@@ -15,7 +15,8 @@
     "lint": "eslint .",
     "format": "prettier --ignore-path .prettierignore --write .",
     "preview": "vite preview",
-    "test": "pnpm run check:documentation && vitest"
+    "test": "pnpm run check:documentation && vitest",
+    "cuj:releases": "tsc --target es2020 --module nodenext --moduleResolution nodenext --esModuleInterop --skipLibCheck --outDir test/browser/.generated test/browser/run-controlled-releases.ts test/browser/controlled-releases.ts && node test/browser/.generated/run-controlled-releases.js"
   },
   "dependencies": {
     "@buf/googleapis_googleapis.bufbuild_es": "2.6.0-20250411203938-61b203b9a916.1",

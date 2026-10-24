@@ -93,3 +93,25 @@ jobs:
           src/lib/runtime/codeOperationRegistry.test.ts
           src/components/WebMcp/WebMcpToolRegistrationHost.test.tsx
           --maxWorkers=2 --minWorkers=1
+
+  controlled-releases:
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+      - uses: pnpm/action-setup@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: releaser/go.mod
+      - run: pnpm install --frozen-lockfile
+      - run: pnpm run build:renderers && pnpm run build:console
+      - run: pnpm -C app exec playwright-core install --with-deps chromium
+      - run: pnpm -C app run cuj:releases
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: controlled-release-evidence
+          path: app/test/browser/test-output/controlled-releases/
