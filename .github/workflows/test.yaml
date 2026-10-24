@@ -108,6 +108,11 @@ jobs:
           go-version-file: releaser/go.mod
       - run: pnpm install --frozen-lockfile
       - run: pnpm run build:renderers && pnpm run build:console
+      - name: Test release controls and manifest discovery
+        run: >-
+          pnpm -C app exec vitest run
+          src/releases/control.test.ts src/releases/runtime.test.ts
+          src/pwa/loader-worker.test.ts src/components/ReleaseControls.test.tsx
       - run: pnpm -C app exec playwright-core install --with-deps chromium
       - run: pnpm -C app run cuj:releases
       - uses: actions/upload-artifact@v4
