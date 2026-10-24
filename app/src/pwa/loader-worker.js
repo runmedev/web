@@ -18,6 +18,10 @@ self.addEventListener('activate', event => event.waitUntil(self.clients.claim())
  * evidence that an unknown old writer stopped. Client IDs are browser assigned.
  */
 self.addEventListener('message', event => {
+  if (event.data === 'runme-loader-font-policy') {
+    event.ports[0]?.postMessage('deferred-fonts-v1');
+    return;
+  }
   if (event.data !== 'runme-loader-version' || !event.source?.id) return;
   event.waitUntil((async () => {
     const registry = await caches.open('runme-loader-clients-v1');
@@ -43,6 +47,10 @@ async function releaseAsset(request, url) {
   const parts = url.pathname.split('/');
   const id = parts[2];
   const path = parts.slice(3).join('/');
+  // release.json in CacheStorage is a local completion marker, serialized by
+  // the launcher. Channel digests authenticate the original published bytes,
+  // so discovery must never receive that reserialized marker as a response.
+  if (path === 'release.json') return fetch(request);
   const cache = await caches.open(`runme-release-v1-${id}`);
   const cached = await cache.match(url.pathname, { ignoreVary: true });
   if (cached) return cached;
@@ -50,7 +58,9 @@ async function releaseAsset(request, url) {
   const bootstrap = await (await caches.open(LOADER_CACHE)).match(url.pathname, { ignoreVary: true });
   if (bootstrap) return bootstrap;
   const response = await fetch(request);
-  const marker = await cache.match(`/version/${id}/release.json`);
+  // Startup can finish before unused fonts are cached. Its authenticated
+  // manifest still lets on-demand font loads be verified before they are saved.
+  const marker = await cache.match(`/version/${id}/release.json`) || await cache.match(`/__runme-startup/${id}`);
   if (!marker) return response; // The staging client verifies before storing.
   const manifest = await marker.json();
   const asset = manifest.assets.find(a => a.path === path);

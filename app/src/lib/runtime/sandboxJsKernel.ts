@@ -116,6 +116,10 @@ const DEFAULT_SANDBOX_ALLOWED_METHODS = [
   'trainingExamples.help',
   'app.getVersion',
   'app.releases.get',
+  'app.releases.cached',
+  'app.releases.activate',
+  'app.releases.pin',
+  'app.releases.status',
   'app.releases.check',
   'app.releases.upgrade',
   'app.releases.retry',
@@ -524,6 +528,10 @@ export function buildSandboxSrcDoc(options: {
         const app = {
           getVersion: () => hostCall("app.getVersion", []),
           releases: {
+            cached: () => hostCall("app.releases.cached", []),
+            activate: (releaseId) => hostCall("app.releases.activate", [releaseId]),
+            pin: () => hostCall("app.releases.pin", []),
+            status: () => hostCall("app.releases.status", []),
             get: () => hostCall("app.releases.get", []),
             check: (selection) => hostCall("app.releases.check", [selection]),
             upgrade: () => hostCall("app.releases.upgrade", []),

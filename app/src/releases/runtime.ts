@@ -1,4 +1,11 @@
-import type { Active, CommitReference, Control, Selection } from './control'
+import type {
+  Active,
+  CommitReference,
+  Control,
+  Manifest,
+  ReleaseProgress,
+  Selection,
+} from './control'
 
 /** The independent launcher owns coordination; React registers its durable flush
  * hook only after model initialization. No application import is needed by recovery.
@@ -8,6 +15,12 @@ export type ReleaseRuntime = {
   tabId: string
   prepare?: () => Promise<CommitReference[]>
   ready?: () => void
+}
+export type OfflineDownloadStatus = {
+  phase: 'downloading' | 'ready' | 'error'
+  completed: number
+  total: number
+  message?: string
 }
 declare global {
   interface Window {
@@ -19,7 +32,37 @@ declare global {
       retry: () => Promise<void>
       cancel: () => Promise<void>
       prune: () => Promise<number>
+      // Optional because an installed older loader can host a newer app bundle.
+      uiVersion?: number
+      status?: () => string
+      progress?: () => ReleaseProgress | undefined
+      offline?: (releaseId: string) => OfflineDownloadStatus | undefined
+      retryOffline?: () => Promise<void>
+      cached?: () => Promise<Manifest[]>
+      activate?: (releaseId: string) => Promise<void>
+      pin?: () => Promise<void>
     }
+  }
+}
+
+/** Retire the original loader's floating UI when a newer app hosts version
+ * controls. Keep its independent controls reachable while the app is frozen.
+ * This adapter is only for protocol-1 loaders predating the Information view.
+ */
+export function adoptLegacyVersionUi(): () => void {
+  if (window.runmeVersions?.uiVersion) return () => {}
+  const panel = document.getElementById('runme-release-panel')
+  const root = document.getElementById('root')
+  if (!panel || !root) return () => {}
+  const update = () => {
+    panel.hidden = !root.inert
+  }
+  update()
+  const observer = new MutationObserver(update)
+  observer.observe(root, { attributes: true, attributeFilter: ['inert'] })
+  return () => {
+    observer.disconnect()
+    panel.hidden = false
   }
 }
 

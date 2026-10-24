@@ -114,6 +114,29 @@ export async function control<T>(
 export const readControl = () => control((state) => state, false)
 export const releasePrefix = (id: string) => `/version/${id}/`
 export const cacheName = (id: string) => `runme-release-v1-${id}`
+// Separate from the legacy full-offline completion marker. Older loaders still
+// require every asset; they cannot mistake startup readiness for a complete cache.
+export const startupMarker = (id: string) => `/__runme-startup/${id}`
+type AssetScope = 'all' | 'startup' | 'fonts'
+
+/** Only passive font resources may be deferred. Executable and style entrypoints
+ * remain mandatory even if a malformed manifest gives them a font extension.
+ */
+function scopedAssets(
+  manifest: Manifest,
+  scope: AssetScope
+): Manifest['assets'] {
+  const entries = new Set([
+    manifest.appEntry,
+    manifest.owner.entry,
+    ...manifest.styles,
+  ])
+  return manifest.assets.filter((asset) => {
+    const font =
+      /\.(woff2?|ttf|otf)$/i.test(asset.path) && !entries.has(asset.path)
+    return scope === 'all' || (scope === 'fonts' ? font : !font)
+  })
+}
 export const releaseIdValid = (id: unknown): id is string =>
   typeof id === 'string' && /^[a-f0-9]{40}-[a-f0-9]{64}$/.test(id)
 
@@ -182,30 +205,80 @@ export async function digest(bytes: ArrayBuffer): Promise<string> {
   ).join('')
 }
 
-/** Stage into a release-specific cache. The completion marker is written last;
- * activation also checks every byte, because storage can be evicted afterwards.
+/** Files verified so far, including reusable files from an interrupted download. */
+export interface ReleaseProgress {
+  completed: number
+  total: number
+}
+
+/** Bound network and hashing work. Drain in-flight operations on failure before
+ * releasing the download lock, so a retry cannot race writes from a failed run.
  */
-export async function stage(manifest: Manifest): Promise<void> {
+async function processAssets(
+  assets: Manifest['assets'],
+  process: (asset: Manifest['assets'][number]) => Promise<void>,
+  progress?: (value: ReleaseProgress) => void
+): Promise<void> {
+  let next = 0
+  let completed = 0
+  let failed = false
+  let failure: unknown
+  progress?.({ completed, total: assets.length })
+  await Promise.all(
+    Array.from({ length: Math.min(6, assets.length) }, async () => {
+      while (!failed && next < assets.length) {
+        const asset = assets[next++]
+        try {
+          await process(asset)
+          progress?.({ completed: ++completed, total: assets.length })
+        } catch (error) {
+          if (!failed) failure = error
+          failed = true
+        }
+      }
+    })
+  )
+  if (failed) throw failure
+}
+
+/** Stage verified files into a release-specific cache. Startup and full-offline
+ * readiness have distinct markers; each is written after its required files.
+ * Activation rechecks the selected scope because storage can be evicted later.
+ */
+export async function stage(
+  manifest: Manifest,
+  progress?: (value: ReleaseProgress) => void,
+  scope: AssetScope = 'all'
+): Promise<void> {
   validateManifest(manifest)
   await navigator.locks.request(
-    `runme-release-download-${manifest.releaseId}`,
+    `runme-release-download-${manifest.releaseId}-${scope}`,
     async () => {
       const cache = await caches.open(cacheName(manifest.releaseId))
-      for (const asset of manifest.assets) {
-        const url = releasePrefix(manifest.releaseId) + asset.path
-        const old = await cache.match(url, { ignoreVary: true })
-        if (old && (await validResponse(old, asset))) continue
-        const response = await fetch(url, {
-          cache: 'no-store',
-          credentials: 'omit',
-          redirect: 'error',
-        })
-        if (!(await validResponse(response.clone(), asset)))
-          throw new Error(`Download verification failed: ${asset.path}`)
-        await cache.put(url, response)
-      }
+      await processAssets(
+        scopedAssets(manifest, scope),
+        async (asset) => {
+          const url = releasePrefix(manifest.releaseId) + asset.path
+          const old = await cache.match(url, { ignoreVary: true })
+          if (old && (await validResponse(old, asset))) return
+          const response = await fetch(url, {
+            cache: 'no-store',
+            credentials: 'omit',
+            redirect: 'error',
+          })
+          if (!(await validResponse(response.clone(), asset)))
+            throw new Error(`Download verification failed: ${asset.path}`)
+          await cache.put(url, response)
+        },
+        progress
+      )
+      // Background fonts never certify offline readiness without checking the
+      // required code too. Concurrent writes contain identical verified bytes.
+      if (scope === 'fonts') await verifyCache(manifest)
       await cache.put(
-        releasePrefix(manifest.releaseId) + 'release.json',
+        scope === 'startup'
+          ? startupMarker(manifest.releaseId)
+          : releasePrefix(manifest.releaseId) + 'release.json',
         new Response(JSON.stringify(manifest), {
           headers: { 'Content-Type': 'application/json' },
         })
@@ -225,19 +298,27 @@ async function validResponse(
   )
 }
 
-export async function verifyCache(manifest: Manifest): Promise<void> {
+export async function verifyCache(
+  manifest: Manifest,
+  progress?: (value: ReleaseProgress) => void,
+  scope: AssetScope = 'all'
+): Promise<void> {
   validateManifest(manifest)
   const cache = await caches.open(cacheName(manifest.releaseId))
-  for (const asset of manifest.assets) {
-    const response = await cache.match(
-      releasePrefix(manifest.releaseId) + asset.path,
-      { ignoreVary: true }
-    )
-    if (!response || !(await validResponse(response, asset)))
-      throw new Error(
-        `Release cache incomplete: ${asset.path}. Reconnect and retry download.`
+  await processAssets(
+    scopedAssets(manifest, scope),
+    async (asset) => {
+      const response = await cache.match(
+        releasePrefix(manifest.releaseId) + asset.path,
+        { ignoreVary: true }
       )
-  }
+      if (!response || !(await validResponse(response, asset)))
+        throw new Error(
+          `Release cache incomplete: ${asset.path}. Reconnect and retry download.`
+        )
+    },
+    progress
+  )
 }
 
 /** Validate selections from URLs, UI and the automation bridge before persistence. */

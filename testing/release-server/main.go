@@ -68,7 +68,9 @@ func main() {
 			log.Fatal(err)
 		}
 		m["assets"] = assets
-		manifest, _ := json.Marshal(m)
+		// Match production's formatted bytes so reserializing a cached marker
+		// cannot accidentally satisfy a channel's manifest digest in this CUJ.
+		manifest, _ := json.MarshalIndent(m, "", "  ")
 		return release{dir, id, manifest}
 	}
 	first, second := load(*a), load(*b)
@@ -82,8 +84,21 @@ func main() {
 		releases = append(releases, ownerFailure)
 	}
 	current := first
+	fontsBlocked := false
 	var mu sync.RWMutex
 	mux := http.NewServeMux()
+	// Exercise startup with all fonts unavailable; the browser must still open
+	// the app, report incomplete offline readiness, and recover after retry.
+	mux.HandleFunc("/test/fonts", func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != "POST" {
+			w.WriteHeader(405)
+			return
+		}
+		mu.Lock()
+		fontsBlocked = r.URL.Query().Get("blocked") == "1"
+		mu.Unlock()
+		w.WriteHeader(204)
+	})
 	mux.HandleFunc("/test/releases", func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "application/json")
 		json.NewEncoder(w).Encode(map[string]string{"a": first.id, "b": second.id})
@@ -109,8 +124,16 @@ func main() {
 	mux.HandleFunc("/", func(w http.ResponseWriter, r *http.Request) {
 		mu.RLock()
 		selected := current
+		blockFonts := fontsBlocked
 		mu.RUnlock()
 		w.Header().Set("Cache-Control", "no-store")
+		switch strings.ToLower(filepath.Ext(r.URL.Path)) {
+		case ".woff", ".woff2", ".ttf", ".otf":
+			if blockFonts {
+				http.Error(w, "Fonts temporarily unavailable", 503)
+				return
+			}
+		}
 		if r.URL.Path == "/test/legacy-page" {
 			w.Header().Set("Content-Type", "text/html")
 			fmt.Fprint(w, "<!doctype html><title>Legacy Runme</title><p>Uncontrolled historical app window</p>")

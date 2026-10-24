@@ -7,6 +7,7 @@ import {
   digest,
   discover,
   stage,
+  startupMarker,
   validateManifest,
   verifyCache,
 } from './control'
@@ -42,6 +43,51 @@ async function fixture(): Promise<Manifest> {
 afterEach(() => vi.unstubAllGlobals())
 
 describe('release eligibility and staging', () => {
+  it('opens verified startup code without fonts but certifies offline readiness only after all files pass', async () => {
+    const m = await fixture()
+    m.assets.push({ ...m.assets[0], path: 'optional.woff2' })
+    const stored = new Map<string, Response>()
+    vi.stubGlobal('caches', {
+      open: async () => ({
+        match: async (url: string) => stored.get(url)?.clone(),
+        put: async (url: string, response: Response) => {
+          stored.set(url, response.clone())
+        },
+      }),
+    })
+    vi.stubGlobal('navigator', {
+      locks: { request: async (_: string, fn: () => unknown) => fn() },
+    })
+    const fetcher = vi.fn(
+      async (url: string) =>
+        new Response(url.endsWith('.woff2') ? 'tampered' : 'verified')
+    )
+    vi.stubGlobal('fetch', fetcher)
+    await stage(m, undefined, 'startup')
+    expect(fetcher).toHaveBeenCalledTimes(2)
+    expect(stored.has(startupMarker(m.releaseId))).toBe(true)
+    expect(stored.has(`/version/${m.releaseId}/release.json`)).toBe(false)
+    await verifyCache(m, undefined, 'startup')
+    await expect(verifyCache(m)).rejects.toThrow('optional.woff2')
+    await expect(stage(m, undefined, 'fonts')).rejects.toThrow(
+      'verification failed'
+    )
+    expect(stored.has(`/version/${m.releaseId}/release.json`)).toBe(false)
+    fetcher.mockImplementation(async () => new Response('verified'))
+    stored.delete(`/version/${m.releaseId}/app.js`)
+    await expect(stage(m, undefined, 'fonts')).rejects.toThrow('app.js')
+    expect(stored.has(`/version/${m.releaseId}/release.json`)).toBe(false)
+    await stage(m, undefined, 'startup')
+    await stage(m, undefined, 'fonts')
+    await verifyCache(m)
+    expect(stored.has(`/version/${m.releaseId}/release.json`)).toBe(true)
+    m.appEntry = 'entry.woff2'
+    m.assets[0].path = m.appEntry
+    await expect(verifyCache(m, undefined, 'startup')).rejects.toThrow(
+      'entry.woff2'
+    )
+  })
+
   it('rejects archives, unsupported protocols, unsafe paths and missing entries', async () => {
     const m = await fixture()
     expect(validateManifest(m)).toBe(m)
@@ -124,5 +170,68 @@ describe('release eligibility and staging', () => {
     expect(fetcher.mock.calls[0][0]).toBe(
       `/version/${m.releaseId}/release.json`
     )
+  })
+
+  it('bounds concurrent downloads and drains a failed batch before allowing retry', async () => {
+    const m = await fixture()
+    m.assets.push(
+      ...Array.from({ length: 10 }, (_, i) => ({
+        ...m.assets[0],
+        path: `chunk-${i}.js`,
+      }))
+    )
+    const stored = new Map<string, Response>()
+    vi.stubGlobal('caches', {
+      open: async () => ({
+        match: async (url: string) => stored.get(url)?.clone(),
+        put: async (url: string, response: Response) => {
+          stored.set(url, response.clone())
+        },
+      }),
+    })
+    let lockHeld = false
+    vi.stubGlobal('navigator', {
+      locks: {
+        request: async (_: string, fn: () => Promise<void>) => {
+          lockHeld = true
+          try {
+            await fn()
+          } finally {
+            lockHeld = false
+          }
+        },
+      },
+    })
+    const requests: Array<{
+      resolve: (value: Response) => void
+      reject: (error: Error) => void
+    }> = []
+    const fetcher = vi.fn(
+      () =>
+        new Promise<Response>((resolve, reject) => {
+          requests.push({ resolve, reject })
+        })
+    )
+    vi.stubGlobal('fetch', fetcher)
+    const failed = stage(m).catch((error) => error)
+    await vi.waitFor(() => expect(requests).toHaveLength(6))
+    requests[0].reject(new Error('network unavailable'))
+    await Promise.resolve()
+    await Promise.resolve()
+    expect(lockHeld).toBe(true)
+    expect(fetcher).toHaveBeenCalledTimes(6)
+    for (const request of requests.slice(1))
+      request.resolve(new Response('verified'))
+    expect(await failed).toMatchObject({ message: 'network unavailable' })
+    expect(lockHeld).toBe(false)
+    expect(fetcher).toHaveBeenCalledTimes(6)
+    expect(stored.has(`/version/${m.releaseId}/release.json`)).toBe(false)
+
+    fetcher.mockImplementation(async () => new Response('verified'))
+    const progress = vi.fn()
+    await stage(m, progress)
+    await verifyCache(m)
+    expect(progress).toHaveBeenLastCalledWith({ completed: 12, total: 12 })
+    expect(stored.has(`/version/${m.releaseId}/release.json`)).toBe(true)
   })
 })
