@@ -5,6 +5,7 @@ import {
   FolderIcon,
   DocumentTextIcon,
   InformationCircleIcon,
+  Bars3Icon,
   Bars3BottomLeftIcon,
   QueueListIcon,
   ServerStackIcon,
@@ -34,7 +35,7 @@ import {
 import { useGoogleAuth } from '../../contexts/GoogleAuthContext'
 import { useCurrentDoc } from '../../contexts/CurrentDocContext'
 import { useRunners } from '../../contexts/RunnersContext'
-import { useSidePanel } from '../../contexts/SidePanelContext'
+import { useSidePanel, type PanelKey } from '../../contexts/SidePanelContext'
 import { useCommentsPanel } from '../../contexts/CommentsPanelContext'
 import { useWorkspaceDocumentContext } from '../../contexts/WorkspaceDocumentContext'
 import {
@@ -242,6 +243,14 @@ export function SidePanelToolbar() {
   const vaultUnlocked = vaultSnapshot.status === 'unlocked'
   const vaultStatus = vaultUnlocked ? 'Unlocked' : 'Locked'
   const { activePanel, togglePanel } = useSidePanel()
+  // Remember the selected view while the shared context marks the panel closed.
+  const lastActivePanel = useRef<Exclude<PanelKey, null>>('explorer')
+  useEffect(() => {
+    if (activePanel) {
+      lastActivePanel.current = activePanel
+    }
+  }, [activePanel])
+  const panelToggleLabel = activePanel ? 'Collapse side panel' : 'Expand side panel'
   const { commentsPanelOpen, toggleCommentsPanel } = useCommentsPanel()
   const { showDocument } = useWorkspaceDocumentContext()
   const { getCurrentDoc, setCurrentDoc } = useCurrentDoc()
@@ -446,6 +455,18 @@ export function SidePanelToolbar() {
   return (
     <div className="flex h-full w-12 flex-col items-center justify-between">
       <div className="flex flex-col items-center gap-2 pt-2">
+        <button
+          type="button"
+          data-tour-id="left-nav.toggle-panel"
+          className={`${sideButtonBase} ${sideButtonInactive} focus-visible:ring-2 focus-visible:ring-nb-accent`}
+          aria-label={panelToggleLabel}
+          aria-expanded={Boolean(activePanel)}
+          aria-controls="sidepanel-column"
+          onClick={() => togglePanel(activePanel ?? lastActivePanel.current)}
+        >
+          <Bars3Icon className="h-5 w-5" aria-hidden="true" />
+          <span className={tooltipBase}>{panelToggleLabel}</span>
+        </button>
         <button
           type="button"
           data-tour-id="left-nav.explorer"
