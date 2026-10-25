@@ -377,6 +377,52 @@ describe('SidePanelToolbar drive status button', () => {
     expect(screen.queryByRole('menu')).toBeNull()
   })
 
+  it('places the collapse button first and restores Explorer after expanding', () => {
+    const { rerender } = render(<SidePanelToolbar />)
+    const collapseButton = screen.getByRole('button', { name: 'Collapse side panel' })
+    expect(screen.getAllByRole('button')[0]).toBe(collapseButton)
+    expect(collapseButton.nextElementSibling).toBe(
+      screen.getByRole('button', { name: 'Toggle Explorer panel' })
+    )
+    expect(collapseButton.getAttribute('aria-expanded')).toBe('true')
+    expect(collapseButton.getAttribute('aria-controls')).toBe('sidepanel-column')
+
+    fireEvent.click(collapseButton)
+    expect(togglePanelMock).toHaveBeenLastCalledWith('explorer')
+    activePanelState = null
+    rerender(<SidePanelToolbar />)
+
+    const expandButton = screen.getByRole('button', { name: 'Expand side panel' })
+    expect(expandButton.getAttribute('aria-expanded')).toBe('false')
+    fireEvent.click(expandButton)
+    expect(togglePanelMock).toHaveBeenLastCalledWith('explorer')
+    activePanelState = 'explorer'
+    rerender(<SidePanelToolbar />)
+    expect(screen.getByRole('button', { name: 'Collapse side panel' })).toBeTruthy()
+  })
+
+  it('restores the most recently selected panel when expanded', () => {
+    const { rerender } = render(<SidePanelToolbar />)
+    activePanelState = 'outline'
+    rerender(<SidePanelToolbar />)
+
+    fireEvent.click(screen.getByRole('button', { name: 'Collapse side panel' }))
+    expect(togglePanelMock).toHaveBeenLastCalledWith('outline')
+    activePanelState = null
+    rerender(<SidePanelToolbar />)
+
+    fireEvent.click(screen.getByRole('button', { name: 'Expand side panel' }))
+    expect(togglePanelMock).toHaveBeenLastCalledWith('outline')
+  })
+
+  it('opens Explorer when the toolbar starts with the side panel closed', () => {
+    activePanelState = null
+    render(<SidePanelToolbar />)
+
+    fireEvent.click(screen.getByRole('button', { name: 'Expand side panel' }))
+    expect(togglePanelMock).toHaveBeenCalledWith('explorer')
+  })
+
   it('exposes an Open Documents button in the toolbar', () => {
     render(<SidePanelToolbar />)
 
