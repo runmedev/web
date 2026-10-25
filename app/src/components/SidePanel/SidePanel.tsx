@@ -458,7 +458,7 @@ export function SidePanelToolbar() {
         <button
           type="button"
           data-tour-id="left-nav.toggle-panel"
-          className={`${sideButtonBase} ${sideButtonInactive}`}
+          className={`${sideButtonBase} ${sideButtonInactive} focus-visible:ring-2 focus-visible:ring-nb-accent`}
           aria-label={panelToggleLabel}
           aria-expanded={Boolean(activePanel)}
           aria-controls="sidepanel-column"
