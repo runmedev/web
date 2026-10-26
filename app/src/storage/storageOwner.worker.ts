@@ -1,4 +1,6 @@
+import { appLogger } from '../lib/logging/runtime'
 import { OWNER_LOCK, control, readControl } from '../releases/control'
+import { retireUnreadableOwner } from './releaseOwnerFailure'
 
 const scope = globalThis as unknown as {
   onconnect: (event: MessageEvent) => void
@@ -102,12 +104,28 @@ async function start(): Promise<void> {
         } catch (error) {
           // A failed drain is not proof that in-flight effects stopped. Keep the
           // lock and retry reconciliation; never release it on a timeout/error.
-          await control((s) => {
-            s.ownerError = {
-              transitionId: s.transition?.id,
-              message: `Storage drain blocked: ${String(error)}`,
-            }
-          })
+          try {
+            if (
+              await retireUnreadableOwner(error, runtime, () => {
+                clearInterval(timer)
+                resolve()
+              })
+            )
+              return
+            await control((s) => {
+              s.ownerError = {
+                transitionId: s.transition?.id,
+                message: `Storage drain blocked: ${String(error)}`,
+              }
+            })
+          } catch {
+            // Error reporting uses the same failing database. Do not let that
+            // turn each timer tick into an unhandled rejection or release a lock.
+            appLogger.warn(
+              'Storage owner cannot drain or record its failure; ownership retained',
+              { attrs: { scope: 'storage.owner' } }
+            )
+          }
         } finally {
           checking = false
         }

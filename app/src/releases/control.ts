@@ -19,6 +19,7 @@ export type Manifest = {
   buildId: string
   buildInputsDigest: string
   publishedAt: string
+  recoveredControlFormat?: 1
   requiredCapabilities: string[]
   testedRollbackTargets: string[]
   launcherProtocol: { min: number; max: number }
@@ -50,6 +51,8 @@ export type Transition = {
 }
 export type Control = {
   format: 1
+  epochBase?: number
+  recoveredControlFormat?: 1
   selection: Selection
   active?: Active
   previous?: Active

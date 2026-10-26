@@ -6,16 +6,17 @@ import {
   discover,
   stage,
 } from './control'
-import { ReleaseControlError } from './releaseDatabase'
+import { ReleaseControlError, isUnreadableControl } from './releaseDatabase'
 
 /** Discover and cache the fallback independently of release-settings reads.
- * Never swap coordination databases or manufacture an active epoch: the real
- * control transaction must recover before an existing owner can be replaced.
+ * Transient failures retry the same state. Only an explicitly fenced repair
+ * callback may quarantine an irrecoverable record after download verification.
  */
 export async function prepareStartupRecovery(
   selection: Selection = { kind: 'channel', name: 'stable' },
   progress?: (value: ReleaseProgress) => void,
-  scope: 'all' | 'startup' = 'all'
+  scope: 'all' | 'startup' = 'all',
+  repair?: (candidate: Manifest) => Promise<void>
 ): Promise<Manifest> {
   const candidate = await discover(selection)
   await navigator.locks.request('runme-release-cache', { mode: 'shared' }, () =>
@@ -31,6 +32,10 @@ export async function prepareStartupRecovery(
       })
       return candidate
     } catch (error) {
+      if (attempt === 1 && repair && isUnreadableControl(error)) {
+        await repair(candidate)
+        return candidate
+      }
       if (!(error instanceof ReleaseControlError) || attempt === 1) throw error
     }
   }

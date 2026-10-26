@@ -18,17 +18,18 @@ import (
 
 // Runtime manifests are separate from archives: only lifecycle-aware builds can activate.
 type runtimeManifest struct {
-	Format                int      `json:"format"`
-	ReleaseID             string   `json:"releaseId"`
-	WebCommit             string   `json:"webCommit"`
-	BuildID               string   `json:"buildId"`
-	BuildInputsDigest     string   `json:"buildInputsDigest"`
-	PublishedAt           string   `json:"publishedAt"`
-	RequiredCapabilities  []string `json:"requiredCapabilities"`
-	TestedRollbackTargets []string `json:"testedRollbackTargets"`
-	AppEntry              string   `json:"appEntry"`
-	Styles                []string `json:"styles"`
-	Owner                 struct {
+	RecoveredControlFormat int      `json:"recoveredControlFormat,omitempty"`
+	Format                 int      `json:"format"`
+	ReleaseID              string   `json:"releaseId"`
+	WebCommit              string   `json:"webCommit"`
+	BuildID                string   `json:"buildId"`
+	BuildInputsDigest      string   `json:"buildInputsDigest"`
+	PublishedAt            string   `json:"publishedAt"`
+	RequiredCapabilities   []string `json:"requiredCapabilities"`
+	TestedRollbackTargets  []string `json:"testedRollbackTargets"`
+	AppEntry               string   `json:"appEntry"`
+	Styles                 []string `json:"styles"`
+	Owner                  struct {
 		BuildID string `json:"buildId"`
 		Entry   string `json:"entry"`
 		RPCMin  int    `json:"rpcMin"`

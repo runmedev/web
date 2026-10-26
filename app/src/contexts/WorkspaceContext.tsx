@@ -9,6 +9,7 @@ import {
 } from "react";
 
 import { appState } from "../lib/runtime/AppState";
+import { appLogger } from "../lib/logging/runtime";
 
 const STORAGE_KEY = "runme/workspace";
 const LEGACY_STORAGE_KEY = "aisre/workspace";
@@ -19,6 +20,7 @@ export interface WorkspaceState {
 
 interface WorkspaceContextType {
   state: WorkspaceState;
+  persistenceError?: string;
   addItem: (uri: string) => void;
   getItems: () => string[];
   removeItem: (uri: string) => void;
@@ -37,17 +39,20 @@ export function useWorkspace() {
   return context;
 }
 
-function loadWorkspaceState(): WorkspaceState {
+/** A failed read is not an empty workspace. Keep its original bytes untouched
+ * until a later reload can read them, even if Explorer adds its default root.
+ */
+function loadWorkspaceState(): { state: WorkspaceState; canPersist: boolean } {
   try {
     const raw =
       localStorage.getItem(STORAGE_KEY) ??
       localStorage.getItem(LEGACY_STORAGE_KEY);
     if (!raw) {
-      return { items: [] };
+      return { state: { items: [] }, canPersist: true };
     }
     const parsed = JSON.parse(raw) as { items?: unknown };
     if (!parsed || !Array.isArray(parsed.items)) {
-      return { items: [] };
+      throw new Error("Invalid saved workspace");
     }
     const normalized = parsed.items
       .map((entry) => {
@@ -61,26 +66,33 @@ function loadWorkspaceState(): WorkspaceState {
         return null;
       })
       .filter((value): value is string => Boolean(value));
-    return { items: normalized };
-  } catch (error) {
-    console.error("Failed to load workspace state from storage", error);
-    return { items: [] };
+    if (normalized.length !== parsed.items.length) {
+      throw new Error("Invalid saved workspace entry");
+    }
+    return { state: { items: normalized }, canPersist: true };
+  } catch {
+    appLogger.warn("Saved workspace could not be read; preserving stored state", {
+      attrs: { scope: "storage.workspace", code: "WORKSPACE_READ_FAILED" },
+    });
+    return { state: { items: [] }, canPersist: false };
   }
 }
 
 export function WorkspaceProvider({ children }: { children: ReactNode }) {
-  const [state, setState] = useState<WorkspaceState>(() =>
-    loadWorkspaceState(),
-  );
+  const [initial] = useState(loadWorkspaceState);
+  const [state, setState] = useState<WorkspaceState>(initial.state);
 
   useEffect(() => {
+    if (!initial.canPersist) return;
     try {
       localStorage.setItem(STORAGE_KEY, JSON.stringify(state));
       localStorage.removeItem(LEGACY_STORAGE_KEY);
-    } catch (error) {
-      console.error("Failed to persist workspace state", error);
+    } catch {
+      appLogger.warn("Failed to persist workspace state", {
+        attrs: { scope: "storage.workspace", code: "WORKSPACE_WRITE_FAILED" },
+      });
     }
-  }, [state]);
+  }, [initial.canPersist, state]);
 
   const addItem = useCallback((uri: string) => {
     setState((prev) => {
@@ -111,11 +123,13 @@ export function WorkspaceProvider({ children }: { children: ReactNode }) {
   const value = useMemo<WorkspaceContextType>(
     () => ({
       state,
+      persistenceError: initial.canPersist ? undefined :
+        "Saved folders could not be read. Folder changes in this tab will not be saved. Reload to retry; stored data has been kept.",
       addItem,
       getItems,
       removeItem,
     }),
-    [state, addItem, getItems, removeItem],
+    [state, initial.canPersist, addItem, getItems, removeItem],
   );
 
   useEffect(() => {

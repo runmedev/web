@@ -31,6 +31,17 @@ Acceptance:
   Retrying after the browser recovers opens the app without resetting stored state.
   Unit tests cover missing records, blocked/failed/late opens, read failures,
   stalled commits, abort cleanup, and preserving existing epochs/transitions.
+- An irrecoverable settings value (`NotReadableError`) is quarantined only when
+  no storage owner or other tab remains. The old object store is preserved, a
+  version bump fences older readers, and the recovered state uses bounded chunks.
+  The browser test verifies an existing notebook and a mounted Explorer folder
+  survive repair and reload. The folder is persisted in the separate notebook
+  database and localStorage before injecting the release-control failure.
+  Unit tests reject repair for live owners/tabs and transient errors.
+- Unreadable workspace preferences remain untouched, including when Explorer
+  adds its default root. Show a persistence warning until a successful reload.
+  Missing folder metadata hides only that unresolved root; it must not remove
+  the saved mount. Unit tests cover both cases and healthy legacy migration.
 - Deploy B while A is installed. Refresh and new tabs still use A.
 - Channel changes and exact pins only stage; activation requires Upgrade all tabs.
 - Pending notebook edits in multiple tabs persist before upgrade readiness.

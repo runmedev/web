@@ -23,7 +23,7 @@ async function main() {
       size: { width: 1440, height: 1000 },
     },
   })
-  await context.addInitScript(() => {
+  const installTools = () => {
     const tools = new Map<string, any>()
     ;(window as any).__releaseTools = tools
     Object.defineProperty(document, 'modelContext', {
@@ -37,7 +37,8 @@ async function main() {
         },
       },
     })
-  })
+  }
+  await context.addInitScript(installTools)
   console.log('Context initialized')
   const errors: string[] = []
   context.on('page', (page) =>
@@ -323,6 +324,190 @@ async function main() {
       )
     } finally {
       await unavailable.close()
+    }
+    // Model Chromium losing an external large-value file. Keep real notebook
+    // storage, locks, schema upgrades and workers; fail only the v1 control get.
+    const damagedContext = await browser.newContext({
+      viewport: { width: 1440, height: 1000 },
+    })
+    await damagedContext.addInitScript(installTools)
+    try {
+      const original = await damagedContext.newPage()
+      await original.goto(base + '/?session=damaged-settings')
+      await ready(original)
+      const savedUri = (
+        await execute(
+          original,
+          `const d=await notebooks.createLocal('settings-recovery.runme'); await notebooks.show(d.handle.uri); await notebooks.appendCell({target:{uri:d.handle.uri},kind:'markup',value:'Preserve this notebook through settings recovery'}); console.log(d.handle.uri)`
+        )
+      ).trim()
+      // Seed a mounted folder in the real notebook database, independently of
+      // the control database being damaged. Verify the actual Explorer restores
+      // it before and after repair, not just that notebook payloads survive.
+      await original.evaluate(async () => {
+        await new Promise<void>((resolve, reject) => {
+          const request = indexedDB.open('runme-local-notebooks')
+          request.onerror = () => reject(request.error)
+          request.onsuccess = () => {
+            const db = request.result
+            const tx = db.transaction('folders', 'readwrite')
+            tx.objectStore('folders').put({
+              id: 'local://folder/recovery-fixture',
+              remoteId: 'local://folder/recovery-fixture',
+              name: 'Preserved workspace folder',
+              children: [],
+            })
+            tx.oncomplete = () => { db.close(); resolve() }
+            tx.onabort = tx.onerror = () => { db.close(); reject(tx.error) }
+          }
+        })
+        const workspace = JSON.parse(localStorage.getItem('runme/workspace')!)
+        workspace.items.push('local://folder/recovery-fixture')
+        localStorage.setItem('runme/workspace', JSON.stringify(workspace))
+      })
+      await original.evaluate(() => (window as any).runmeRelease.prepare())
+      await original.reload()
+      await ready(original)
+      await original.getByText('Preserved workspace folder', { exact: true }).waitFor()
+      assert.match(
+        await execute(
+          original,
+          `console.log((await notebooks.get({uri:${JSON.stringify(savedUri)}})).notebook.cells.map(c=>c.value).join('\\n'))`
+        ),
+        /Preserve this notebook/,
+        'The setup must be durable before injecting damage'
+      )
+      await original.close()
+      const repaired = await damagedContext.newPage()
+      await repaired.addInitScript(() => {
+        const get = IDBObjectStore.prototype.get
+        IDBObjectStore.prototype.get = function (key) {
+          if (
+            this.transaction.db.name === 'runme-release-control' &&
+            this.transaction.db.version === 1 &&
+            this.name === 'state' &&
+            key === 'control'
+          ) {
+            const request = {
+              error: new DOMException(
+                'Missing large value file',
+                'NotReadableError'
+              ),
+              onerror: null as null | (() => void),
+            }
+            queueMicrotask(() => request.onerror?.())
+            return request as unknown as IDBRequest
+          }
+          return get.call(this, key)
+        }
+      })
+      await repaired.goto(base + '/?session=damaged-settings')
+      // Closing the prior page can briefly leave its worker alive. Never evict
+      // it; allow automatic repair or retry once the real lifetime lock is free.
+      await repaired.waitForFunction(
+        () =>
+          Boolean((window as any).runmeRelease) ||
+          [...document.querySelectorAll('button')].some(
+            (button) => button.textContent === 'Retry latest stable'
+          ),
+        undefined,
+        { timeout: 60000 }
+      )
+      if (
+        await repaired
+          .getByRole('button', { name: 'Retry latest stable', exact: true })
+          .isVisible()
+      ) {
+        const deadline = Date.now() + 60000
+        while (
+          await repaired.evaluate(async () =>
+            (await navigator.locks.query()).held?.some(
+              (lock) => lock.name === 'runme-storage-owner-lifetime-v1'
+            )
+          )
+        ) {
+          if (Date.now() > deadline)
+            throw new Error('Old owner did not release after tab closed')
+          await new Promise((resolve) => setTimeout(resolve, 100))
+        }
+        await repaired
+          .getByRole('button', { name: 'Retry latest stable', exact: true })
+          .click()
+      }
+      await ready(repaired)
+      await repaired.getByText('Preserved workspace folder', { exact: true }).waitFor()
+      const repairState = await repaired.evaluate(() =>
+        (window as any).runmeVersions.get()
+      )
+      assert.equal(repairState.recoveredControlFormat, 1)
+      assert.ok(repairState.active.epoch > 1)
+      assert.match(
+        await execute(
+          repaired,
+          `console.log((await notebooks.get({uri:${JSON.stringify(savedUri)}})).notebook.cells.map(c=>c.value).join('\\n'))`
+        ),
+        /Preserve this notebook/
+      )
+      const schema = await repaired.evaluate(
+        () =>
+          new Promise<{ version: number; stores: string[]; encoding: string }>(
+            (resolve, reject) => {
+              const request = indexedDB.open('runme-release-control')
+              request.onerror = () => reject(request.error)
+              request.onsuccess = () => {
+                const db = request.result
+                const get = db
+                  .transaction('state')
+                  .objectStore('state')
+                  .get('control')
+                get.onsuccess = () => {
+                  resolve({
+                    version: db.version,
+                    stores: Array.from(db.objectStoreNames),
+                    encoding: get.result.encoding,
+                  })
+                  db.close()
+                }
+                get.onerror = () => {
+                  reject(get.error)
+                  db.close()
+                }
+              }
+            }
+          )
+      )
+      assert.equal(schema.version, 2)
+      assert.ok(schema.stores.includes('unreadable-state-1'))
+      assert.equal(schema.encoding, 'runme-control-json-chunks-v1')
+      await repaired.reload()
+      await ready(repaired)
+      await repaired.getByText('Preserved workspace folder', { exact: true }).waitFor()
+      assert.match(
+        await execute(
+          repaired,
+          `console.log((await notebooks.get({uri:${JSON.stringify(savedUri)}})).notebook.cells.map(c=>c.value).join('\\n'))`
+        ),
+        /Preserve this notebook/
+      )
+      await repaired.screenshot({
+        path: output + '/settings-quarantined-recovered.png',
+      })
+      console.log(
+        'PASS: irrecoverable settings are quarantined; notebooks survive recovery and reload'
+      )
+    } catch (error) {
+      for (const page of damagedContext.pages()) {
+        console.error(
+          'Damaged-profile diagnostics',
+          await page.locator('body').innerText().catch(String)
+        )
+        await page
+          .screenshot({ path: output + '/settings-repair-failure.png' })
+          .catch(() => {})
+      }
+      throw error
+    } finally {
+      await damagedContext.close()
     }
     await fetch(base + '/test/promote?release=b', { method: 'POST' })
     await one.reload()

@@ -79,6 +79,7 @@ jobs:
         run: >-
           pnpm -C app exec vitest run
           src/lib/explorerSync.test.ts
+          src/contexts/WorkspaceContext.test.tsx
           src/components/Workspace/WorkspaceExplorer.test.tsx
           --maxWorkers=2 --minWorkers=1
       - name: Test desktop renderer and workload identity integration
@@ -95,7 +96,7 @@ jobs:
           --maxWorkers=2 --minWorkers=1
 
   controlled-releases:
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     timeout-minutes: 25
     steps:
       - uses: actions/checkout@v4
@@ -113,7 +114,7 @@ jobs:
           pnpm -C app exec vitest run
           src/releases/control.test.ts src/releases/runtime.test.ts
           src/releases/loaderController.test.ts
-          src/releases/releaseDatabase.test.ts src/releases/startupRecovery.test.ts
+          src/releases/releaseDatabase.test.ts src/releases/startupRecovery.test.ts src/releases/recoverControl.test.ts src/releases/controlChunks.test.ts src/releases/recoveryOwnerLock.test.ts src/storage/releaseOwnerFailure.test.ts
           src/releases/startupDiagnostics.test.ts
           src/pwa/loader-worker.test.ts src/components/ReleaseControls.test.tsx
       - run: pnpm -C app exec playwright-core install --with-deps chromium

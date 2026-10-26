@@ -226,7 +226,7 @@ function isConvertibleLegacyNotebookFileName(name: string): boolean {
  * metadata. The local URI is opaque and safe to include in diagnostics.
  */
 function logMissingWorkspaceMetadata(uri: string): void {
-  appLogger.error("Removing workspace entry with missing local metadata", {
+  appLogger.error("Retaining workspace entry with missing local metadata", {
     attrs: {
       scope: "storage.workspace",
       code: "WORKSPACE_LOCAL_METADATA_MISSING",
@@ -414,7 +414,7 @@ function storeForUri(
 }
 
 export function WorkspaceExplorer() {
-  const { getItems, addItem, removeItem } = useWorkspace();
+  const { getItems, addItem, removeItem, persistenceError } = useWorkspace();
   const { store } = useNotebookStore();
   const { fsStore } = useFilesystemStore();
   const { getCurrentDoc, setCurrentDoc } = useCurrentDoc();
@@ -570,10 +570,10 @@ export function WorkspaceExplorer() {
         let metadata = await store.getMetadata(localUri);
         if (!metadata) {
           // Workspace roots and local notebook metadata are persisted separately.
-          // If the IndexedDB record is gone, retaining the root would expose the
-          // opaque local URI in the explorer and keep restoring it on every load.
+          // Missing metadata is not proof that the user removed the folder.
+          // Hide the unresolved root for now, but retain its saved reference so
+          // a later successful read can restore it.
           logMissingWorkspaceMetadata(localUri);
-          removeItem(localUri);
           continue;
         }
         if (metadata.remoteUri && metadata.name === "Drive") {
@@ -582,7 +582,6 @@ export function WorkspaceExplorer() {
             const refreshedMetadata = await store.getMetadata(localUri);
             if (!refreshedMetadata) {
               logMissingWorkspaceMetadata(localUri);
-              removeItem(localUri);
               continue;
             }
             metadata = refreshedMetadata;
@@ -1779,6 +1778,11 @@ function formatShortTimestamp(date: Date): string {
         </div>
       </div>
 
+      {persistenceError && (
+        <p id="workspace-persistence-error" role="alert" className="text-sm text-nb-error">
+          {persistenceError}
+        </p>
+      )}
       {errorMessage && (
         <p role="alert" className="text-sm text-nb-error">
           {errorMessage}
