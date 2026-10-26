@@ -11,8 +11,8 @@ export function loaderController(
   const current = serviceWorkers.controller
   if (current) {
     void serviceWorkers
-      .getRegistration('/')
-      .then((registration) => registration?.update())
+      .register('/sw.js', { updateViaCache: 'none' })
+      .then((registration) => registration.update())
       .catch(() => {
         /* The installed worker remains usable offline. */
       })

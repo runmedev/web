@@ -28,7 +28,10 @@ it('starts with the existing controller even when registration lookup and ready 
   const { value, container } = workers(worker)
   value.getRegistration.mockReturnValue(new Promise(() => {}))
   await expect(loaderController(container)).resolves.toBe(worker)
-  expect(value.register).not.toHaveBeenCalled()
+  expect(value.register).toHaveBeenCalledWith('/sw.js', {
+    updateViaCache: 'none',
+  })
+  expect(value.getRegistration).not.toHaveBeenCalled()
 })
 
 it('keeps cached startup available when an update fails offline', async () => {
