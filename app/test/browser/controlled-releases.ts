@@ -196,15 +196,48 @@ async function main() {
           get: () => new Promise(() => {}),
         })
         navigator.serviceWorker.getRegistration = () => new Promise(() => {})
+        // Model an older app that cannot acknowledge the version UI handoff.
+        let api: any
+        Object.defineProperty(window, 'runmeVersions', {
+          configurable: true,
+          get: () => api,
+          set: (value) => {
+            delete value.registerVersionUi
+            api = value
+          },
+        })
       })
       await warm.goto(base + '/?session=release-warm-start')
       await ready(warm)
       assert.equal(await active(warm), a)
+      await warm.locator('#runme-release-panel').waitFor({ state: 'visible' })
+      await warm
+        .locator('#runme-release-panel')
+        .getByRole('button', { name: 'Versions', exact: true })
+        .click()
+      await warm
+        .locator('#runme-release-panel')
+        .getByRole('button', { name: 'Check for updates', exact: true })
+        .waitFor()
+      const trace = JSON.parse(
+        (await warm.locator('#runme-startup-diagnostics-log').textContent()) ||
+          '[]'
+      )
+      assert.ok(
+        trace.some(
+          (event: any) =>
+            event.attrs.stage === 'application-ready' &&
+            event.attrs.state === 'completed'
+        )
+      )
       await warm.screenshot({
         path: output + '/warm-start-stalled-registration.png',
       })
       console.log(
         'PASS: cached startup does not wait for registration readiness'
+      )
+      console.log(
+        'PASS: clients without version UI handoff retain visible fallback controls and startup diagnostics'
       )
     } finally {
       await warm.close()

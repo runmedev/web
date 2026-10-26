@@ -38,7 +38,7 @@ export function loaderController(
         finish(
           undefined,
           new Error(
-            'The Runme loader is not controlling this tab. Try a normal reload. If it still cannot start, preserve edits in other Runme tabs and close those tabs before reopening Runme. No notebook data has been removed.'
+            'The Runme loader is not controlling this tab. Try a normal reload. If it still cannot start, preserve edits in other Runme tabs on this site and close those tabs before reopening Runme. No notebook data has been removed.'
           )
         ),
       timeoutMs

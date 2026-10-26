@@ -18,7 +18,13 @@ Acceptance:
   the app to open and report incomplete offline readiness. Retrying after fonts
   become available completes the offline cache without activating another release.
   Repeated app-readiness notifications do not restart completed font caching.
-- The floating launcher disappears after startup. The left Information icon opens version controls inside the Version Information document.
+- The floating launcher disappears after startup only when the loaded app
+  explicitly registers its version controls. Older clients retain the fallback
+  controls. With a current app, the left Information icon opens version controls
+  inside the Version Information document.
+- Startup diagnostics expose timestamped stage, duration, and waiting/failure
+  events before the app starts. The trace is bounded, stays in memory, and does
+  not include notebook data, credentials, or URL query parameters.
 - Deploy B while A is installed. Refresh and new tabs still use A.
 - Channel changes and exact pins only stage; activation requires Upgrade all tabs.
 - Pending notebook edits in multiple tabs persist before upgrade readiness.
