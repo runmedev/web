@@ -112,6 +112,8 @@ jobs:
         run: >-
           pnpm -C app exec vitest run
           src/releases/control.test.ts src/releases/runtime.test.ts
+          src/releases/loaderController.test.ts
+          src/releases/startupDiagnostics.test.ts
           src/pwa/loader-worker.test.ts src/components/ReleaseControls.test.tsx
       - run: pnpm -C app exec playwright-core install --with-deps chromium
       - run: pnpm -C app run cuj:releases

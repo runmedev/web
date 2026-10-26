@@ -34,6 +34,7 @@ declare global {
       prune: () => Promise<number>
       // Optional because an installed older loader can host a newer app bundle.
       uiVersion?: number
+      registerVersionUi?: () => () => void
       status?: () => string
       progress?: () => ReleaseProgress | undefined
       offline?: (releaseId: string) => OfflineDownloadStatus | undefined
@@ -45,11 +46,12 @@ declare global {
   }
 }
 
-/** Retire the original loader's floating UI when a newer app hosts version
- * controls. Keep its independent controls reachable while the app is frozen.
- * This adapter is only for protocol-1 loaders predating the Information view.
+/** Explicitly hand version management to this app, or adapt older loaders that
+ * predate the handshake. Keep independent controls reachable while frozen.
  */
 export function adoptLegacyVersionUi(): () => void {
+  if (window.runmeVersions?.registerVersionUi)
+    return window.runmeVersions.registerVersionUi()
   if (window.runmeVersions?.uiVersion) return () => {}
   const panel = document.getElementById('runme-release-panel')
   const root = document.getElementById('root')

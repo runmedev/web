@@ -16,7 +16,9 @@ import {
   validateSelection,
   verifyCache,
 } from './control'
+import { loaderController } from './loaderController'
 import type { OfflineDownloadStatus, ReleaseRuntime } from './runtime'
+import { startupDiagnostics } from './startupDiagnostics'
 
 const tabId = crypto.randomUUID()
 const panel = document.createElement('section')
@@ -33,6 +35,8 @@ progressBar.setAttribute('aria-label', 'Release files verified')
 progressBar.style.cssText = 'width:100%;height:12px;accent-color:#5a3ae0'
 progressBar.hidden = true
 panel.append(progressBar)
+const diagnostics = startupDiagnostics()
+panel.append(diagnostics.element)
 let progress: ReleaseProgress | undefined
 document.body.append(panel)
 let runtime: ReleaseRuntime | undefined
@@ -46,6 +50,7 @@ let owner: SharedWorker | undefined
 let ownerKey = ''
 let dismissedCandidate: string | undefined
 let appReady = false
+let versionUiUsers = 0
 let transitioning = false
 let details = location.pathname === '/recovery.html'
 const recovery = details
@@ -125,6 +130,13 @@ function freeze(): void {
   if (root) root.inert = true
 }
 
+/** App readiness does not imply version controls exist: a newer launcher can
+ * host an older app. Hide fallback controls only after an explicit UI handoff.
+ */
+function updatePanelVisibility(): void {
+  panel.hidden = appReady && versionUiUsers > 0 && !recovery && !transitioning
+}
+
 /** A held tab lock is proof of liveness, including suspended tabs. No heartbeat
  * timeout removes participants. Release only on document destruction, not blur.
  */
@@ -151,46 +163,41 @@ async function closed(id: string): Promise<boolean> {
  * An existing pre-contract owner answers no sentinel handshake, so fail closed.
  */
 async function installLoader(): Promise<void> {
-  const registration =
-    (await navigator.serviceWorker.getRegistration('/')) ??
-    (await navigator.serviceWorker.register('/sw.js', {
-      updateViaCache: 'none',
-    }))
-  void registration.update().catch(() => {
-    /* Installed loader remains usable offline. */
+  report('Connecting to the installed loader…')
+  diagnostics.record('controller-state', 'info', {
+    controlled: Boolean(navigator.serviceWorker.controller),
+    workerState: navigator.serviceWorker.controller?.state ?? 'none',
   })
-  await navigator.serviceWorker.ready
-  if (!navigator.serviceWorker.controller) {
-    await new Promise<void>((resolve) =>
-      navigator.serviceWorker.addEventListener(
-        'controllerchange',
-        () => resolve(),
-        { once: true }
-      )
-    )
-  }
+  const controller = await diagnostics.step('loader-connection', () =>
+    loaderController(navigator.serviceWorker)
+  )
+  report('Checking loader compatibility with other tabs…')
   const channel = new MessageChannel()
-  await new Promise<void>((resolve, reject) => {
-    const timer = setTimeout(
-      () =>
-        reject(
-          new Error(
-            'Close all Runme tabs, then reopen Runme to finish installing the controlled loader. Preserve unsaved edits first.'
-          )
-        ),
-      10000
-    )
-    channel.port1.onmessage = (e) => {
-      clearTimeout(timer)
-      channel.port1.close()
-      if (e.data === 'runme-loader-1') resolve()
-      else
-        reject(new Error(String(e.data || 'Unsupported loader service worker')))
-    }
-    navigator.serviceWorker.controller!.postMessage('runme-loader-version', [
-      channel.port2,
-    ])
-  })
+  await diagnostics.step(
+    'loader-compatibility',
+    () =>
+      new Promise<void>((resolve, reject) => {
+        const timer = setTimeout(
+          () =>
+            reject(
+              new Error(
+                'Close all Runme tabs, then reopen Runme to finish installing the controlled loader. Preserve unsaved edits first.'
+              )
+            ),
+          10000
+        )
+        channel.port1.onmessage = (e) => {
+          clearTimeout(timer)
+          channel.port1.close()
+          if (e.data === 'runme-loader-1') resolve()
+          else
+            reject(
+              new Error(String(e.data || 'Unsupported loader service worker'))
+            )
+        }
+        controller.postMessage('runme-loader-version', [channel.port2])
+      })
+  )
   // Older protocol-1 workers do not recognize startup markers. Keep their eager
   // policy until the controlling worker can verify on-demand font responses.
   const capability = new MessageChannel()
@@ -204,35 +211,37 @@ async function installLoader(): Promise<void> {
       capability.port1.close()
       resolve(event.data === 'deferred-fonts-v1')
     }
-    navigator.serviceWorker.controller!.postMessage(
-      'runme-loader-font-policy',
-      [capability.port2]
-    )
+    controller.postMessage('runme-loader-font-policy', [capability.port2])
   })
+  report('Checking storage compatibility…')
   const legacy = new SharedWorker('/storage-owner.js', {
     type: 'module',
     name: 'runme-storage-owner',
   })
   try {
-    await new Promise<void>((resolve, reject) => {
-      const timer = setTimeout(
-        () =>
-          reject(
-            new Error(
-              'An older storage owner is still running. Save or download recovery copies in every old tab, close all Runme tabs, then reopen.'
-            )
-          ),
-        3000
-      )
-      legacy.port.onmessage = (e) => {
-        if (e.data === 'runme-legacy-owner-retired') {
-          clearTimeout(timer)
-          resolve()
-        }
-      }
-      legacy.port.start()
-      legacy.port.postMessage('retired?')
-    })
+    await diagnostics.step(
+      'legacy-storage-check',
+      () =>
+        new Promise<void>((resolve, reject) => {
+          const timer = setTimeout(
+            () =>
+              reject(
+                new Error(
+                  'An older storage owner is still running. Save or download recovery copies in every old tab, close all Runme tabs, then reopen.'
+                )
+              ),
+            3000
+          )
+          legacy.port.onmessage = (e) => {
+            if (e.data === 'runme-legacy-owner-retired') {
+              clearTimeout(timer)
+              resolve()
+            }
+          }
+          legacy.port.start()
+          legacy.port.postMessage('retired?')
+        })
+    )
   } finally {
     legacy.port.close()
   }
@@ -543,23 +552,31 @@ async function tick(): Promise<void> {
  * occur after admission; a mid-upgrade new tab cannot construct database readers.
  */
 async function boot(active: Active): Promise<void> {
-  await verifyCache(
-    active.manifest,
-    (value) => reportProgress('Checking installed release', value),
-    startupScope()
-  )
-  const admitted = await control((s) => {
-    if (s.transition || s.active?.epoch !== active.epoch) return false
-    s.tabs[tabId] = {
-      epoch: active.epoch,
-      releaseId: active.manifest.releaseId,
-      label:
-        new URLSearchParams(location.search).get('session') ??
-        tabId.slice(0, 8),
-    }
-    return true
+  diagnostics.record('selected-release', 'info', {
+    releaseId: active.manifest.releaseId,
   })
+  await diagnostics.step('cached-file-verification', () =>
+    verifyCache(
+      active.manifest,
+      (value) => reportProgress('Checking installed release', value),
+      startupScope()
+    )
+  )
+  const admitted = await diagnostics.step('tab-admission', () =>
+    control((s) => {
+      if (s.transition || s.active?.epoch !== active.epoch) return false
+      s.tabs[tabId] = {
+        epoch: active.epoch,
+        releaseId: active.manifest.releaseId,
+        label:
+          new URLSearchParams(location.search).get('session') ??
+          tabId.slice(0, 8),
+      }
+      return true
+    })
+  )
   if (!admitted) return
+  const finishAppStartup = diagnostics.begin('application-ready')
   runtime = window.runmeRelease = {
     active,
     tabId,
@@ -567,8 +584,9 @@ async function boot(active: Active): Promise<void> {
       // Notebook subscriptions repeat readiness after edits. Start background
       // caching once per page, not another full cache verification per edit.
       const firstReady = !appReady
+      if (firstReady) finishAppStartup()
       appReady = true
-      panel.hidden = !recovery && !transitioning
+      updatePanelVisibility()
       if (firstReady) void completeOffline(active.manifest)
       void control((s) => {
         if (s.active?.epoch === active.epoch)
@@ -591,6 +609,7 @@ async function boot(active: Active): Promise<void> {
   script.src =
     releasePrefix(active.manifest.releaseId) + active.manifest.appEntry
   script.onerror = () => {
+    finishAppStartup('failed')
     details = true
     report(
       'Application failed to load. Open recovery to retry or select a compatible cached release.'
@@ -608,7 +627,7 @@ async function render(): Promise<void> {
   transitioning = Boolean(s.transition)
   // Normal management belongs to Information. Startup/recovery and frozen-app
   // transitions retain independent controls, including cancel/resume.
-  panel.hidden = appReady && !recovery && !transitioning
+  updatePanelVisibility()
   uiKey = JSON.stringify([
     s.active?.epoch,
     s.candidate?.releaseId,
@@ -617,7 +636,8 @@ async function render(): Promise<void> {
     s.selection,
   ])
   for (const node of [...panel.children])
-    if (node !== status && node !== progressBar) node.remove()
+    if (node !== status && node !== progressBar && node !== diagnostics.element)
+      node.remove()
   report(
     s.active
       ? `Runme ${s.active.manifest.webCommit.slice(0, 8)} · ${s.selection.kind === 'channel' ? s.selection.name : 'pinned'}`
@@ -751,9 +771,14 @@ async function main(): Promise<void> {
   )
     history.replaceState(null, '', '/' + location.search + location.hash)
   report('Starting the installed release…')
+  diagnostics.record('launcher', 'info', {
+    path: new URL(import.meta.url).pathname,
+  })
   await installLoader()
-  await holdTab()
-  await render()
+  report('Registering this tab…')
+  await diagnostics.step('tab-liveness-lock', holdTab)
+  report('Reading the installed release…')
+  await diagnostics.step('initial-release-state', render)
   const query = new URLSearchParams(location.search)
   const requested = query.has('release')
     ? ({ kind: 'pinned', releaseId: query.get('release')! } as const)
@@ -776,7 +801,7 @@ async function main(): Promise<void> {
     const candidate = (await readControl()).candidate
     if (candidate) await begin(candidate)
   }
-  await tick()
+  await diagnostics.step('initial-coordination', tick)
   setInterval(() => void tick(), 1000)
   setInterval(
     () =>
@@ -801,6 +826,17 @@ async function main(): Promise<void> {
 }
 window.runmeVersions = {
   uiVersion: 1,
+  registerVersionUi: () => {
+    versionUiUsers++
+    updatePanelVisibility()
+    let released = false
+    return () => {
+      if (released) return
+      released = true
+      versionUiUsers--
+      updatePanelVisibility()
+    }
+  },
   status: () => status.textContent ?? '',
   progress: () => progress && { ...progress },
   offline: (id) => {
@@ -870,4 +906,4 @@ navigator.serviceWorker?.addEventListener('message', (event) => {
   if (event.data === 'runme-loader-probe')
     event.ports[0]?.postMessage('runme-loader-1')
 })
-void main().catch(report)
+void diagnostics.step('bootstrap', main).catch(report)
