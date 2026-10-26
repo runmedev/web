@@ -186,6 +186,29 @@ async function main() {
     await two.goto(base + '/?session=release-two')
     await ready(two)
     assert.equal(await active(two), a)
+    // A controlled tab can start from cache even if browser registration
+    // readiness is stalled. Keep real service workers, caches and app admission;
+    // only stall the two browser promises that must not gate a warm startup.
+    const warm = await context.newPage()
+    try {
+      await warm.addInitScript(() => {
+        Object.defineProperty(navigator.serviceWorker, 'ready', {
+          get: () => new Promise(() => {}),
+        })
+        navigator.serviceWorker.getRegistration = () => new Promise(() => {})
+      })
+      await warm.goto(base + '/?session=release-warm-start')
+      await ready(warm)
+      assert.equal(await active(warm), a)
+      await warm.screenshot({
+        path: output + '/warm-start-stalled-registration.png',
+      })
+      console.log(
+        'PASS: cached startup does not wait for registration readiness'
+      )
+    } finally {
+      await warm.close()
+    }
     await fetch(base + '/test/promote?release=b', { method: 'POST' })
     await one.reload()
     await ready(one)

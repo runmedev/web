@@ -9,6 +9,11 @@ CUJs in `run-cuj-scenarios.ts`.
 Acceptance:
 
 - An uncontrolled legacy window blocks initial admission until it closes.
+- An already-controlled tab opens the installed app even if service-worker
+  registration lookup and readiness never settle. The browser journey retains
+  real cached assets, workers and tab admission, and saves a screenshot of the
+  successfully opened app. Unit tests separately verify a bounded error when
+  first installation never supplies a controller.
 - Startup shows verified-file progress. Blocking every font request still allows
   the app to open and report incomplete offline readiness. Retrying after fonts
   become available completes the offline cache without activating another release.

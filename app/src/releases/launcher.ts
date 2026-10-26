@@ -16,6 +16,7 @@ import {
   validateSelection,
   verifyCache,
 } from './control'
+import { loaderController } from './loaderController'
 import type { OfflineDownloadStatus, ReleaseRuntime } from './runtime'
 
 const tabId = crypto.randomUUID()
@@ -151,24 +152,9 @@ async function closed(id: string): Promise<boolean> {
  * An existing pre-contract owner answers no sentinel handshake, so fail closed.
  */
 async function installLoader(): Promise<void> {
-  const registration =
-    (await navigator.serviceWorker.getRegistration('/')) ??
-    (await navigator.serviceWorker.register('/sw.js', {
-      updateViaCache: 'none',
-    }))
-  void registration.update().catch(() => {
-    /* Installed loader remains usable offline. */
-  })
-  await navigator.serviceWorker.ready
-  if (!navigator.serviceWorker.controller) {
-    await new Promise<void>((resolve) =>
-      navigator.serviceWorker.addEventListener(
-        'controllerchange',
-        () => resolve(),
-        { once: true }
-      )
-    )
-  }
+  report('Connecting to the installed loader…')
+  const controller = await loaderController(navigator.serviceWorker)
+  report('Checking loader compatibility with other tabs…')
   const channel = new MessageChannel()
   await new Promise<void>((resolve, reject) => {
     const timer = setTimeout(
@@ -187,9 +173,7 @@ async function installLoader(): Promise<void> {
       else
         reject(new Error(String(e.data || 'Unsupported loader service worker')))
     }
-    navigator.serviceWorker.controller!.postMessage('runme-loader-version', [
-      channel.port2,
-    ])
+    controller.postMessage('runme-loader-version', [channel.port2])
   })
   // Older protocol-1 workers do not recognize startup markers. Keep their eager
   // policy until the controlling worker can verify on-demand font responses.
@@ -204,11 +188,9 @@ async function installLoader(): Promise<void> {
       capability.port1.close()
       resolve(event.data === 'deferred-fonts-v1')
     }
-    navigator.serviceWorker.controller!.postMessage(
-      'runme-loader-font-policy',
-      [capability.port2]
-    )
+    controller.postMessage('runme-loader-font-policy', [capability.port2])
   })
+  report('Checking storage compatibility…')
   const legacy = new SharedWorker('/storage-owner.js', {
     type: 'module',
     name: 'runme-storage-owner',
@@ -752,7 +734,9 @@ async function main(): Promise<void> {
     history.replaceState(null, '', '/' + location.search + location.hash)
   report('Starting the installed release…')
   await installLoader()
+  report('Registering this tab…')
   await holdTab()
+  report('Reading the installed release…')
   await render()
   const query = new URLSearchParams(location.search)
   const requested = query.has('release')
