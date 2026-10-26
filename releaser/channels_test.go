@@ -57,7 +57,7 @@ func TestRuntimePublicationAndStablePin(t *testing.T) {
 		dist := desiredBuildFixture(t, inputs)
 		buildID, _ := inputs.id()
 		id := inputs.WebCommit + "-" + buildID
-		metadata := map[string]any{"releaseId": id, "appEntry": "app.js", "styles": []string{}, "requiredCapabilities": []string{"durable-prepare-v1", "epoch-fence-v1", "owner-lock-v1"}, "owner": map[string]any{"buildId": strings.Split(id, "-")[1], "entry": "storage-owner.js", "rpcMin": 8, "rpcMax": 8}, "launcherProtocol": map[string]any{"min": 1, "max": 1}, "storageCompatibilityId": "runme-schema9-oplog2-payload1-console1"}
+		metadata := map[string]any{"recoveredControlFormat": 1, "releaseId": id, "appEntry": "app.js", "styles": []string{}, "requiredCapabilities": []string{"durable-prepare-v1", "epoch-fence-v1", "owner-lock-v1"}, "owner": map[string]any{"buildId": strings.Split(id, "-")[1], "entry": "storage-owner.js", "rpcMin": 8, "rpcMax": 8}, "launcherProtocol": map[string]any{"min": 1, "max": 1}, "storageCompatibilityId": "runme-schema9-oplog2-payload1-console1"}
 		receipt, _ := json.Marshal(releaseAcceptance{1, id, "controlled-releases-v1"})
 		writeArchiveFixture(t, dist, "release-acceptance.json", string(receipt))
 		raw, _ := json.Marshal(metadata)
@@ -74,6 +74,10 @@ func TestRuntimePublicationAndStablePin(t *testing.T) {
 		return id
 	}
 	first := publish(true)
+	manifestRaw, _, err := readObject(ctx, inputs.Bucket, "version/"+first+"/release.json")
+	if err != nil || !strings.Contains(string(manifestRaw), `"recoveredControlFormat": 1`) {
+		t.Fatal("recovery capability missing from published manifest", err)
+	}
 	stable, _, err := readObject(ctx, inputs.Bucket, "channels/stable.json")
 	if err != nil {
 		t.Fatal(err)

@@ -17,6 +17,7 @@ import {
   verifyCache,
 } from './control'
 import { loaderController } from './loaderController'
+import { recoverUnreadableControl } from './recoverControl'
 import { ReleaseControlError } from './releaseDatabase'
 import type { OfflineDownloadStatus, ReleaseRuntime } from './runtime'
 import { startupDiagnostics } from './startupDiagnostics'
@@ -291,7 +292,12 @@ async function beginLocked(target: Manifest): Promise<void> {
     (value) => reportProgress('Verifying downloaded release', value),
     startupScope()
   )
-  const pending = (await readControl()).transition
+  const current = await readControl()
+  if (current.recoveredControlFormat && target.recoveredControlFormat !== 1)
+    throw new Error(
+      'This release predates release-settings recovery. Choose a newer release.'
+    )
+  const pending = current.transition
   if (pending?.phase === 'handoff') {
     // Recovery can replace a failed candidate only while no storage owner exists.
     // A frozen/unresponsive owner is never evicted by a timeout.
@@ -348,7 +354,7 @@ async function beginLocked(target: Manifest): Promise<void> {
       id: crypto.randomUUID(),
       from: s.active,
       target,
-      epoch: (s.active?.epoch ?? 0) + 1,
+      epoch: Math.max(s.active?.epoch ?? 0, s.epochBase ?? 0) + 1,
       phase: 'prepare',
       participants: Object.fromEntries(
         Object.entries(s.tabs).map(([id, tab]) => [id, { epoch: tab.epoch }])
@@ -845,6 +851,7 @@ function showStartupRecovery(error: unknown): void {
   if (error instanceof ReleaseControlError)
     diagnostics.record(`release-settings-${error.stage}`, 'failed', {
       ...error.diagnosticDetails,
+      stage: `release-settings-${error.stage}`,
     })
   for (const node of [...panel.children])
     if (node !== status && node !== progressBar && node !== diagnostics.element)
@@ -890,7 +897,14 @@ async function recoverStartup(
       prepareStartupRecovery(
         selection,
         (value) => reportProgress('Preparing recovery release', value),
-        startupScope()
+        startupScope(),
+        async (candidate) => {
+          if (runtime || appReady)
+            throw new Error('Reload before repairing release settings.')
+          await diagnostics.step('quarantine-unreadable-settings', () =>
+            recoverUnreadableControl(tabId, selection, candidate)
+          )
+        }
       )
     )
     if (!(await readControl()).transition) await begin(candidate)
@@ -999,6 +1013,7 @@ void diagnostics.step('bootstrap', main).catch((error) => {
   if (startupPrepared && error instanceof ReleaseControlError) {
     diagnostics.record(`release-settings-${error.stage}`, 'failed', {
       ...error.diagnosticDetails,
+      stage: `release-settings-${error.stage}`,
     })
     void recoverStartup()
   } else report(error)

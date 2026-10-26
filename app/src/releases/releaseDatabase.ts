@@ -1,4 +1,5 @@
 import { appLogger } from '../lib/logging/runtime'
+import { readControlValue, writeControlValue } from './controlChunks'
 
 const DEADLINE_MS = 5000
 
@@ -85,7 +86,7 @@ function openDatabase(name: string): Promise<IDBDatabase> {
     }
     const timer = setTimeout(() => fail('timeout'), DEADLINE_MS)
     try {
-      request = indexedDB.open(name, 1)
+      request = indexedDB.open(name)
       request.onblocked = () => fail('blocked')
       request.onerror = () => fail('failed', request.error)
       request.onupgradeneeded = () => {
@@ -165,25 +166,20 @@ export async function releaseTransaction<T>(
         const request = table.get('control')
         request.onerror = () =>
           fail(new ReleaseControlError('read', 'failed', 'get', request.error))
-        request.onsuccess = () => {
+        const accept = (value: unknown) => {
           if (settled) return
           try {
-            const next = mutate(request.result)
+            const next = mutate(value)
             result = next.result
             stage = 'commit'
             if (write) {
               operation = 'put'
               try {
-                const put = table.put(next.state, 'control')
-                put.onerror = () =>
+                writeControlValue(table, next.state, db.version > 1, (error) =>
                   fail(
-                    new ReleaseControlError(
-                      'commit',
-                      'failed',
-                      'put',
-                      put.error
-                    )
+                    new ReleaseControlError('commit', 'failed', 'put', error)
                   )
+                )
               } catch (error) {
                 fail(new ReleaseControlError('commit', 'failed', 'put', error))
                 return
@@ -194,6 +190,12 @@ export async function releaseTransaction<T>(
             fail(error)
           }
         }
+        request.onsuccess = () => {
+          if (!settled)
+            readControlValue(table, request.result, accept, (error) =>
+              fail(new ReleaseControlError('read', 'failed', 'get', error))
+            )
+        }
       } catch (error) {
         fail(new ReleaseControlError(stage, 'failed', operation, error))
       }
@@ -201,4 +203,71 @@ export async function releaseTransaction<T>(
   } finally {
     db.close()
   }
+}
+
+/** Only irrecoverable value reads qualify for quarantine. Transient errors,
+ * missing records, and blocked opens must never discard coordination state.
+ */
+export function isUnreadableControl(error: unknown): boolean {
+  return (
+    error instanceof ReleaseControlError &&
+    error.stage === 'read' &&
+    error.operation === 'get' &&
+    error.diagnosticDetails.browserError === 'NotReadableError'
+  )
+}
+
+/** Caller must hold exclusive storage ownership and prove no other live tabs.
+ * Rename rather than delete the damaged store; old version-1 readers are fenced
+ * by the schema bump. Upgrade abort/timeout rolls back both rename and writes.
+ */
+export async function quarantineControlDatabase(
+  name: string,
+  state: unknown
+): Promise<void> {
+  const prior = await openDatabase(name)
+  const version = prior.version
+  prior.close()
+  await new Promise<void>((resolve, reject) => {
+    let settled = false
+    const request = indexedDB.open(name, version + 1)
+    const fail = (
+      reason: 'failed' | 'blocked' | 'timeout',
+      cause?: unknown
+    ) => {
+      if (settled) return
+      settled = true
+      clearTimeout(timer)
+      try {
+        request.transaction?.abort()
+      } catch {
+        /* Already ended. */
+      }
+      reject(new ReleaseControlError('open', reason, 'upgrade', cause))
+    }
+    const timer = setTimeout(() => fail('timeout'), DEADLINE_MS)
+    request.onerror = () => fail('failed', request.error)
+    request.onblocked = () => fail('blocked')
+    request.onupgradeneeded = () => {
+      if (settled) {
+        request.transaction?.abort()
+        return
+      }
+      try {
+        request.transaction!.objectStore('state').name =
+          `unreadable-state-${version}`
+        const table = request.result.createObjectStore('state')
+        writeControlValue(table, state, true, (error) => fail('failed', error))
+      } catch (error) {
+        fail('failed', error)
+      }
+    }
+    request.onsuccess = () => {
+      request.result.close()
+      if (settled) return
+      settled = true
+      clearTimeout(timer)
+      resolve()
+    }
+  })
 }

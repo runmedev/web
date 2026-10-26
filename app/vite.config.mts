@@ -187,6 +187,7 @@ function pwaServiceWorkerPlugin(): Plugin {
         this.emitFile({ type: 'asset', fileName: 'release-metadata.json', source: JSON.stringify({
           releaseId, appEntry: entry.fileName,
           styles: [...(entry.viteMetadata?.importedCss ?? [])],
+          recoveredControlFormat: 1,
           requiredCapabilities: ['durable-prepare-v1', 'epoch-fence-v1', 'owner-lock-v1'], testedRollbackTargets: [],
           owner: { buildId: releaseId.split('-')[1], entry: 'storage-owner.js', rpcMin: 8, rpcMax: 8 },
           launcherProtocol: { min: 1, max: 1 },

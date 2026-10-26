@@ -31,6 +31,11 @@ Acceptance:
   Retrying after the browser recovers opens the app without resetting stored state.
   Unit tests cover missing records, blocked/failed/late opens, read failures,
   stalled commits, abort cleanup, and preserving existing epochs/transitions.
+- An irrecoverable settings value (`NotReadableError`) is quarantined only when
+  no storage owner or other tab remains. The old object store is preserved, a
+  version bump fences older readers, and the recovered state uses bounded chunks.
+  The browser test verifies an existing notebook survives repair and reload.
+  Unit tests reject repair for live owners/tabs and transient errors.
 - Deploy B while A is installed. Refresh and new tabs still use A.
 - Channel changes and exact pins only stage; activation requires Upgrade all tabs.
 - Pending notebook edits in multiple tabs persist before upgrade readiness.
