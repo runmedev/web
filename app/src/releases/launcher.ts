@@ -1,7 +1,6 @@
 import {
   type Active,
   type Manifest,
-  OWNER_LOCK,
   type ReleaseProgress,
   type Selection,
   control,
@@ -18,6 +17,7 @@ import {
 } from './control'
 import { loaderController } from './loaderController'
 import { recoverUnreadableControl } from './recoverControl'
+import { withRecoveryOwner } from './recoveryOwnerLock'
 import { ReleaseControlError } from './releaseDatabase'
 import type { OfflineDownloadStatus, ReleaseRuntime } from './runtime'
 import { startupDiagnostics } from './startupDiagnostics'
@@ -301,38 +301,30 @@ async function beginLocked(target: Manifest): Promise<void> {
   if (pending?.phase === 'handoff') {
     // Recovery can replace a failed candidate only while no storage owner exists.
     // A frozen/unresponsive owner is never evicted by a timeout.
-    await navigator.locks.request(
-      OWNER_LOCK,
-      { ifAvailable: true },
-      async (lock) => {
-        if (!lock)
+    await withRecoveryOwner(async () => {
+      await control((s) => {
+        if (s.transition?.id !== pending.id || !s.ownerError)
           throw new Error(
-            'A storage owner is still draining or starting; wait or close its tabs'
+            'Wait for candidate startup or retry the pending upgrade'
           )
-        await control((s) => {
-          if (s.transition?.id !== pending.id || !s.ownerError)
-            throw new Error(
-              'Wait for candidate startup or retry the pending upgrade'
-            )
-          if (
-            pending.target.storageCompatibilityId !==
-            target.storageCompatibilityId
+        if (
+          pending.target.storageCompatibilityId !==
+          target.storageCompatibilityId
+        )
+          throw new Error('Incompatible recovery release')
+        if (s.emergencyRestart)
+          throw new Error(
+            'Finish the pending storage recovery before upgrading'
           )
-            throw new Error('Incompatible recovery release')
-          if (s.emergencyRestart)
-            throw new Error(
-              'Finish the pending storage recovery before upgrading'
-            )
-          s.transition = {
-            ...pending,
-            id: crypto.randomUUID(),
-            target,
-            epoch: pending.epoch + 1,
-          }
-          delete s.ownerError
-        })
-      }
-    )
+        s.transition = {
+          ...pending,
+          id: crypto.randomUUID(),
+          target,
+          epoch: pending.epoch + 1,
+        }
+        delete s.ownerError
+      })
+    })
     ownerKey = ''
     await render()
     return
