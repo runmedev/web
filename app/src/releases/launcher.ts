@@ -17,8 +17,10 @@ import {
   verifyCache,
 } from './control'
 import { loaderController } from './loaderController'
+import { ReleaseControlError } from './releaseDatabase'
 import type { OfflineDownloadStatus, ReleaseRuntime } from './runtime'
 import { startupDiagnostics } from './startupDiagnostics'
+import { prepareStartupRecovery } from './startupRecovery'
 
 const tabId = crypto.randomUUID()
 const panel = document.createElement('section')
@@ -54,6 +56,8 @@ let versionUiUsers = 0
 let transitioning = false
 let details = location.pathname === '/recovery.html'
 const recovery = details
+let startupPrepared = false
+let recoveringStartup = false
 let deferredFonts = false
 const startupScope = (): 'startup' | 'all' =>
   deferredFonts ? 'startup' : 'all'
@@ -777,14 +781,22 @@ async function main(): Promise<void> {
   await installLoader()
   report('Registering this tab…')
   await diagnostics.step('tab-liveness-lock', holdTab)
+  startupPrepared = true
+  await startRelease()
+}
+
+/** Run admission only after loader compatibility and tab liveness are ready. */
+async function startRelease(applyRequest = true): Promise<void> {
   report('Reading the installed release…')
   await diagnostics.step('initial-release-state', render)
   const query = new URLSearchParams(location.search)
-  const requested = query.has('release')
-    ? ({ kind: 'pinned', releaseId: query.get('release')! } as const)
-    : query.has('channel')
-      ? ({ kind: 'channel', name: query.get('channel')! } as Selection)
-      : undefined
+  const requested = !applyRequest
+    ? undefined
+    : query.has('release')
+      ? ({ kind: 'pinned', releaseId: query.get('release')! } as const)
+      : query.has('channel')
+        ? ({ kind: 'channel', name: query.get('channel')! } as Selection)
+        : undefined
   if (requested) {
     try {
       await control((s) => {
@@ -824,6 +836,83 @@ async function main(): Promise<void> {
       report(`Installed release available. Update check: ${String(error)}`)
     )
 }
+/** Recovery controls must not depend on a successful settings read. A missing
+ * settings service cannot be allowed to hide the only way to retry or choose a
+ * release. No notebook/coordination data is cleared by these actions.
+ */
+function showStartupRecovery(error: unknown): void {
+  panel.hidden = false
+  if (error instanceof ReleaseControlError)
+    diagnostics.record(`release-settings-${error.stage}`, 'failed', {
+      reason: error.reason,
+    })
+  for (const node of [...panel.children])
+    if (node !== status && node !== progressBar && node !== diagnostics.element)
+      node.remove()
+  report(
+    `${String(error instanceof Error ? error.message : error)} Retry loading stable, or choose another release below. Browser storage must respond before Runme can safely open notebooks.`
+  )
+  button('Retry latest stable', () => recoverStartup())
+  button('Try latest channel', () =>
+    recoverStartup({ kind: 'channel', name: 'latest' })
+  )
+  const label = document.createElement('label')
+  label.textContent = 'Exact release ID '
+  const input = document.createElement('input')
+  input.placeholder = '<commit>-<build ID>'
+  label.append(input)
+  panel.append(label)
+  button('Try exact release', () =>
+    recoverStartup(
+      validateSelection({ kind: 'pinned', releaseId: input.value.trim() })
+    )
+  )
+  // An expanded trace must never push the recovery actions below the fold.
+  panel.append(diagnostics.element)
+}
+
+/** Prefer latest stable after a settings failure. Downloads do not need the
+ * settings DB; activation still uses the usual prepare/handoff and owner lock.
+ * Existing transitions are resumed, never discarded to force a new version.
+ */
+async function recoverStartup(
+  selection: Selection = { kind: 'channel', name: 'stable' }
+): Promise<void> {
+  if (recoveringStartup) return
+  recoveringStartup = true
+  try {
+    report(
+      selection.kind === 'channel' && selection.name === 'stable'
+        ? 'Release settings unavailable. Trying the latest stable release…'
+        : 'Trying the selected recovery release…'
+    )
+    const candidate = await diagnostics.step('startup-fallback', () =>
+      prepareStartupRecovery(
+        selection,
+        (value) => reportProgress('Preparing recovery release', value),
+        startupScope()
+      )
+    )
+    if (!(await readControl()).transition) await begin(candidate)
+    await startRelease(false)
+  } catch (error) {
+    // Offline discovery must not prevent an already installed release from
+    // starting if IndexedDB has recovered. Do not reapply a broken URL selection.
+    try {
+      const state = await readControl()
+      if (state.active || state.transition) {
+        await startRelease(false)
+        return
+      }
+    } catch {
+      /* Keep recovery reachable even when storage remains unavailable. */
+    }
+    showStartupRecovery(error)
+  } finally {
+    recoveringStartup = false
+  }
+}
+
 window.runmeVersions = {
   uiVersion: 1,
   registerVersionUi: () => {
@@ -906,4 +995,11 @@ navigator.serviceWorker?.addEventListener('message', (event) => {
   if (event.data === 'runme-loader-probe')
     event.ports[0]?.postMessage('runme-loader-1')
 })
-void diagnostics.step('bootstrap', main).catch(report)
+void diagnostics.step('bootstrap', main).catch((error) => {
+  if (startupPrepared && error instanceof ReleaseControlError) {
+    diagnostics.record(`release-settings-${error.stage}`, 'failed', {
+      reason: error.reason,
+    })
+    void recoverStartup()
+  } else report(error)
+})
