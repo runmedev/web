@@ -341,9 +341,34 @@ async function main() {
           `const d=await notebooks.createLocal('settings-recovery.runme'); await notebooks.show(d.handle.uri); await notebooks.appendCell({target:{uri:d.handle.uri},kind:'markup',value:'Preserve this notebook through settings recovery'}); console.log(d.handle.uri)`
         )
       ).trim()
+      // Seed a mounted folder in the real notebook database, independently of
+      // the control database being damaged. Verify the actual Explorer restores
+      // it before and after repair, not just that notebook payloads survive.
+      await original.evaluate(async () => {
+        await new Promise<void>((resolve, reject) => {
+          const request = indexedDB.open('runme-local-notebooks')
+          request.onerror = () => reject(request.error)
+          request.onsuccess = () => {
+            const db = request.result
+            const tx = db.transaction('folders', 'readwrite')
+            tx.objectStore('folders').put({
+              id: 'local://folder/recovery-fixture',
+              remoteId: 'local://folder/recovery-fixture',
+              name: 'Preserved workspace folder',
+              children: [],
+            })
+            tx.oncomplete = () => { db.close(); resolve() }
+            tx.onabort = tx.onerror = () => { db.close(); reject(tx.error) }
+          }
+        })
+        const workspace = JSON.parse(localStorage.getItem('runme/workspace')!)
+        workspace.items.push('local://folder/recovery-fixture')
+        localStorage.setItem('runme/workspace', JSON.stringify(workspace))
+      })
       await original.evaluate(() => (window as any).runmeRelease.prepare())
       await original.reload()
       await ready(original)
+      await original.getByText('Preserved workspace folder', { exact: true }).waitFor()
       assert.match(
         await execute(
           original,
@@ -410,6 +435,7 @@ async function main() {
           .click()
       }
       await ready(repaired)
+      await repaired.getByText('Preserved workspace folder', { exact: true }).waitFor()
       const repairState = await repaired.evaluate(() =>
         (window as any).runmeVersions.get()
       )
@@ -455,6 +481,7 @@ async function main() {
       assert.equal(schema.encoding, 'runme-control-json-chunks-v1')
       await repaired.reload()
       await ready(repaired)
+      await repaired.getByText('Preserved workspace folder', { exact: true }).waitFor()
       assert.match(
         await execute(
           repaired,

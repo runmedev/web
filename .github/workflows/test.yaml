@@ -79,6 +79,7 @@ jobs:
         run: >-
           pnpm -C app exec vitest run
           src/lib/explorerSync.test.ts
+          src/contexts/WorkspaceContext.test.tsx
           src/components/Workspace/WorkspaceExplorer.test.tsx
           --maxWorkers=2 --minWorkers=1
       - name: Test desktop renderer and workload identity integration

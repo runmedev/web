@@ -382,7 +382,7 @@ describe('WorkspaceExplorer current document handling', () => {
     expect(screen.getAllByText('Nested mount')).toHaveLength(1)
   })
 
-  it('removes and logs workspace roots whose local metadata is missing', async () => {
+  it('retains and logs workspace roots whose local metadata is missing', async () => {
     const staleUris = ['local://folder/stale-one', 'local://folder/stale-two']
     const errorLog = vi.spyOn(appLogger, 'error')
     mocks.workspaceItems = [
@@ -406,16 +406,12 @@ describe('WorkspaceExplorer current document handling', () => {
     render(<WorkspaceExplorer />)
 
     await screen.findByText('Valid root')
-    await waitFor(() => {
-      for (const staleUri of staleUris) {
-        expect(mocks.removeItem).toHaveBeenCalledWith(staleUri)
-      }
-    })
+    expect(mocks.removeItem).not.toHaveBeenCalled()
     expect(errorLog).toHaveBeenCalledTimes(staleUris.length)
     for (const staleUri of staleUris) {
       expect(screen.queryByText(staleUri)).toBeNull()
       expect(errorLog).toHaveBeenCalledWith(
-        'Removing workspace entry with missing local metadata',
+        'Retaining workspace entry with missing local metadata',
         {
           attrs: {
             scope: 'storage.workspace',
