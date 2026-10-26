@@ -242,6 +242,88 @@ async function main() {
     } finally {
       await warm.close()
     }
+    // A stuck settings open must not strand the launcher. Keep the real DB and
+    // workers for retry/admission, injecting only the browser operation failure.
+    const settings = await context.newPage()
+    try {
+      await settings.addInitScript(() => {
+        const open = indexedDB.open.bind(indexedDB)
+        let stalled = false
+        indexedDB.open = ((name: string, version?: number) => {
+          if (name === 'runme-release-control' && !stalled) {
+            stalled = true
+            return {} as IDBOpenDBRequest
+          }
+          return open(name, version)
+        }) as typeof indexedDB.open
+      })
+      await settings.goto(base + '/?session=settings-transient-failure')
+      await ready(settings)
+      assert.equal(await active(settings), a)
+      await waitControl(
+        settings,
+        (s) => s.selection.kind === 'channel' && s.selection.name === 'stable'
+      )
+      const trace = await settings
+        .locator('#runme-startup-diagnostics-log')
+        .textContent()
+      assert.ok(trace?.includes('release-settings-open'))
+      assert.ok(trace?.includes('startup-fallback'))
+      await settings.screenshot({
+        path: output + '/settings-transient-recovered.png',
+      })
+      console.log(
+        'PASS: stalled settings open automatically recovers through stable and normal admission'
+      )
+    } finally {
+      await settings.close()
+    }
+    const unavailable = await context.newPage()
+    try {
+      await unavailable.addInitScript(() => {
+        const open = indexedDB.open.bind(indexedDB)
+        ;(window as any).__settingsUnavailable = true
+        indexedDB.open = ((name: string, version?: number) => {
+          if (
+            name === 'runme-release-control' &&
+            (window as any).__settingsUnavailable
+          )
+            return {} as IDBOpenDBRequest
+          return open(name, version)
+        }) as typeof indexedDB.open
+      })
+      await unavailable.goto(base + '/?session=settings-unavailable')
+      await unavailable
+        .getByRole('button', { name: 'Retry latest stable', exact: true })
+        .waitFor({ timeout: 60000 })
+      assert.equal(await active(unavailable), undefined)
+      assert.equal(await active(one), a)
+      await unavailable
+        .getByRole('button', { name: 'Try latest channel', exact: true })
+        .waitFor()
+      await unavailable
+        .getByRole('button', { name: 'Try exact release', exact: true })
+        .waitFor()
+      await unavailable.screenshot({
+        path: output + '/settings-unavailable-recovery.png',
+      })
+      await unavailable.evaluate(() => {
+        ;(window as any).__settingsUnavailable = false
+      })
+      await unavailable
+        .getByRole('button', { name: 'Retry latest stable', exact: true })
+        .click()
+      await ready(unavailable)
+      assert.equal(await active(unavailable), a)
+      await unavailable.screenshot({
+        path: output + '/settings-manual-recovered.png',
+      })
+      console.log(
+        'PASS: unavailable settings expose independent recovery controls and retry preserves normal ownership'
+      )
+    } finally {
+      await unavailable.close()
+    }
     await fetch(base + '/test/promote?release=b', { method: 'POST' })
     await one.reload()
     await ready(one)

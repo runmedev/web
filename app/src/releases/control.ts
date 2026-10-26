@@ -1,3 +1,5 @@
+import { releaseTransaction } from './releaseDatabase'
+
 /** Loader protocol 1 is independent of notebook schemas and application builds. */
 export const CONTROL_DB = 'runme-release-control'
 export const OWNER_LOCK = 'runme-storage-owner-lifetime-v1'
@@ -73,42 +75,17 @@ export async function control<T>(
   mutate: (state: Control) => T,
   write = true
 ): Promise<T> {
-  const db = await new Promise<IDBDatabase>((resolve, reject) => {
-    const request = indexedDB.open(CONTROL_DB, 1)
-    request.onupgradeneeded = () => request.result.createObjectStore('state')
-    request.onsuccess = () => resolve(request.result)
-    request.onerror = () => reject(request.error)
+  return releaseTransaction(CONTROL_DB, write, (value) => {
+    const state: Control = (value as Control | undefined) ?? {
+      format: 1,
+      selection: { kind: 'channel', name: 'stable' },
+      tabs: {},
+    }
+    if (state.format !== 1)
+      throw new Error('Unsupported release-control format')
+    const result = mutate(state)
+    return { state, result }
   })
-  try {
-    return await new Promise<T>((resolve, reject) => {
-      const tx = db.transaction('state', write ? 'readwrite' : 'readonly')
-      const table = tx.objectStore('state')
-      const request = table.get('control')
-      let result: T
-      let failure: unknown
-      request.onsuccess = () => {
-        try {
-          const state: Control = request.result ?? {
-            format: 1,
-            selection: { kind: 'channel', name: 'stable' },
-            tabs: {},
-          }
-          if (state.format !== 1)
-            throw new Error('Unsupported release-control format')
-          result = mutate(state)
-          if (write) table.put(state, 'control')
-        } catch (error) {
-          failure = error
-          tx.abort()
-        }
-      }
-      tx.oncomplete = () => resolve(result)
-      tx.onabort = tx.onerror = () =>
-        reject(failure ?? tx.error ?? new Error('Release transaction failed'))
-    })
-  } finally {
-    db.close()
-  }
 }
 
 export const readControl = () => control((state) => state, false)

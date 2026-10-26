@@ -25,6 +25,12 @@ Acceptance:
 - Startup diagnostics expose timestamped stage, duration, and waiting/failure
   events before the app starts. The trace is bounded, stays in memory, and does
   not include notebook data, credentials, or URL query parameters.
+- A stalled release-settings open times out and automatically tries latest stable
+  through verified downloads and normal admission. Persistent settings failures
+  expose retry, channel and exact-release controls without accessing IndexedDB.
+  Retrying after the browser recovers opens the app without resetting stored state.
+  Unit tests cover missing records, blocked/failed/late opens, read failures,
+  stalled commits, abort cleanup, and preserving existing epochs/transitions.
 - Deploy B while A is installed. Refresh and new tabs still use A.
 - Channel changes and exact pins only stage; activation requires Upgrade all tabs.
 - Pending notebook edits in multiple tabs persist before upgrade readiness.
