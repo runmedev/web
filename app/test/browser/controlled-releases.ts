@@ -338,9 +338,20 @@ async function main() {
       const savedUri = (
         await execute(
           original,
-          `const d=await notebooks.createLocal('settings-recovery.runme'); await notebooks.appendCell({target:{uri:d.handle.uri},kind:'markup',value:'Preserve this notebook through settings recovery'}); console.log(d.handle.uri)`
+          `const d=await notebooks.createLocal('settings-recovery.runme'); await notebooks.show(d.handle.uri); await notebooks.appendCell({target:{uri:d.handle.uri},kind:'markup',value:'Preserve this notebook through settings recovery'}); console.log(d.handle.uri)`
         )
       ).trim()
+      await original.evaluate(() => (window as any).runmeRelease.prepare())
+      await original.reload()
+      await ready(original)
+      assert.match(
+        await execute(
+          original,
+          `console.log((await notebooks.get({uri:${JSON.stringify(savedUri)}})).notebook.cells.map(c=>c.value).join('\\n'))`
+        ),
+        /Preserve this notebook/,
+        'The setup must be durable before injecting damage'
+      )
       await original.close()
       const repaired = await damagedContext.newPage()
       await repaired.addInitScript(() => {
@@ -457,6 +468,17 @@ async function main() {
       console.log(
         'PASS: irrecoverable settings are quarantined; notebooks survive recovery and reload'
       )
+    } catch (error) {
+      for (const page of damagedContext.pages()) {
+        console.error(
+          'Damaged-profile diagnostics',
+          await page.locator('body').innerText().catch(String)
+        )
+        await page
+          .screenshot({ path: output + '/settings-repair-failure.png' })
+          .catch(() => {})
+      }
+      throw error
     } finally {
       await damagedContext.close()
     }
