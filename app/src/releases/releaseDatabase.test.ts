@@ -8,7 +8,7 @@ import { ReleaseControlError, releaseTransaction } from './releaseDatabase'
  */
 function database(value?: unknown) {
   const get: any = { result: value }
-  const table = { get: vi.fn(() => get), put: vi.fn() }
+  const table = { get: vi.fn(() => get), put: vi.fn(() => ({}) as any) }
   const tx: any = { objectStore: () => table, abort: vi.fn() }
   const db: any = {
     transaction: vi.fn(() => tx),
@@ -224,4 +224,69 @@ it('reports a missing store or transaction creation error and closes the connect
   await opened(mock)
   await failed
   expect(mock.db.close).toHaveBeenCalledOnce()
+})
+
+it.each(['open', 'transaction', 'get', 'put'] as const)(
+  'retains the browser error and identifies the %s operation',
+  async (operation) => {
+    const mock = database()
+    const cause = new DOMException('private record contents', 'NotFoundError')
+    const failed = expect(control(() => 'ok')).rejects.toMatchObject({
+      cause,
+      operation,
+      diagnosticDetails: { operation, browserError: 'NotFoundError' },
+    })
+    if (operation === 'open') {
+      mock.open.error = cause
+      mock.open.onerror()
+    } else {
+      if (operation === 'transaction')
+        mock.db.transaction.mockImplementation(() => {
+          throw cause
+        })
+      await opened(mock)
+      if (operation === 'get') {
+        mock.get.error = cause
+        mock.get.onerror()
+      } else if (operation === 'put') {
+        mock.table.put.mockImplementation(() => {
+          throw cause
+        })
+        mock.get.onsuccess()
+      }
+    }
+    await failed
+  }
+)
+
+it('reports a delayed put error without losing it to the transaction abort', async () => {
+  const mock = database()
+  const cause = new DOMException('disk full', 'QuotaExceededError')
+  const put = { error: cause } as IDBRequest<IDBValidKey>
+  mock.table.put.mockReturnValue(put)
+  const failed = expect(control(() => 'ok')).rejects.toMatchObject({
+    operation: 'put',
+    cause,
+    reason: 'failed',
+  })
+  await opened(mock)
+  mock.get.onsuccess()
+  put.onerror!.call(put, new Event('error'))
+  mock.tx.onabort()
+  await failed
+})
+
+it('keeps exception text and arbitrary names out of visible diagnostics', () => {
+  const cause = new DOMException('private record contents', 'NotFoundError')
+  const error = new ReleaseControlError('read', 'failed', 'transaction', cause)
+  expect(error.message).toContain('transaction: NotFoundError')
+  expect(JSON.stringify(error.diagnosticDetails)).not.toContain('private')
+  const arbitrary = new ReleaseControlError(
+    'read',
+    'failed',
+    'get',
+    new DOMException('secret', 'secret')
+  )
+  expect(arbitrary.message).not.toContain('secret')
+  expect(arbitrary.diagnosticDetails).not.toHaveProperty('browserError')
 })

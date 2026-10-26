@@ -844,7 +844,7 @@ function showStartupRecovery(error: unknown): void {
   panel.hidden = false
   if (error instanceof ReleaseControlError)
     diagnostics.record(`release-settings-${error.stage}`, 'failed', {
-      reason: error.reason,
+      ...error.diagnosticDetails,
     })
   for (const node of [...panel.children])
     if (node !== status && node !== progressBar && node !== diagnostics.element)
@@ -998,7 +998,7 @@ navigator.serviceWorker?.addEventListener('message', (event) => {
 void diagnostics.step('bootstrap', main).catch((error) => {
   if (startupPrepared && error instanceof ReleaseControlError) {
     diagnostics.record(`release-settings-${error.stage}`, 'failed', {
-      reason: error.reason,
+      ...error.diagnosticDetails,
     })
     void recoverStartup()
   } else report(error)
