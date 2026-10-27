@@ -987,15 +987,18 @@ export class NotebookDataController {
       return
     }
     const restored = [...this.openNotebooks]
-    for (const item of restored) {
-      if (this.notebooks.get(item.uri)?.loaded) {
-        continue
-      }
-      void this.openNotebook(item.requestedUri || item.uri, {
-        name: item.name,
-        loadReadOnly: false,
+    // Load notebooks independently, but do not report restoration complete until
+    // every load has settled. The checkpoint scan runs next; returning early can
+    // reopen a still-loading editor and create two save sessions for one URI.
+    await Promise.all(
+      restored.map(async (item) => {
+        if (this.notebooks.get(item.uri)?.loaded) return
+        await this.openNotebook(item.requestedUri || item.uri, {
+          name: item.name,
+          loadReadOnly: false,
+        })
       })
-    }
+    )
   }
 
   private ensureRestored(): void {

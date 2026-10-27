@@ -5,6 +5,7 @@ import { beforeEach, describe, expect, it, vi } from 'vitest'
 import { parser_pb } from '../contexts/CellContext'
 import type { LocalNotebooks } from '../storage/local'
 import { NotebookStoreItemType } from '../storage/notebook'
+import * as checkpoints from '../storage/tabRecoveryCheckpoint'
 import { googleAnalytics } from './googleAnalytics'
 import {
   __resetNotebookDataControllerForTests,
@@ -653,6 +654,37 @@ describe('NotebookDataController', () => {
       'local://file/a',
       'local://file/b',
     ])
+  })
+
+  it('finishes restoring open editors before scanning orphan recovery checkpoints', async () => {
+    const uri = 'local://file/recovered'
+    const localStore = createFakeLocalNotebooks()
+    localStore.records.set(uri, {
+      id: uri,
+      name: 'recovered.runme',
+      remoteId: uri,
+      notebook: createNotebook('recovered edits'),
+    })
+    sessionStorage.setItem('runme/openNotebooks', JSON.stringify([
+      { uri, requestedUri: uri, name: 'recovered.runme' },
+    ]))
+    const scan = vi.spyOn(checkpoints, 'tabCheckpointUris').mockReturnValue([uri])
+    let releaseLoad!: () => void
+    const loading = new Promise<void>((resolve) => { releaseLoad = resolve })
+    localStore.load.mockImplementation(async () => {
+      await loading
+      return localStore.records.get(uri)!.notebook
+    })
+    const controller = getNotebookDataController()
+    controller.configureStores({ localNotebooks: localStore as unknown as LocalNotebooks })
+    await waitFor(() => expect(localStore.load).toHaveBeenCalled())
+    // A second open creates a second save actor for this same recovery entry.
+    // Keep the normal restore pending to deterministically expose that race.
+    expect(scan).not.toHaveBeenCalled()
+    releaseLoad()
+    await waitFor(() => expect(scan).toHaveBeenCalledOnce())
+    expect(localStore.createOperationLogSaveStore).toHaveBeenCalledTimes(1)
+    expect(controller.getNotebookData(uri)?.getNotebook().cells[0].value).toBe('recovered edits')
   })
 
   it('restores session open-notebook storage as load intents only', () => {
