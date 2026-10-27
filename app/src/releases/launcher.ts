@@ -48,11 +48,11 @@ panel.append(diagnostics.element)
 let progress: ReleaseProgress | undefined
 document.body.append(panel)
 let runtime: ReleaseRuntime | undefined
-let preparation: string | undefined
-let prepared = false
+let reloadAfterActivation: string | undefined
+let reloadingTab = false
+let legacyPrepared = false
 let uiKey = ''
 let renderGeneration = 0
-let preparing = false
 let ticking = false
 let owner: SharedWorker | undefined
 let ownerKey = ''
@@ -60,6 +60,7 @@ let dismissedCandidate: string | undefined
 let appReady = false
 let versionUiUsers = 0
 let transitioning = false
+let tabUpdateAvailable = false
 let details = location.pathname === '/recovery.html'
 const recovery = details
 let startupPrepared = false
@@ -144,7 +145,12 @@ function freeze(): void {
  * host an older app. Hide fallback controls only after an explicit UI handoff.
  */
 function updatePanelVisibility(): void {
-  panel.hidden = appReady && versionUiUsers > 0 && !recovery && !transitioning
+  panel.hidden =
+    appReady &&
+    versionUiUsers > 0 &&
+    !recovery &&
+    !transitioning &&
+    !tabUpdateAvailable
 }
 
 /** A held tab lock is proof of liveness, including suspended tabs. No heartbeat
@@ -286,9 +292,18 @@ async function downloadSelection(selection?: Selection): Promise<void> {
 }
 
 async function begin(target: Manifest): Promise<void> {
-  await navigator.locks.request('runme-release-cache', { mode: 'shared' }, () =>
-    beginLocked(target)
-  )
+  try {
+    await navigator.locks.request(
+      'runme-release-cache',
+      { mode: 'shared' },
+      () => beginLocked(target)
+    )
+  } catch (error) {
+    // Historical apps can only flush to their original worker. A completed
+    // local flush permits restoring that tab even if activation then failed.
+    if (legacyPrepared) location.reload()
+    throw error
+  }
 }
 async function beginLocked(target: Manifest): Promise<void> {
   report('Verifying the downloaded release…')
@@ -302,6 +317,15 @@ async function beginLocked(target: Manifest): Promise<void> {
     throw new Error(
       'This release predates release-settings recovery. Choose a newer release.'
     )
+  if (runtime && !runtime.prepareReload && !legacyPrepared) {
+    if (!runtime.prepare)
+      throw new Error(
+        'Wait for this tab to finish loading before activating a release'
+      )
+    await runtime.prepare()
+    legacyPrepared = true
+    freeze()
+  }
   const pending = current.transition
   if (pending?.phase === 'handoff') {
     // Recovery can replace a failed candidate only while no storage owner exists.
@@ -330,6 +354,7 @@ async function beginLocked(target: Manifest): Promise<void> {
         delete s.ownerError
       })
     })
+    if (runtime) reloadAfterActivation = target.releaseId
     ownerKey = ''
     await render()
     return
@@ -352,58 +377,56 @@ async function beginLocked(target: Manifest): Promise<void> {
       from: s.active,
       target,
       epoch: Math.max(s.active?.epoch ?? 0, s.epochBase ?? 0) + 1,
-      phase: 'prepare',
-      participants: Object.fromEntries(
-        Object.entries(s.tabs).map(([id, tab]) => [id, { epoch: tab.epoch }])
-      ),
+      phase: 'handoff',
+      participants: {},
     }
   })
+  if (runtime) reloadAfterActivation = target.releaseId
   await render()
 }
 
-/** Each loop advances one durable phase under a short coordinator lock. Losing
- * this tab loses no decision: another launcher resumes the same transition.
+/** Activation changes the selected worker without consulting tab readiness.
+ * Any launcher can start the selected candidate if the initiating tab disappears.
+ * Tab records only keep live app assets from being pruned.
  */
 async function coordinate(): Promise<void> {
-  await navigator.locks.request(
-    'runme-release-transition',
-    { ifAvailable: true },
-    async (lock) => {
-      if (!lock) return
-      const state = await readControl()
-      const gone: string[] = []
-      for (const id of Object.keys(state.tabs))
-        if (await closed(id)) gone.push(id)
-      const transition = state.transition
-      const allReady =
-        transition?.phase === 'prepare' &&
-        Object.entries(transition.participants).every(
-          ([id, p]) => gone.includes(id) || (p.ready !== undefined && !p.error)
-        )
-      if (allReady)
-        await verifyCache(transition.target, undefined, startupScope())
-      await control((s) => {
-        for (const id of gone) {
-          delete s.tabs[id]
-          if (s.transition) delete s.transition.participants[id]
-        }
-        if (
-          transition &&
-          allReady &&
-          s.transition?.id === transition.id &&
-          s.transition.phase === 'prepare' &&
-          Object.values(s.transition.participants).every(
-            (p) => p.ready !== undefined && !p.error
-          )
-        )
-          s.transition.phase = 'handoff'
-      })
-    }
-  )
   const state = await readControl()
-  const pending = state.transition
-  if (pending?.phase === 'handoff')
-    startOwner({ manifest: pending.target, epoch: pending.epoch })
+  const gone: string[] = []
+  for (const id of Object.keys(state.tabs)) if (await closed(id)) gone.push(id)
+  if (gone.length)
+    await control((s) => {
+      for (const id of gone) delete s.tabs[id]
+    })
+  if (state.transition?.phase === 'handoff')
+    startOwner({
+      manifest: state.transition.target,
+      epoch: state.transition.epoch,
+    })
+}
+
+/** Only a user action or this tab's own activation can authorize its reload.
+ * Checkpoint failure leaves the mounted editor alive; no peer participates.
+ */
+async function reloadThisTab(): Promise<void> {
+  if (reloadingTab) return
+  reloadingTab = true
+  freeze()
+  try {
+    if (runtime && !legacyPrepared) {
+      if (runtime.prepareReload) await runtime.prepareReload()
+      else if (runtime.prepare) await runtime.prepare()
+      else
+        throw new Error(
+          'This tab is not ready to preserve its editors; wait before reloading'
+        )
+    }
+    location.reload()
+  } catch (error) {
+    reloadingTab = false
+    const root = document.getElementById('root')
+    if (root) root.inert = false
+    throw error
+  }
 }
 
 /** Starting a worker only contends for the lifetime lock. Its verified startup
@@ -477,59 +500,15 @@ async function tick(): Promise<void> {
       uiKey = nextUiKey
       await render()
     }
-    if (prepared && !transition) {
-      location.reload()
-      return
-    }
-    if (runtime && state.active?.epoch !== runtime.active.epoch) {
-      freeze()
-      location.reload()
-      return
-    }
+    // A different tab's activation never freezes or reloads this page.
     if (
+      !transition &&
       runtime &&
-      transition?.phase === 'prepare' &&
-      transition?.participants[tabId] &&
-      preparation !== transition.id &&
-      !preparing
+      state.active?.manifest.releaseId === reloadAfterActivation
     ) {
-      freeze()
-      if (!runtime.prepare) {
-        report('Waiting for application startup before preserving edits…')
-        return
-      }
-      preparing = true
-      try {
-        const refs = await runtime.prepare()
-        prepared = true
-        await control((s) => {
-          if (
-            s.transition?.id !== transition.id ||
-            s.transition.phase !== 'prepare'
-          )
-            throw new Error('Upgrade preparation changed')
-          s.transition.participants[tabId].ready = refs
-          delete s.transition.participants[tabId].error
-        })
-        preparation = transition.id
-      } catch (error) {
-        await control((s) => {
-          if (s.transition?.id === transition.id)
-            s.transition.participants[tabId].error = String(error)
-        })
-        preparation =
-          error instanceof Error && error.name === 'UpgradeBusyError'
-            ? undefined
-            : transition.id
-        if (prepared) {
-          location.reload()
-          return
-        }
-        const root = document.getElementById('root')
-        if (root) root.inert = false
-      } finally {
-        preparing = false
-      }
+      reloadAfterActivation = undefined
+      await reloadThisTab()
+      return
     }
     await coordinate()
     const latest = await readControl()
@@ -541,11 +520,10 @@ async function tick(): Promise<void> {
     ) {
       report(latest.ownerError.message)
     } else if (latest.transition) {
-      const blocked = Object.entries(latest.transition.participants).filter(
-        ([, p]) => !p.ready || p.error
-      )
       report(
-        `Upgrade ${latest.transition.phase}: ${blocked.length ? blocked.map(([id, p]) => `${latest.tabs[id]?.label ?? id.slice(0, 8)}: ${p.error ?? 'waiting for tab'}`).join('; ') : 'waiting for exclusive storage ownership'}`
+        latest.transition.phase === 'prepare'
+          ? 'An older upgrade is pending. Cancel it before starting an independent worker upgrade.'
+          : 'Starting the selected storage worker; other tabs keep their editors open.'
       )
     }
   } catch (error) {
@@ -632,6 +610,11 @@ async function render(): Promise<void> {
   const s = await readControl()
   if (generation !== renderGeneration) return
   transitioning = Boolean(s.transition)
+  tabUpdateAvailable = Boolean(
+    runtime &&
+      s.active &&
+      runtime.active.manifest.releaseId !== s.active.manifest.releaseId
+  )
   // Normal management belongs to Information. Startup/recovery and frozen-app
   // transitions retain independent controls, including cancel/resume.
   updatePanelVisibility()
@@ -650,6 +633,12 @@ async function render(): Promise<void> {
       ? `Runme ${s.active.manifest.webCommit.slice(0, 8)} · ${s.selection.kind === 'channel' ? s.selection.name : 'pinned'}`
       : 'Installing Runme…'
   )
+  if (tabUpdateAvailable) {
+    report(
+      'The selected application version has changed. Reload this tab when ready; other tabs stay open.'
+    )
+    button('Preserve edits and reload this tab', reloadThisTab)
+  }
   button(details ? 'Hide versions' : 'Versions', () => {
     details = !details
     return render()
@@ -659,7 +648,7 @@ async function render(): Promise<void> {
     s.candidate.releaseId !== s.active?.manifest.releaseId &&
     (details || dismissedCandidate !== s.candidate.releaseId)
   ) {
-    button('Upgrade all tabs', () => begin(s.candidate!))
+    button('Activate release and update this tab', () => begin(s.candidate!))
     button('Later', async () => {
       dismissedCandidate = s.candidate!.releaseId
       details = false
@@ -724,8 +713,7 @@ async function render(): Promise<void> {
         releaseId: await resolvePublishedRelease(input.value),
       })
     )
-    button('Retry preparation / resume', async () => {
-      preparation = undefined
+    button('Retry worker activation', async () => {
       ownerKey = ''
       await tick()
     })
@@ -833,13 +821,7 @@ async function startRelease(applyRequest = true): Promise<void> {
     60 * 60 * 1000
   )
   window.addEventListener('pageshow', () => {
-    freeze()
-    void tick().then(() => {
-      if (!preparation) {
-        const root = document.getElementById('root')
-        if (root) root.inert = false
-      }
-    })
+    void tick()
   })
   if (s.active)
     void check().catch((error) =>
@@ -886,7 +868,7 @@ function showStartupRecovery(error: unknown): void {
 }
 
 /** Prefer latest stable after a settings failure. Downloads do not need the
- * settings DB; activation still uses the usual prepare/handoff and owner lock.
+ * settings DB; activation still uses worker handoff and the exclusive owner lock.
  * Existing transitions are resumed, never discarded to force a new version.
  */
 async function recoverStartup(
@@ -935,6 +917,7 @@ async function recoverStartup(
 }
 
 window.runmeVersions = {
+  reloadTab: reloadThisTab,
   diagnostics: releaseDatabaseDiagnostics,
   prepareRecovery: (selection) =>
     downloadRecoveryRelease(
@@ -998,7 +981,6 @@ window.runmeVersions = {
   cancel,
   prune: pruneUnusedCaches,
   retry: async () => {
-    preparation = undefined
     ownerKey = ''
     await tick()
   },

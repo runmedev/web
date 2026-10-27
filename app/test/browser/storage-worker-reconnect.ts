@@ -47,7 +47,7 @@ async function main() {
       })
     )
     const pages = [await context.newPage(), await context.newPage()]
-    for (const page of pages) {
+    async function initialize(page: Page) {
       page.on('console', (message) => logs.push(message.text()))
       page.on('pageerror', (error) => logs.push(String(error)))
       await page.goto(`${base}/reconnect-test`)
@@ -159,6 +159,7 @@ async function main() {
         w.passive.port.start()
       })
     }
+    for (const page of pages) await initialize(page)
     const identities = await Promise.all(
       pages.map((page) => page.evaluate(() => (window as any).pageIdentity))
     )
@@ -368,6 +369,72 @@ async function main() {
       ),
       identities
     )
+    // An uncertain committed save plus subsequent typing survives a real page
+    // reload. Capture and replay use the production adapter and browser storage.
+    await pages[0].evaluate(() => {
+      const w = window as any
+      w.lostReply = false
+      w.dropReply = true
+      w.editor.cells[0].value = 'Committed before local reload'
+      void w.view.save(w.uri, w.editor).catch(() => {})
+    })
+    await pages[0].waitForFunction(() => (window as any).lostReply)
+    const pendingBefore = await pages[1].evaluate(() =>
+      (window as any).store.loadContent((window as any).uri)
+    )
+    await pages[0].evaluate(async () => {
+      const w = window as any
+      w.editor.cells[0].value = 'Typed after lost acknowledgement'
+      const path = '/src/storage/tabRecoveryCheckpoint.ts'
+      const { checkpointEditorSessions } = await import(path)
+      await checkpointEditorSessions(new Map([[w.uri, w.editor]]))
+    })
+    await initialize(pages[0])
+    const recovered = await pages[0].evaluate(async (uri) => {
+      const w = window as any
+      w.uri = uri
+      w.view = await w.store.createOperationLogSaveStore(uri)
+      w.editor = w.view.initialNotebook
+      const restored = w.editor.cells[0].value
+      await w.view.save(uri, w.editor)
+      return {
+        restored,
+        document: await w.store.loadContent(uri),
+        cells: (await w.store.loadOperationLogSnapshot(uri)).cells.map(
+          (c: any) => c.value
+        ),
+      }
+    }, original.uri)
+    assert.equal(recovered.restored, 'Typed after lost acknowledgement')
+    assert.deepEqual(recovered.cells, [
+      'Typed after lost acknowledgement',
+      'Saved after missing the stop notification',
+    ])
+    const previousIds = pendingBefore
+      .trim()
+      .split('\n')
+      .slice(1)
+      .map((line: string) => JSON.parse(line).op_id)
+    const replayedIds = recovered.document
+      .trim()
+      .split('\n')
+      .slice(1)
+      .map((line: string) => JSON.parse(line).op_id)
+    for (const id of previousIds)
+      assert.equal(
+        replayedIds.filter((value: string) => value === id).length,
+        1
+      )
+    assert.equal(
+      await pages[1].evaluate(() => (window as any).pageIdentity),
+      identities[1]
+    )
+    await pages[0].waitForFunction(
+      () => !sessionStorage.getItem('runme/tab-editor-recovery/v1')
+    )
+    console.log(
+      'PASS: local page reload restores later typing, replays exact pending saves once, and preserves concurrent peer edits'
+    )
     await writeFile(
       `${output}/result.json`,
       JSON.stringify(
@@ -382,6 +449,7 @@ async function main() {
           finalCells,
           ownerIds,
           missedNotification,
+          localReloadRecovery: recovered,
         },
         null,
         2

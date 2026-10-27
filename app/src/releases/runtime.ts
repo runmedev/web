@@ -8,13 +8,14 @@ import type {
 } from './control'
 import type { releaseDatabaseDiagnostics } from './releaseDiagnostics'
 
-/** The independent launcher owns coordination; React registers its durable flush
- * hook only after model initialization. No application import is needed by recovery.
+/** The independent launcher owns worker activation; React registers this tab’s
+ * recovery hook after model initialization. No application import is needed by recovery.
  */
 export type ReleaseRuntime = {
   active: Active
   tabId: string
   prepare?: () => Promise<CommitReference[]>
+  prepareReload?: () => Promise<void>
   ready?: () => void
 }
 export type OfflineDownloadStatus = {
@@ -46,6 +47,7 @@ declare global {
       cached?: () => Promise<Manifest[]>
       activate?: (releaseId: string) => Promise<void>
       pin?: () => Promise<void>
+      reloadTab?: () => Promise<void>
     }
   }
 }
@@ -72,23 +74,29 @@ export function adoptLegacyVersionUi(): () => void {
   }
 }
 
-/** All draft surfaces register blockers before permitting a coordinated reload. */
+/** Draft surfaces register blockers before permitting this tab to reload. */
 const blockers = new Map<
   symbol,
-  { check: () => string | undefined; retryable: boolean }
+  {
+    check: () => string | undefined
+    retryable: boolean
+    checkpointable: boolean
+  }
 >()
 export function registerUpgradeBlocker(
   check: () => string | undefined,
-  retryable = false
+  retryable = false,
+  checkpointable = false
 ): () => void {
   const id = Symbol()
-  blockers.set(id, { check, retryable })
+  blockers.set(id, { check, retryable, checkpointable })
   return () => {
     blockers.delete(id)
   }
 }
-export function assertNoUpgradeBlockers(): void {
+export function assertNoUpgradeBlockers(checkpointedReload = false): void {
   for (const blocker of blockers.values()) {
+    if (checkpointedReload && blocker.checkpointable) continue
     const reason = blocker.check()
     if (reason) {
       const error = new Error(reason)
@@ -99,7 +107,7 @@ export function assertNoUpgradeBlockers(): void {
 }
 
 let preparingRelease = false
-/** Gate new asynchronous work while an upgrade captures durable local state. */
+/** Gate new asynchronous work while this tab captures its reload checkpoint. */
 export function setReleasePreparation(value: boolean): void {
   preparingRelease = value
 }

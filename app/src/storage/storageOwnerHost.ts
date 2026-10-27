@@ -449,6 +449,20 @@ export class StorageOwnerHost {
       return
     }
     if (request.type !== 'request' || typeof request.id !== 'string') return
+    // Stable negotiation precedes data-RPC version checks and all storage work.
+    if (request.method === 'handshake') {
+      port.postMessage({
+        type: 'result',
+        id: request.id,
+        value: {
+          protocol: 1,
+          rpcVersion: STORAGE_OWNER_VERSION,
+          recoveryFormat: 1,
+          editorCommitVersion: 1,
+        },
+      })
+      return
+    }
     if (request.method !== 'disconnect') this.registerEditor(port)
     // Closing a stale tab must release its port even when its data protocol differs.
     if (request.method === 'disconnect') {
@@ -473,6 +487,10 @@ export class StorageOwnerHost {
     }
     this.activeRequests.add(active)
     try {
+      if (request.version !== STORAGE_OWNER_VERSION)
+        throw new Error(
+          'Storage worker version mismatch. Preserve edits and reload this tab to reconnect.'
+        )
       if (this.releaseDraining)
         throw new Error('Release handoff is draining storage')
       await this.authorize?.(request)
@@ -490,10 +508,6 @@ export class StorageOwnerHost {
         state.credentialBoundary = request.credentialBoundary
         this.updateAvailability()
       }
-      if (request.version !== STORAGE_OWNER_VERSION)
-        throw new Error(
-          'Storage worker version mismatch. Reload all Runme tabs to reconnect.'
-        )
       if (!Array.isArray(request.args))
         throw new Error('Invalid storage request arguments')
       if (

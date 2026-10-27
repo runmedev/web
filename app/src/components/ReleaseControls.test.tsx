@@ -97,12 +97,16 @@ describe('Information release controls', () => {
       expect(
         (
           screen.getByRole('button', {
-            name: 'Upgrade all tabs',
+            name: 'Activate release and update this tab',
           }) as HTMLButtonElement
         ).disabled
       ).toBe(false)
     )
-    fireEvent.click(screen.getByRole('button', { name: 'Upgrade all tabs' }))
+    fireEvent.click(
+      screen.getByRole('button', {
+        name: 'Activate release and update this tab',
+      })
+    )
     await waitFor(() => expect(api.upgrade).toHaveBeenCalledTimes(1))
   })
   it('keeps update errors visible in Information and permits retry', async () => {

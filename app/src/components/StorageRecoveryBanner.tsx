@@ -93,6 +93,22 @@ export default function StorageRecoveryBanner({
           <button
             type="button"
             className="ml-2 mt-2 rounded border px-3 py-1"
+            onClick={() => {
+              void window.runmeVersions
+                ?.reloadTab?.()
+                .catch((error) =>
+                  setCaptureMessage(
+                    `This tab was not reloaded: ${String(error)}`
+                  )
+                )
+            }}
+            disabled={!window.runmeVersions?.reloadTab}
+          >
+            Preserve edits and reload this tab
+          </button>
+          <button
+            type="button"
+            className="ml-2 mt-2 rounded border px-3 py-1"
             onClick={() => storageRecovery.restart(true)}
           >
             Force restart storage

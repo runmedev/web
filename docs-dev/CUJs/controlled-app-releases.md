@@ -53,14 +53,15 @@ Acceptance:
   through the real service worker. It must answer before importing the launcher,
   then open the selected app when discovery resumes. Slow discovery must never
   misclassify a controlled bootstrap as an incompatible legacy window.
-- Channel changes and exact pins only stage; activation requires Upgrade all tabs.
-- Pending notebook edits in multiple tabs persist before upgrade readiness.
-- A failed preparation blocks activation and leaves that tab editable.
-- Cancel before handoff: prepared tabs reopen their durable A state.
-- Freeze a tab and explicitly withhold its readiness acknowledgement: it retains membership. A new tab waits outside the app.
-- Close the initiating tab: another launcher resumes the persisted transition.
-- All admitted tabs move to B under a new storage-owner epoch.
-- After full offline readiness, offline restart uses B; offline rollback to A preserves edits made on B.
+- Channel changes and exact pins only stage; activation requires an explicit action.
+- Activating B replaces the worker under its lifetime lock and reloads only the initiating tab.
+- A frozen peer with a failing preparation hook cannot block activation and is never asked to prepare.
+- The old peer keeps its tab identity and mounted editor, then saves through worker B on retry.
+- Reloading another tab is an independent action. A session-storage quota error leaves that tab editable and does not roll back the selected worker.
+- A successful local reload checkpoints and restores editor state without involving a peer.
+- A confirmed capability mismatch triggers local checkpoint/reload recovery before any data RPC. Timeouts alone never do.
+- Historical launchers retain their original behavior. The frozen-baseline migration closes durable legacy peers before activation; the initiating historical app flushes locally before worker replacement.
+- After full offline readiness, offline restart uses B; offline rollback to A preserves edits made on B and leaves other tabs on their loaded UI versions.
 - The recovery selector works independently of React/application imports.
 - A checksum-valid but throwing app entry can be recovered through the selector
   after failed app tabs close, retaining current notebook content.

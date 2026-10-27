@@ -2,6 +2,7 @@ import { create } from '@bufbuild/protobuf'
 
 import { parser_pb } from '../contexts/CellContext'
 import type { LocalNotebooks } from '../storage/local'
+import { tabCheckpointUris } from '../storage/tabRecoveryCheckpoint'
 import {
   type NotebookAnalyticsSource,
   classifyNotebookAnalyticsSource,
@@ -153,6 +154,21 @@ export class NotebookDataController {
     }
     if (this.localNotebooks) {
       void this.loadOpenNotebooks()
+        .then(async () => {
+          // A save from an editor closed before reload can still be pending. Its
+          // checkpoint must be reopened/replayed, not orphaned by the tab list.
+          for (const uri of tabCheckpointUris()) {
+            if (!this.notebooks.get(uri)?.loaded) await this.openNotebook(uri)
+          }
+        })
+        .catch((error) =>
+          appLogger.error(
+            'Tab recovery could not restore all editors; checkpoints retained',
+            {
+              attrs: { scope: 'notebook-session', error: String(error) },
+            }
+          )
+        )
     }
   }
 

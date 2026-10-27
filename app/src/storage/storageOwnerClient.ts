@@ -2,8 +2,10 @@ import { getWorkloadIdentityConfig } from '../auth/workloadIdentity'
 import { getGoogleDriveBaseUrl } from '../lib/googleDriveRuntime'
 import { appLogger } from '../lib/logging/runtime'
 import {
+  type Active,
   OWNER_LOCK,
   RELEASE_CAPABILITIES,
+  readControl,
   releasePrefix,
 } from '../releases/control'
 import { registerUpgradeBlocker } from '../releases/runtime'
@@ -24,6 +26,11 @@ import {
   recoveryMessage,
 } from './storageRecoveryProtocol'
 import { StorageWorkerControl, type WorkerStatus } from './storageWorkerControl'
+import {
+  acknowledgeTabCheckpoint,
+  readTabCheckpoints,
+  registerCheckpointTransport,
+} from './tabRecoveryCheckpoint'
 
 type Pending = {
   method: string
@@ -58,7 +65,8 @@ export class StorageOwnerClient {
   constructor(
     private readonly port: MessagePort,
     private readonly token: DriveNotebookStore['getAccessToken'],
-    private readonly getCredentialBoundary: () => string = () => 'default'
+    private readonly getCredentialBoundary: () => string = () => 'default',
+    private readonly ownerEpoch?: number
   ) {
     port.onmessage = (event) => {
       if (event.data?.type === 'release-owner-error') {
@@ -137,9 +145,13 @@ export class StorageOwnerClient {
   request(method: string, args: unknown[] = []): Promise<unknown> {
     if (
       (this.uncertain.size || this.unresolvedCommit) &&
-      !['disconnect', 'heartbeat', 'hello', 'commitEditorOperations'].includes(
-        method
-      )
+      ![
+        'disconnect',
+        'heartbeat',
+        'handshake',
+        'hello',
+        'commitEditorOperations',
+      ].includes(method)
     )
       return Promise.reject(
         new Error(
@@ -157,13 +169,21 @@ export class StorageOwnerClient {
     return new Promise((resolve, reject) => {
       const timer = setTimeout(
         () => {
-          if (['hello', 'heartbeat', 'commitEditorOperations'].includes(method))
+          if (
+            [
+              'handshake',
+              'hello',
+              'heartbeat',
+              'commitEditorOperations',
+            ].includes(method)
+          )
             this.retryConnection = true
           // Keep the original correlation until its late acknowledgement. An
           // upgrade retry must not turn a timed-out mutation into a new mutation.
           if (
             ![
               'hello',
+              'handshake',
               'heartbeat',
               'disconnect',
               'getDriveQueueMetrics',
@@ -207,7 +227,9 @@ export class StorageOwnerClient {
           this.onFailure?.(error)
           reject(error)
         },
-        method === 'hello' || method === 'getDriveQueueMetrics'
+        method === 'hello' ||
+          method === 'handshake' ||
+          method === 'getDriveQueueMetrics'
           ? 10_000
           : 300_000
       )
@@ -221,9 +243,10 @@ export class StorageOwnerClient {
           args,
           credentialBoundary: this.getCredentialBoundary(),
           epoch:
-            typeof window !== 'undefined'
+            this.ownerEpoch ??
+            (typeof window !== 'undefined'
               ? window.runmeRelease?.active.epoch
-              : undefined,
+              : undefined),
           tabId:
             typeof window !== 'undefined'
               ? window.runmeRelease?.tabId
@@ -326,6 +349,7 @@ export class StorageOwnerClient {
         (p) =>
           ![
             'hello',
+            'handshake',
             'heartbeat',
             'disconnect',
             'commitEditorOperations',
@@ -360,6 +384,7 @@ export function createSharedNotebookStore(
 ): LocalNotebooks {
   const release = window.runmeRelease?.active
   const listeners = new Map<string, Set<() => void>>()
+  let recoveryAttemptEpoch: number | undefined
   /** Preserve subscriptions when a new transport replaces a stopped worker. */
   function notifyChange(uri: string) {
     for (const callback of listeners.get(uri) ?? []) callback()
@@ -371,7 +396,8 @@ export function createSharedNotebookStore(
     )
   }
   /** A fresh handshake is mandatory for every replacement owner. */
-  function connect() {
+  function connect(selected: Active | undefined = release) {
+    const release = selected
     let ownerInstance: string | undefined
     const worker = release
       ? new SharedWorker(
@@ -388,7 +414,8 @@ export function createSharedNotebookStore(
     const client = new StorageOwnerClient(
       worker.port,
       (options) => drive.getAccessToken(options),
-      credentialBoundary
+      credentialBoundary,
+      release?.epoch
     )
     client.onFailure = (error) => {
       if (requiresStorageReload(error)) storageRecovery.report(error)
@@ -397,6 +424,27 @@ export function createSharedNotebookStore(
     // Migration is part of the handshake: do not let a recovery scan generate a
     // second remote identity while an old reserved ID only exists in localStorage.
     const ready = Promise.resolve().then(async () => {
+      // This small contract is stable across data-RPC versions and has no
+      // storage effects. Incompatibility is distinct from timeout/unavailability.
+      const negotiated = (await client.request('handshake')) as {
+        protocol: number
+        rpcVersion: number
+        recoveryFormat: number
+        editorCommitVersion: number
+      }
+      if (
+        negotiated.protocol !== 1 ||
+        negotiated.rpcVersion !== STORAGE_OWNER_VERSION ||
+        negotiated.recoveryFormat !== 1 ||
+        negotiated.editorCommitVersion !== 1
+      ) {
+        const error = new Error(
+          'Storage worker is incompatible with this tab. Preserve edits and reload this tab to use the selected application version.'
+        )
+        error.name = 'StorageWorkerIncompatibleError'
+        storageRecovery.set({ phase: 'blocked', message: error.message })
+        throw error
+      }
       let attempts: ReturnType<typeof readLegacyCreationJournal> = []
       let creationMigrationError: string | undefined
       try {
@@ -449,11 +497,32 @@ export function createSharedNotebookStore(
       ownerInstance = handshake.instanceId
       return handshake
     })
-    void ready.catch((error) =>
+    void ready.catch(async (error) => {
       appLogger.error('Notebook storage worker unavailable', {
         attrs: { scope: 'storage.owner', error: String(error) },
       })
-    )
+      // Only an explicit capability mismatch with a different selected release
+      // warrants upgrading this tab. Silence/timeouts never authorize a reload.
+      if (
+        error?.name !== 'StorageWorkerIncompatibleError' ||
+        !selected ||
+        selected.manifest.releaseId ===
+          window.runmeRelease?.active.manifest.releaseId ||
+        recoveryAttemptEpoch === selected.epoch ||
+        !window.runmeRelease?.prepareReload ||
+        !window.runmeVersions?.reloadTab
+      )
+        return
+      recoveryAttemptEpoch = selected.epoch
+      try {
+        await window.runmeVersions.reloadTab()
+      } catch (failure) {
+        storageRecovery.set({
+          phase: 'blocked',
+          message: `This tab could not preserve its state for the selected release: ${String(failure)}. Keep it open and retry recovery.`,
+        })
+      }
+    })
     client.onChange = notifyChange
     worker.onerror = (event) => {
       if (connection.client === client) needsConnection = true
@@ -467,12 +536,14 @@ export function createSharedNotebookStore(
       worker,
       client,
       ready,
+      selected,
       get instanceId() {
         return ownerInstance
       },
     }
   }
   let connection = connect()
+  let checkpointing = false
   let needsConnection = false
   let connecting: Promise<void> | undefined
   let retrying: Promise<void> | undefined
@@ -484,10 +555,32 @@ export function createSharedNotebookStore(
     EditorSaveSession,
     { disposed: boolean; unregister: () => void }
   >()
+  registerCheckpointTransport({
+    uris: () =>
+      new Set([...sessions.keys()].map((session) => session.getUri())),
+    capture: async (editors) => {
+      checkpointing = true
+      connection.client.onFailure = undefined
+      connection.client.close(
+        new Error('This tab is preserving editor saves before reload')
+      )
+      needsConnection = true
+      return Promise.all(
+        [...sessions.keys()].map((session) =>
+          session.checkpoint(editors.get(session.getUri()))
+        )
+      )
+    },
+    resume: () => {
+      checkpointing = false
+      for (const session of sessions.keys())
+        session.resumeAfterFailedCheckpoint()
+    },
+  })
   const management = new StorageWorkerControl((event) => {
     if (
-      event.status.releaseId !== release?.manifest.releaseId ||
-      event.status.epoch !== (release?.epoch ?? 0)
+      event.status.releaseId !== connection.selected?.manifest.releaseId ||
+      event.status.epoch !== (connection.selected?.epoch ?? 0)
     )
       return
     currentWorker = event.status
@@ -525,6 +618,19 @@ export function createSharedNotebookStore(
   async function ensureConnected(): Promise<void> {
     if (connection.client.needsReconnect) needsConnection = true
     if (connecting) return connecting
+    const selected = release ? await readControl() : undefined
+    if (connecting) return connecting
+    if (selected?.transition?.phase === 'handoff')
+      throw new Error(
+        'Storage worker is changing versions. Pending saves remain in this tab; retry after activation.'
+      )
+    if (release && !selected?.active)
+      throw new Error('No active storage worker is selected')
+    if (
+      selected?.active &&
+      selected.active.epoch !== connection.selected?.epoch
+    )
+      needsConnection = true
     if (!needsConnection) {
       await connection.ready
       return
@@ -532,7 +638,7 @@ export function createSharedNotebookStore(
     const operation = (async () => {
       connection.client.onFailure = undefined
       connection.client.close()
-      connection = connect()
+      connection = connect(selected?.active)
       const handshake = await connection.ready
       if (handshake.editorCommitVersion !== 1)
         throw new Error(
@@ -648,9 +754,12 @@ export function createSharedNotebookStore(
     { client: true }
   )
   const call = async (method: string, args: unknown[]): Promise<unknown> => {
+    if (checkpointing) throw new Error('This tab is preserving pending saves')
+    const previous = connection
     const reconnect = needsConnection
     await ensureConnected()
-    if (reconnect) void retryPending()
+    if (checkpointing) throw new Error('This tab is preserving pending saves')
+    if (reconnect || connection !== previous) void retryPending()
     return connection.client.request(method, args)
   }
   const heartbeat = setInterval(() => {
@@ -670,8 +779,7 @@ export function createSharedNotebookStore(
   const methods = new Set<string>(STORAGE_METHODS)
   return new Proxy(local, {
     get(target, key) {
-      if (key === 'ready')
-        return ensureConnected().then(() => connection.ready)
+      if (key === 'ready') return ensureConnected().then(() => connection.ready)
       if (key === 'setFilesystemStore' || key === 'stopSyncQueue')
         return () => {}
       if (key === 'operationLogSupportsConcurrentWriters') return () => true
@@ -718,7 +826,11 @@ export function createSharedNotebookStore(
           await ensureConnected()
           const handshake = await connection.ready
           if (handshake.editorCommitVersion === 1) {
+            const checkpoint = readTabCheckpoints(uri).find(
+              (entry) => entry.uri === uri
+            )
             const document =
+              checkpoint?.document ??
               options.initialDocument ??
               ((await call('loadContent', [uri])) as string)
             const session = new EditorSaveSession(
@@ -727,7 +839,8 @@ export function createSharedNotebookStore(
               async (...args) => {
                 await call('commitEditorOperations', args)
               },
-              options.actorId
+              checkpoint?.actorId ?? options.actorId,
+              checkpoint
             )
             const state = {
               disposed: false,
@@ -736,10 +849,21 @@ export function createSharedNotebookStore(
                   session.hasPending
                     ? 'A notebook has pending editor saves; reconnect storage before upgrading'
                     : undefined,
+                true,
                 true
               ),
             }
             sessions.set(session, state)
+            if (checkpoint) {
+              void session
+                .save(uri, session.initialNotebook)
+                .then(() => acknowledgeTabCheckpoint(uri, checkpoint.actorId))
+                .catch((error) =>
+                  storageRecovery.report(
+                    error instanceof Error ? error : new Error(String(error))
+                  )
+                )
+            }
             return {
               initialNotebook: session.initialNotebook,
               getObservedOperationHeads: () =>

@@ -191,20 +191,20 @@ Future schema changes require a new compatibility contract, resumable migration,
 and real old/new artifact tests before eligibility changes. `testedRollbackTargets`
 records individually qualified historical releases; an empty list makes no
 historical qualification claim. Previous locally healthy releases with the same
-storage contract remain usable through the coordinated selector.
+storage contract remain usable through the release selector.
 
 The root loader has its own service-worker lifecycle and cache. It never calls
 `skipWaiting`: existing pre-contract tabs must close before initial installation.
 A legacy-worker retirement handshake blocks versioned owners until the old owner
 is gone. This one-time transition may require saving recovery copies and closing
-all Runme tabs. Application upgrades afterwards use the durable coordinator.
+all Runme tabs. Application upgrades afterwards replace the worker under its lifetime lock; each tab preserves and reloads independently.
 
 ### Release acceptance gate
 
 Run `pnpm -C app run cuj:releases` after building workspace packages and installing
 Playwright Chromium. The driver creates independent immutable A/B bundles and a
 third bundle with a deliberately broken application entry, serves them with the
-Go fixture, and verifies coordination, offline restart, current-data rollback and
+Go fixture, and verifies independent tab upgrades, offline restart, current-data rollback and
 independent recovery. Screenshots, recordings and machine-readable results go to
 `app/test/browser/test-output/controlled-releases/`. CI runs this gate on every PR
 and main update. Do not promote a release when this gate fails.

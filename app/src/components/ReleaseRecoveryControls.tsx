@@ -47,8 +47,8 @@ export function ReleaseRecoveryControls() {
       <h2 className="font-semibold">Recovery and rollback</h2>
       <p>
         Choose a published commit or release, even when installed release
-        settings cannot load. Activation waits for tabs to preserve edits and
-        storage to finish pending writes.
+        settings cannot load. Activation replaces the shared storage worker.
+        This tab preserves its edits before reloading; other tabs stay open.
       </p>
       <label>
         Commit SHA or release ID
@@ -112,7 +112,7 @@ export function ReleaseRecoveryControls() {
                   releaseId: prepared.releaseId,
                 })
                 setMessage(
-                  'Activation requested. Waiting for coordinated preparation and handoff.'
+                  'Worker activation requested. Other tabs keep their editors open.'
                 )
               })
             }

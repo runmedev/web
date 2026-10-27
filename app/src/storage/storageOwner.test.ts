@@ -52,6 +52,41 @@ function setup() {
 }
 
 describe('SharedWorker message boundary', () => {
+  it('negotiates across RPC versions without authorization or storage effects', async () => {
+    const { store } = setup()
+    const authorize = vi.fn(async () => {
+      throw new Error('must not authorize negotiation')
+    })
+    const host = new StorageOwnerHost(
+      store as unknown as LocalNotebooks,
+      undefined,
+      authorize
+    )
+    const channel = new MessageChannel()
+    ports.push(
+      channel.port1 as unknown as MessagePort,
+      channel.port2 as unknown as MessagePort
+    )
+    host.attach(channel.port1 as unknown as MessagePort)
+    const reply = new Promise<any>((resolve) =>
+      channel.port2.once('message', resolve)
+    )
+    channel.port2.postMessage({
+      type: 'request',
+      id: 'negotiate',
+      method: 'handshake',
+      version: -1,
+      args: [],
+    })
+    expect((await reply).value).toMatchObject({
+      protocol: 1,
+      recoveryFormat: 1,
+      editorCommitVersion: 1,
+    })
+    expect(authorize).not.toHaveBeenCalled()
+    expect(store.setDriveSyncAvailable).not.toHaveBeenCalled()
+    expect(store.save).not.toHaveBeenCalled()
+  })
   it('restores the profile boundary before unauthenticated tabs can queue writes', async () => {
     const { host, store } = setup()
     const human = connect(host)

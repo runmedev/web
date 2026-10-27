@@ -73,6 +73,8 @@ jobs:
         run: >-
           pnpm -C app exec vitest run
           src/storage/storageRecovery.test.ts src/storage/editorSaveSession.test.ts
+          src/storage/tabRecoveryCheckpoint.test.ts src/storage/storageOwner.test.ts
+          src/releases/prepareTabReload.test.ts
           src/storage/storageWorkerControl.test.ts src/lib/storageRecoveryDrafts.test.ts
           src/components/StorageRecoveryBanner.test.tsx
           --maxWorkers=2 --minWorkers=1

@@ -5,8 +5,8 @@ import { closeReleaseDatabases } from './databases'
 import { assertNoUpgradeBlockers, setReleasePreparation } from './runtime'
 
 let frozen = false
-/** Routine activation requires durable commits. Emergency sessionStorage copies
- * are intentionally not involved. Failed/uncertain saves keep this tab open.
+/** Compatibility hook for historical launchers that require durable commits.
+ * Current launchers use prepareTabReload and never ask peers to prepare.
  */
 export async function prepareRelease(): Promise<CommitReference[]> {
   if (frozen)

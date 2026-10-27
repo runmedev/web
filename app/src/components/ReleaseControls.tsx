@@ -160,9 +160,28 @@ function InstalledReleaseControls() {
           </>
         )}
       </dl>
+      {window.runmeRelease &&
+        active &&
+        window.runmeRelease.active.manifest.releaseId !== active.releaseId && (
+          <div id="release-tab-update" role="status">
+            <p>
+              This tab is running{' '}
+              {window.runmeRelease.active.manifest.webCommit.slice(0, 8)}. The
+              selected worker uses a different version; other tabs can update
+              independently.
+            </p>
+            <Button
+              disabled={busy || !api.reloadTab}
+              onClick={() => void run(() => api.reloadTab!())}
+            >
+              Preserve edits and reload this tab
+            </Button>
+          </div>
+        )}
       <p className="text-nb-text-muted">
         Choose a channel to download its release in the background. Your
-        installed version stays active until you choose Upgrade all tabs.
+        selected worker version stays active until you activate the release.
+        Other tabs keep their current UI until you reload them individually.
       </p>
       <div id="release-channel-actions" className="flex flex-wrap gap-2">
         <Button
@@ -207,7 +226,7 @@ function InstalledReleaseControls() {
           disabled={busy || !!state.transition}
           onClick={() => void run(() => api.upgrade())}
         >
-          Upgrade all tabs
+          Activate release and update this tab
         </Button>
       )}
       {state.transition && (

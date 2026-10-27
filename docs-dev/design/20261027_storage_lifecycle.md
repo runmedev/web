@@ -2,43 +2,48 @@
 
 ## Decision
 
-Keep the lifetime Web Lock as the single storage-ownership authority. Keep
-release selection durable, but do not require a release-settings transaction to
-back up editors or stop the existing worker. Recovery controls and diagnostic
-probes must remain available before notebook storage initializes.
+Tabs upgrade independently. Activating a published release replaces the shared
+storage worker without waiting for any tab's readiness or acknowledgement. The
+initiating tab then preserves its own state and reloads. Other tabs remain mounted
+and editable, with an explicit control to update that tab when the user is ready.
+A frozen or disconnected peer cannot block worker activation.
 
-A storage restart does not reload pages. Tabs retain their editor models and
-pending save batches. The old worker closes; replacements reacquire the same
-lifetime lock, validate release admission, and accept the retained batches.
-Stopping the worker requires no tab acknowledgement or session-storage write.
-Each tab reconnects independently on its next request; idle tabs need not connect
-immediately, and there are no tab readiness or reconnect broadcasts.
-An editor-save timeout also makes the next request replace the connection, so
-recovery does not depend on receiving the old worker's stop notification.
-Only app upgrade/reload requires coordinated editor preservation.
+The selected worker and each tab's loaded application have separate identities.
+Every reconnect resolves the selected worker, then negotiates a stable handshake
+before sending data RPCs. Compatible old tabs keep working. An incompatible tab
+attempts local checkpoint recovery once for that selected worker epoch; if preservation fails it keeps its editors and offers a retry; a timeout alone never proves a
+version mismatch or authorizes automatic reload.
 
-The tab owns the save baseline: the snapshot last loaded into the editor or
-successfully acknowledged after a save. It prepares immutable operations before
-sending them to storage, retaining both the operations and the submitted snapshot
-until acknowledgement. Edits typed while waiting belong to the next snapshot.
-The worker validates notebook identity and causal dependencies, rejects conflicting
-contents under an existing operation ID, and appends only missing operations.
-Retrying the identical batch repairs a lost acknowledgement without duplication.
-No editor identity search reconstructs a baseline, and no latest merged notebook
-is substituted for the tab's actual observed version.
+Local recovery freezes only that tab's edits and disconnects its transport. It
+records a versioned session-storage checkpoint containing each editor's current
+contents, observed operation history, acknowledged baseline, actor ID, and exact
+pending operations. It verifies the written checkpoint before reloading. The new
+app restores the captured editor, retries identical operation IDs, then persists
+later edits relative to the captured baseline. It removes a checkpoint only after
+those saves are acknowledged. Quota, malformed data, unsupported formats, active
+executions, and uncertain non-editor operations keep the tab open. Checkpoints
+survive reload, not closing the tab; recovery downloads remain available.
 
-Graceful stop drains admitted work. Force stop requests `self.close()` immediately,
-without awaiting storage or network IO. A force request can interrupt a stalled
-graceful drain, provided the JavaScript message loop still responds. Other
-operations, such as remote notebook creation, retain uncertain-outcome blockers
-and are never blindly retried. Editor batches alone have this idempotent contract.
+The worker's lifetime Web Lock remains the exclusive storage ownership authority.
+The old owner stops admission and drains admitted work before releasing the lock.
+Force-close is separately available through its management channel, provided the
+worker event loop responds. It never asks tabs to reload. Generic mutations are
+never replayed just because transport failed.
 
-A BroadcastChannel management endpoint starts before lock acquisition and runtime
-imports. It reports the current startup phase and elapsed time without reading
-IndexedDB. It includes release-database traces before runtime initialization and
-host request diagnostics afterward. Version UI
-always exposes discovery, stop, force stop, restart and force restart controls.
-Discovery describes responding Runme workers, not all workers in the browser.
+The launcher retains its independent update path and settings-failure recovery.
+Release discovery and download remain independent of notebook storage. Startup
+phase, queued settings reads, elapsed time, and RPC diagnostics are observable
+without issuing another database read. No new tab-readiness coordinator is added.
+
+### Compatibility boundary
+
+The independent lifecycle applies to tabs running this launcher and recovery
+contract. Already-running historical launcher code can still execute its old
+reload policy; code in another tab cannot rewrite it. Old data-RPC versions are
+rejected before effects, and unknown checkpoint formats are retained for recovery.
+Legacy JSON/Markdown editors without replayable operation IDs require a durable local flush; if storage cannot acknowledge it, that tab stays open for export/retry.
+Data-schema compatibility remains an activation prerequisite; independent tab
+upgrades do not authorize concurrent incompatible storage formats.
 
 ## Failure analysis
 
@@ -63,22 +68,16 @@ separately. A control connection is not evidence of unsaved editors.
 
 ## Invariants
 
-- Only a worker holding `runme-storage-owner-lifetime-v1` opens notebook stores.
-- Editor clients explicitly register for recovery; existing clients that send
-  notebook RPCs are also participants. Passive launcher/control ports are excluded.
-- Storage stop never reloads a tab, discards an editor, or waits for tab votes.
-- App reload remains a separate operation with preparation, preservation and
-  blockers for uncertain outcomes. Session copies do not survive tab closure.
-- Graceful stop drains admitted work. Force stop skips drain and retains unknown
-  outcomes. Neither path replays generic mutations or overwrites history with an
-  editor snapshot. Only immutable editor batches may be retried automatically.
-- A tab advances its baseline only after acknowledgement of the exact submitted
-  snapshot. Its pending batch and later editor contents survive transport loss.
-- Duplicate operation IDs require identical contents; missing causal history or a
-  changed notebook identity rejects the batch without altering OPFS bytes.
-- The replacement must reacquire the lifetime lock. Release admission still occurs
-  at startup; a restart is not permission to activate a different release.
-- Diagnostics read memory, not the database under investigation.
+- Only the worker holding `runme-storage-owner-lifetime-v1` opens notebook stores.
+- Worker activation has no tab-readiness barrier and no peer reload command.
+- A tab reloads for its own action, its own activation, or locally confirmed RPC incompatibility. Timeouts never trigger automatic reload.
+- A reload checkpoint is verified before the page discards JavaScript memory.
+- Save retries retain operation IDs and content; lost replies cannot duplicate edits.
+- A restored baseline is the tab's captured baseline, not latest merged storage.
+- RPC compatibility is checked before notebook or external effects.
+- App and worker identities are independent; request fencing uses the selected worker epoch.
+- Session-storage failure keeps the tab and its unsaved edits alive.
+- Unknown mutation outcomes and unsupported recovery formats are never silently discarded.
 
 ## Browser boundary
 
