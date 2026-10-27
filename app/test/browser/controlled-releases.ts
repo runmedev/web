@@ -550,6 +550,69 @@ async function main() {
     console.log(
       'PASS: latest launcher B loads selected app A alongside existing A tabs'
     )
+    // A slow bootstrap is already a safe protocol-1 participant, even before
+    // its launcher loads. Exercise the actual worker's two-second peer probe.
+    const booting = await context.newPage()
+    try {
+      await booting.addInitScript(() => {
+        const fetcher = window.fetch.bind(window)
+        const timer = window.setTimeout.bind(window)
+        // Keep discovery pending deterministically while CI probes the tab.
+        // All service-worker deadlines remain real and unchanged.
+        window.setTimeout = ((
+          handler: TimerHandler,
+          delay?: number,
+          ...args: any[]
+        ) =>
+          timer(
+            handler,
+            delay === 4000 ? 30000 : delay,
+            ...args
+          )) as typeof window.setTimeout
+        window.fetch = async (...args) => {
+          if (args[0] === '/launcher.json')
+            await new Promise<void>((resolve) => {
+              ;(window as any).__finishLauncherCheck = resolve
+            })
+          return fetcher(...args)
+        }
+      })
+      await booting.goto(
+        `${base}/version/${expected.b}/launcher.html?session=slow-bootstrap`
+      )
+      await booting.waitForFunction(
+        () => typeof (window as any).__finishLauncherCheck === 'function'
+      )
+      const reply = await one.evaluate(
+        () =>
+          new Promise((resolve, reject) => {
+            const channel = new MessageChannel()
+            const timer = setTimeout(() => {
+              channel.port1.close()
+              reject(new Error('Loader peer probe stalled'))
+            }, 5000)
+            channel.port1.onmessage = (event) => {
+              clearTimeout(timer)
+              channel.port1.close()
+              resolve(event.data)
+            }
+            navigator.serviceWorker.controller!.postMessage(
+              'runme-loader-version',
+              [channel.port2]
+            )
+          })
+      )
+      assert.equal(reply, 'runme-loader-1')
+      assert.equal(await booting.locator('#runme-release-panel').count(), 0)
+      await booting.evaluate(() => (window as any).__finishLauncherCheck())
+      await ready(booting)
+      assert.equal(await active(booting), a)
+      console.log(
+        'PASS: a tab checking the latest launcher answers peer compatibility probes'
+      )
+    } finally {
+      await booting.close()
+    }
     await waitControl(one, (s) => s.candidate?.releaseId === expected.b)
     const three = await context.newPage()
     pages.push(three)

@@ -49,6 +49,10 @@ Acceptance:
 - For a pre-bootstrap installation, enter through B's immutable
   `/version/<release-id>/launcher.html`. This entry must normalize its route and
   open the selected older app without forcing the existing tabs to reload.
+- Hold a new tab's launcher discovery pending and probe it from another tab
+  through the real service worker. It must answer before importing the launcher,
+  then open the selected app when discovery resumes. Slow discovery must never
+  misclassify a controlled bootstrap as an incompatible legacy window.
 - Channel changes and exact pins only stage; activation requires Upgrade all tabs.
 - Pending notebook edits in multiple tabs persist before upgrade readiness.
 - A failed preparation blocks activation and leaves that tab editable.

@@ -3,6 +3,14 @@ import { launcherDescriptor, selectLauncher } from './launcherSelection'
 /** Minimal, storage-independent entrypoint. Never import two launchers into one
  * document: after execution starts, recovery is an explicit new navigation. */
 async function start() {
+  // Other tabs probe before admitting storage owners. Answer while discovery
+  // is pending: this document has no app/owner yet and can only load a protocol-1
+  // launcher. Waiting for the download can exceed the worker's probe deadline.
+  const respondToProbe = (event: MessageEvent) => {
+    if (event.data === 'runme-loader-probe')
+      event.ports[0]?.postMessage('runme-loader-1')
+  }
+  navigator.serviceWorker?.addEventListener('message', respondToProbe)
   const panel = document.createElement('section')
   panel.id = 'runme-bootstrap'
   const status = document.createElement('p')
@@ -47,6 +55,8 @@ async function start() {
     }, 15000)
     script.onload = () => {
       clearTimeout(timer)
+      // The loaded launcher has installed its own synchronous probe responder.
+      navigator.serviceWorker?.removeEventListener('message', respondToProbe)
       panel.hidden = true
     }
     script.onerror = () => {

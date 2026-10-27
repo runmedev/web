@@ -20,6 +20,11 @@ service worker precaches with its static dependencies. It verifies hashes before
 recording a completed launcher snapshot. It never executes two launchers in the
 same document. Module execution failure shows an explicit retry instead of
 risking overlapping coordination loops. No notebook data is removed.
+The bootstrap answers protocol-1 peer probes synchronously before discovery
+starts, then hands that responsibility to the loaded launcher. Otherwise a slow
+check could exceed the worker's peer-probe deadline and block other starting tabs.
+This response establishes loader compatibility only; normal storage admission
+still happens in the launcher.
 
 The active service worker may still serve an older shell. Once that shell has
 this bootstrap, it can select the latest launcher without waiting for a new
