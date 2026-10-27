@@ -18,6 +18,7 @@ import (
 
 // Runtime manifests are separate from archives: only lifecycle-aware builds can activate.
 type runtimeManifest struct {
+	TabRecoveryFormat      int      `json:"tabRecoveryFormat,omitempty"`
 	RecoveredControlFormat int      `json:"recoveredControlFormat,omitempty"`
 	Format                 int      `json:"format"`
 	ReleaseID              string   `json:"releaseId"`

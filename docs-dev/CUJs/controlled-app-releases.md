@@ -60,6 +60,7 @@ Acceptance:
 - Reloading another tab is an independent action. A session-storage quota error leaves that tab editable and does not roll back the selected worker.
 - A successful local reload checkpoints and restores editor state without involving a peer.
 - A confirmed capability mismatch triggers local checkpoint/reload recovery before any data RPC. Timeouts alone never do.
+- Historical rollback requires a durable flush of the initiating tab. Current peers refuse checkpoint reload into an app without `tabRecoveryFormat: 1`, retaining their mounted editors.
 - Historical launchers retain their original behavior. The frozen-baseline migration closes durable legacy peers before activation; the initiating historical app flushes locally before worker replacement.
 - After full offline readiness, offline restart uses B; offline rollback to A preserves edits made on B and leaves other tabs on their loaded UI versions.
 - The recovery selector works independently of React/application imports.

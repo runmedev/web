@@ -426,6 +426,14 @@ export function createSharedNotebookStore(
     const ready = Promise.resolve().then(async () => {
       // This small contract is stable across data-RPC versions and has no
       // storage effects. Incompatibility is distinct from timeout/unavailability.
+      if (release && release.manifest.tabRecoveryFormat !== 1) {
+        const error = new Error(
+          'Selected release predates replayable tab recovery. Keep this tab open and export edits, or select a release with tab recovery support.'
+        )
+        error.name = 'StorageWorkerIncompatibleError'
+        storageRecovery.set({ phase: 'blocked', message: error.message })
+        throw error
+      }
       const negotiated = (await client.request('handshake')) as {
         protocol: number
         rpcVersion: number

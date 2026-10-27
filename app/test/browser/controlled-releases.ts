@@ -865,6 +865,21 @@ async function main() {
       undefined,
       { timeout: 60000 }
     )
+    let rollbackPeer: Page | undefined
+    let rollbackPeerId: string | undefined
+    if (historicalApp) {
+      rollbackPeer = await context.newPage()
+      pages.push(rollbackPeer)
+      await rollbackPeer.goto(base + '/?session=historical-rollback-peer')
+      await ready(rollbackPeer)
+      rollbackPeerId = await rollbackPeer.evaluate(
+        () => (window as any).runmeRelease.tabId
+      )
+      await execute(
+        rollbackPeer,
+        `const d=await notebooks.createLocal('rollback-peer.runme');await notebooks.appendCell({target:{uri:d.handle.uri},kind:'markup',value:'Keep this editor alive during historical rollback'});await notebooks.show(d.handle.uri);`
+      )
+    }
     await context.setOffline(true)
     await one.reload()
     await ready(one)
@@ -900,6 +915,39 @@ async function main() {
       ),
       /Edited on B/
     )
+    if (rollbackPeer) {
+      await waitControl(
+        rollbackPeer,
+        (s) => !s.transition && s.active?.manifest.releaseId === a
+      )
+      const reloadError = await rollbackPeer.evaluate(async () => {
+        try {
+          await (window as any).runmeVersions.reloadTab()
+          return 'unexpected reload'
+        } catch (error) {
+          return String(error)
+        }
+      })
+      assert.match(reloadError, /cannot restore this tab/)
+      assert.equal(
+        await rollbackPeer.evaluate(() => (window as any).runmeRelease.tabId),
+        rollbackPeerId
+      )
+      assert.equal(await active(rollbackPeer), b)
+      await rollbackPeer
+        .getByText('Keep this editor alive during historical rollback', {
+          exact: true,
+        })
+        .first()
+        .waitFor()
+      await rollbackPeer.screenshot({
+        path: output + '/05-historical-rollback-peer-retained.png',
+      })
+      await rollbackPeer.close()
+      console.log(
+        'PASS: historical rollback flushes the initiator and refuses to discard a peer into an unsupported checkpoint reader'
+      )
+    }
     await one.screenshot({ path: output + '/05-offline-rollback.png' })
     console.log('PASS: compatible offline rollback keeps edits made on B')
     const recovery = await context.newPage()

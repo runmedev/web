@@ -42,6 +42,12 @@ contract. Already-running historical launcher code can still execute its old
 reload policy; code in another tab cannot rewrite it. Old data-RPC versions are
 rejected before effects, and unknown checkpoint formats are retained for recovery.
 Legacy JSON/Markdown editors without replayable operation IDs require a durable local flush; if storage cannot acknowledge it, that tab stays open for export/retry.
+Published manifests advertise `tabRecoveryFormat: 1`. Activation of a historical
+release without that contract first durably flushes the initiating tab to its
+current worker. Other current tabs refuse checkpoint-based reload into that
+historical app; their editors remain open for export or selection of a supported
+release. Compatibility of the notebook schema alone does not imply compatibility
+of the recovery envelope.
 Data-schema compatibility remains an activation prerequisite; independent tab
 upgrades do not authorize concurrent incompatible storage formats.
 

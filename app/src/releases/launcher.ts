@@ -317,7 +317,11 @@ async function beginLocked(target: Manifest): Promise<void> {
     throw new Error(
       'This release predates release-settings recovery. Choose a newer release.'
     )
-  if (runtime && !runtime.prepareReload && !legacyPrepared) {
+  if (
+    runtime &&
+    (!runtime.prepareReload || target.tabRecoveryFormat !== 1) &&
+    !legacyPrepared
+  ) {
     if (!runtime.prepare)
       throw new Error(
         'Wait for this tab to finish loading before activating a release'
@@ -413,6 +417,11 @@ async function reloadThisTab(): Promise<void> {
   freeze()
   try {
     if (runtime && !legacyPrepared) {
+      const selected = (await readControl()).active
+      if (runtime.prepareReload && selected?.manifest.tabRecoveryFormat !== 1)
+        throw new Error(
+          'The selected release cannot restore this tab’s pending-save checkpoints. Keep this tab open and export edits, or select a release with tab recovery support.'
+        )
       if (runtime.prepareReload) await runtime.prepareReload()
       else if (runtime.prepare) await runtime.prepare()
       else
