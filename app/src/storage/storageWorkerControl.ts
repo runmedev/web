@@ -9,6 +9,7 @@ export type WorkerStatus = {
   phaseElapsedMs: number
   uptimeMs: number
   diagnostics?: StorageOwnerDiagnostics
+  releaseDatabase?: StorageOwnerDiagnostics['releaseDatabase']
   error?: string
 }
 export type WorkerControlEvent =

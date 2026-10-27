@@ -35,6 +35,7 @@ async function main() {
   })
   const output = 'test/browser/test-output/storage-worker-reconnect'
   await mkdir(output, { recursive: true })
+  const watchdog = setTimeout(() => void browser.close(), 90000)
   const logs: string[] = []
   try {
     const context = await browser.newContext()
@@ -93,7 +94,7 @@ async function main() {
         const drivePath = '/src/storage/drive.ts'
         const protoPath = '/src/runme/client.ts'
         const controlPath = '/src/storage/storageRecovery.ts'
-        const protobufPath = '/.vite/deps/@bufbuild_protobuf.js'
+        const protobufPath = '/test/browser/reconnect-fixture.ts'
         w.createProto = (await import(protobufPath)).create
         const { createSharedNotebookStore } = await import(clientPath)
         const { DriveNotebookStore } = await import(drivePath)
@@ -299,6 +300,7 @@ async function main() {
       'PASS: force and graceful restarts preserve both pages; lost save reply is deduplicated; concurrent edits survive'
     )
   } finally {
+    clearTimeout(watchdog)
     await writeFile(`${output}/browser.log`, logs.join('\n'))
     await browser.close()
   }

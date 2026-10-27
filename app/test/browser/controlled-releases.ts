@@ -883,6 +883,21 @@ async function main() {
           exact: true,
         })
         .click()
+      // Clicking starts asynchronous cache verification and handoff. Opening a
+      // new app immediately can admit it to the still-active broken release and
+      // make it a participant before recovery intent has been committed. Observe
+      // completed activation, as shown by recovery status, before opening it.
+      const recoveredDeadline = Date.now() + 60000
+      let recovered = false
+      while (Date.now() < recoveredDeadline) {
+        recovered = await recovery.evaluate(async (id) => {
+          const state = await (window as any).runmeVersions.get()
+          return !state.transition && state.active?.manifest.releaseId === id
+        }, a)
+        if (recovered) break
+        await new Promise((resolve) => setTimeout(resolve, 100))
+      }
+      assert.ok(recovered, 'Recovery must activate A before opening a new app')
       const restored = await context.newPage()
       pages.splice(0, 3, restored)
       await restored.goto(base + '/?session=release-one')

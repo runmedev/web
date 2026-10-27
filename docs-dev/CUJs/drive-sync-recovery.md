@@ -365,13 +365,19 @@ path may call page reload. Block a drain and verify diagnostics and force restar
 still work. Block release settings during startup and inspect the last reached
 phase. App upgrade/reload continues to require its separate preservation protocol.
 
-The browser regression is `test/browser/storage-worker-reconnect.ts`, running
-against Vite on localhost:5194 with disposable Chromium storage. Compile it with
-`tsc --target es2022 --module nodenext --moduleResolution nodenext
---esModuleInterop --skipLibCheck --outDir test/browser/.generated
- test/browser/storage-worker-reconnect.ts`, then run the generated script with
-`CHROMIUM_PATH` pointing to an isolated Chromium for Testing binary. Evidence goes
-to `test/browser/test-output/storage-worker-reconnect`.
+Run `pnpm -C app run cuj:storage` for `storage-worker-reconnect.ts`. Its driver
+starts the real Vite app on localhost:5194 and uses disposable Chromium storage.
+Set `CHROMIUM_PATH` when using a Chromium for Testing binary instead of Playwright's
+installed browser. Evidence goes to `test/browser/test-output/storage-worker-reconnect`.
+The test also stops the worker without requesting a restart, then verifies that
+each tab independently reconnects on its next save and joins the same replacement.
+
+`pnpm -C app run cuj:releases` also runs `storage-worker-startup.ts` against emitted
+production assets and the Go release fixture server. It holds a real IndexedDB
+transaction ahead of the worker's settings read. It verifies the pending
+`get-requested` trace, force-close during a stalled graceful drain, a timeout trace,
+and successful replacement after releasing the transaction without reloading the
+page. Evidence goes to `test/browser/test-output/storage-worker-startup`.
 
 `storage-owner-recovery.ts` retains coverage of the older coordinated reload wire
 protocol for compatibility. It is not evidence for the new in-place restart path.

@@ -1,5 +1,6 @@
 import { appLogger } from '../lib/logging/runtime'
 import { OWNER_LOCK, control, readControl } from '../releases/control'
+import { releaseDatabaseDiagnostics } from '../releases/releaseDiagnostics'
 import { retireUnreadableOwner } from './releaseOwnerFailure'
 import { installStorageWorkerControl } from './storageWorkerControl'
 
@@ -40,6 +41,7 @@ installStorageWorkerControl({
     phaseElapsedMs: Date.now() - phaseStartedAt,
     uptimeMs: Date.now() - startedAt,
     diagnostics: runtime?.diagnostics(),
+    releaseDatabase: releaseDatabaseDiagnostics(),
   }),
   phase: setPhase,
   drain: async () => {

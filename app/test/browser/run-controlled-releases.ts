@@ -130,6 +130,24 @@ async function main() {
     )
     const code = await new Promise((resolve) => test.once('exit', resolve))
     if (code !== 0) throw new Error(`Controlled release CUJ failed: ${code}`)
+    const startup = spawn(
+      process.execPath,
+      [
+        join(
+          dirname(fileURLToPath(import.meta.url)),
+          'storage-worker-startup.js'
+        ),
+      ],
+      {
+        env: { ...process.env, RUNME_TEST_URL: 'http://127.0.0.1:5198' },
+        stdio: 'inherit',
+      }
+    )
+    const startupCode = await new Promise((resolve) =>
+      startup.once('exit', resolve)
+    )
+    if (startupCode !== 0)
+      throw new Error(`Storage startup CUJ failed: ${startupCode}`)
   } finally {
     server.kill('SIGTERM')
   }

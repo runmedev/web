@@ -72,7 +72,8 @@ jobs:
       - name: Test storage restart and editor recovery
         run: >-
           pnpm -C app exec vitest run
-          src/storage/storageRecovery.test.ts src/lib/storageRecoveryDrafts.test.ts
+          src/storage/storageRecovery.test.ts src/storage/editorSaveSession.test.ts
+          src/storage/storageWorkerControl.test.ts src/lib/storageRecoveryDrafts.test.ts
           src/components/StorageRecoveryBanner.test.tsx
           --maxWorkers=2 --minWorkers=1
       - name: Test explorer folder refresh
@@ -123,7 +124,11 @@ jobs:
           src/releases/releaseDatabase.test.ts src/releases/startupRecovery.test.ts src/releases/recoverControl.test.ts src/releases/controlChunks.test.ts src/releases/recoveryOwnerLock.test.ts src/storage/releaseOwnerFailure.test.ts
           src/releases/startupDiagnostics.test.ts
           src/pwa/loader-worker.test.ts src/components/ReleaseControls.test.tsx
+          src/components/ReleaseRecoveryControls.test.tsx src/components/StorageWorkerControls.test.tsx src/releases/releaseCatalog.test.ts
       - run: pnpm -C app exec playwright-core install --with-deps chromium
+      - name: Test independent storage reconnect
+        if: matrix.baseline == 'current'
+        run: pnpm -C app run cuj:storage
       - run: pnpm -C app run cuj:releases
         env:
           RUNME_RELEASE_BASELINE_COMMIT: ${{ matrix.baseline != 'current' && matrix.baseline || '' }}
@@ -131,4 +136,7 @@ jobs:
         if: always()
         with:
           name: controlled-release-evidence-${{ matrix.baseline }}
-          path: app/test/browser/test-output/controlled-releases/
+          path: |
+            app/test/browser/test-output/controlled-releases/
+            app/test/browser/test-output/storage-worker-startup/
+            app/test/browser/test-output/storage-worker-reconnect/

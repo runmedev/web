@@ -33,7 +33,8 @@ and are never blindly retried. Editor batches alone have this idempotent contrac
 
 A BroadcastChannel management endpoint starts before lock acquisition and runtime
 imports. It reports the current startup phase and elapsed time without reading
-IndexedDB. Once initialized, it includes host request diagnostics. Version UI
+IndexedDB. It includes release-database traces before runtime initialization and
+host request diagnostics afterward. Version UI
 always exposes discovery, stop, force stop, restart and force restart controls.
 Discovery describes responding Runme workers, not all workers in the browser.
 
