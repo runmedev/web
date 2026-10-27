@@ -738,7 +738,7 @@ async function main() {
     await openVersions(one)
     await one
       .getByRole('button', {
-        name: 'Activate release and update this tab',
+        name: /^(Activate release and update this tab|Upgrade all tabs)$/,
         exact: true,
       })
       .click()
@@ -920,7 +920,7 @@ async function main() {
       await openVersions(one)
       await one
         .getByRole('button', {
-          name: 'Activate release and update this tab',
+          name: /^(Activate release and update this tab|Upgrade all tabs)$/,
           exact: true,
         })
         .click()
@@ -989,7 +989,7 @@ async function main() {
       await openVersions(restored)
       await restored
         .getByRole('button', {
-          name: 'Activate release and update this tab',
+          name: /^(Activate release and update this tab|Upgrade all tabs)$/,
           exact: true,
         })
         .click()
