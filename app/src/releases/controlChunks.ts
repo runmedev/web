@@ -10,7 +10,8 @@ export function readControlValue(
   table: IDBObjectStore,
   value: unknown,
   done: (value: unknown) => void,
-  failed: (error: unknown) => void
+  failed: (error: unknown) => void,
+  progress?: (read: number, total: number) => void
 ): void {
   const header = value as Partial<Header> | undefined
   if (header?.encoding !== 'runme-control-json-chunks-v1') {
@@ -24,6 +25,7 @@ export function readControlValue(
   }
   const chunks: string[] = new Array(count)
   let remaining = count
+  progress?.(0, count)
   for (let index = 0; index < count; index++) {
     const request = table.get(`control-chunk-${index}`)
     request.onerror = () => failed(request.error)
@@ -36,7 +38,9 @@ export function readControlValue(
         return
       }
       chunks[index] = request.result
-      if (--remaining === 0) {
+      remaining--
+      progress?.(count - remaining, count)
+      if (remaining === 0) {
         try {
           done(JSON.parse(chunks.join('')))
         } catch (error) {

@@ -419,3 +419,21 @@ it('releases preserved editors if sending the ready acknowledgement throws', asy
   expect(release).toHaveBeenCalledOnce()
   expect(storageRecovery.getSnapshot().phase).toBe('blocked')
 })
+
+it('offers recovery for a release-settings failure before the RPC deadline', async () => {
+  const { requiresStorageReload } = await import('./storageRecovery')
+  expect(
+    requiresStorageReload(
+      new Error(
+        'Release settings read timeout (get). Stored notebook data has not been removed.'
+      )
+    )
+  ).toBe(true)
+  expect(
+    requiresStorageReload(
+      new Error(
+        'Stale or frozen release: storage request rejected before effects'
+      )
+    )
+  ).toBe(false)
+})

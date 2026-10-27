@@ -1,3 +1,5 @@
+import type { StorageOwnerDiagnostics } from './storageOwnerDiagnostics'
+
 /** Page-local recovery status shared by the notebook banner and storage status page. */
 export type StorageRecoveryState = {
   phase: 'healthy' | 'required' | 'preparing' | 'restarting' | 'blocked'
@@ -6,6 +8,7 @@ export type StorageRecoveryState = {
 let state: StorageRecoveryState = { phase: 'healthy', message: '' }
 const listeners = new Set<() => void>()
 let restart: (() => void) | undefined
+let diagnose: (() => Promise<StorageOwnerDiagnostics>) | undefined
 let backup: (() => number) | undefined
 let prepare: ((signal: AbortSignal) => Promise<() => void>) | undefined
 
@@ -30,6 +33,20 @@ export const storageRecovery = {
     )
       return
     this.set({ phase: 'required', message: error.message })
+  },
+  /** Independent of normal RPC admission and release-settings reads. */
+  registerDiagnostics(callback: () => Promise<StorageOwnerDiagnostics>) {
+    diagnose = callback
+    return () => {
+      if (diagnose === callback) diagnose = undefined
+    }
+  },
+  diagnose() {
+    return diagnose
+      ? diagnose()
+      : Promise.reject(
+          new Error('Storage worker diagnostics are not connected.')
+        )
   },
   registerRestart(callback: () => void) {
     restart = callback
@@ -68,7 +85,7 @@ export const storageRecovery = {
 }
 
 export function requiresStorageReload(error: Error): boolean {
-  return /Storage worker version mismatch|Storage worker disconnected|Storage worker message failed|Notebook storage worker failed|Storage worker did not acknowledge|Storage worker did not respond|Drive endpoint differs from the storage owner/.test(
+  return /Release settings (?:open|read|commit) (?:blocked|timeout|failed)|Storage worker version mismatch|Storage worker disconnected|Storage worker message failed|Notebook storage worker failed|Storage worker did not acknowledge|Storage worker did not respond|Drive endpoint differs from the storage owner/.test(
     error.message
   )
 }

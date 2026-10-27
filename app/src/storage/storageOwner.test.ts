@@ -382,7 +382,12 @@ it('answers diagnostics outside initialization and reports waiting requests with
   const diagnostics = await client.diagnose()
   expect(diagnostics.initialization).toBe('pending')
   expect(diagnostics.oldestRequests).toEqual([
-    { method: 'save', elapsedMs: expect.any(Number), stage: 'initializing' },
+    {
+      method: 'save',
+      elapsedMs: expect.any(Number),
+      stage: 'initializing',
+      stageElapsedMs: expect.any(Number),
+    },
   ])
   expect(JSON.stringify(diagnostics)).not.toContain('private-uri')
   expect(JSON.stringify(diagnostics)).not.toContain('notebook body')
@@ -559,4 +564,85 @@ it('does not treat disconnect as acknowledgement of an outstanding write', async
   await saving
   const { assertNoUpgradeBlockers } = await import('../releases/runtime')
   expect(assertNoUpgradeBlockers).toThrow('unconfirmed')
+})
+
+it.each([1, 2])(
+  'distinguishes authorization pass %s from store initialization',
+  async (pass) => {
+    const { store } = setup()
+    let resume!: () => void
+    let calls = 0
+    const authorize = async () => {
+      if (++calls === pass)
+        await new Promise<void>((resolve) => {
+          resume = resolve
+        })
+    }
+    const client = connect(
+      new StorageOwnerHost(
+        store as unknown as LocalNotebooks,
+        undefined,
+        authorize
+      )
+    )
+    const saving = client.request('save', [
+      'private-uri',
+      { secret: 'notebook contents' },
+    ])
+    await vi.waitFor(() => expect(calls).toBe(pass))
+    const snapshot = await client.diagnose()
+    expect(snapshot.oldestRequests[0].stage).toBe(
+      pass === 1 ? 'authorizing' : 'reauthorizing'
+    )
+    expect(store.save).not.toHaveBeenCalled()
+    expect(JSON.stringify(snapshot)).not.toContain('notebook contents')
+    resume()
+    await saving
+    expect(store.save).toHaveBeenCalledOnce()
+  }
+)
+
+it('answers diagnostics while restart is stuck acquiring release settings', async () => {
+  const controlModule = await import('../releases/control')
+  const { recoveryMessage } = await import('./storageRecoveryProtocol')
+  let rejectRead!: (error: Error) => void
+  const control = vi.spyOn(controlModule, 'control').mockImplementation(
+    () =>
+      new Promise((_resolve, reject) => {
+        rejectRead = reject
+      })
+  )
+  const { store } = setup()
+  const shutdown = vi.fn()
+  const host = new StorageOwnerHost(
+    store as unknown as LocalNotebooks,
+    shutdown,
+    undefined,
+    { releaseId: 'test', epoch: 1, capabilities: [] }
+  )
+  const channel = new MessageChannel()
+  ports.push(channel.port1 as unknown as MessagePort)
+  host.attach(channel.port1 as unknown as MessagePort)
+  const client = new StorageOwnerClient(
+    channel.port2 as unknown as MessagePort,
+    async () => 'token'
+  )
+  clients.push(client)
+  try {
+    channel.port2.postMessage(recoveryMessage('restart', 'restart-round'))
+    await vi.waitFor(() => expect(control).toHaveBeenCalledOnce())
+    const snapshot = await client.diagnose()
+    expect(snapshot.restart).toMatchObject({
+      stage: 'release-settings',
+      readyTabs: 0,
+    })
+    expect(shutdown).not.toHaveBeenCalled()
+    rejectRead(new Error('Release settings read timeout (get)'))
+    await vi.waitFor(async () =>
+      expect((await client.diagnose()).restart?.stage).toBe('failed')
+    )
+    expect(shutdown).not.toHaveBeenCalled()
+  } finally {
+    control.mockRestore()
+  }
 })

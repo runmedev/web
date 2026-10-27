@@ -28,6 +28,7 @@ export class StorageOwnerClient {
   private uncertain = new Set<string>()
   private unresolvedCommit = false
   private closed = false
+  private unregisterDiagnostics?: () => void
   private unregisterReleaseBlocker = registerUpgradeBlocker(() =>
     this.uncertain.size || this.unresolvedCommit
       ? 'A storage operation has an unconfirmed outcome; resolve it before upgrading'
@@ -71,6 +72,9 @@ export class StorageOwnerClient {
         )
       )
     port.start()
+    this.unregisterDiagnostics = storageRecovery.registerDiagnostics(() =>
+      this.diagnose()
+    )
   }
   /** Coalesce probes outside the data RPC/hello path; never retry the timed-out mutation. */
   diagnose(): Promise<StorageOwnerDiagnostics> {
@@ -276,6 +280,7 @@ export class StorageOwnerClient {
     } else pending.resolve(message.value)
   }
   close(error = new Error('Storage worker disconnected')): void {
+    this.unregisterDiagnostics?.()
     this.recovery?.disconnected()
     this.onFailure?.(error)
     this.closed = true

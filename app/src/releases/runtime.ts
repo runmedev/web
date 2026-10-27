@@ -6,6 +6,7 @@ import type {
   ReleaseProgress,
   Selection,
 } from './control'
+import type { releaseDatabaseDiagnostics } from './releaseDiagnostics'
 
 /** The independent launcher owns coordination; React registers its durable flush
  * hook only after model initialization. No application import is needed by recovery.
@@ -33,6 +34,9 @@ declare global {
       cancel: () => Promise<void>
       prune: () => Promise<number>
       // Optional because an installed older loader can host a newer app bundle.
+      diagnostics?: typeof releaseDatabaseDiagnostics
+      prepareRecovery?: (selection: Selection) => Promise<Manifest>
+      recover?: (selection: Selection) => Promise<void>
       uiVersion?: number
       registerVersionUi?: () => () => void
       status?: () => string

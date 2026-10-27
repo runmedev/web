@@ -18,10 +18,15 @@ import {
 import { loaderController } from './loaderController'
 import { recoverUnreadableControl } from './recoverControl'
 import { withRecoveryOwner } from './recoveryOwnerLock'
+import { resolvePublishedRelease } from './releaseCatalog'
 import { ReleaseControlError } from './releaseDatabase'
+import { releaseDatabaseDiagnostics } from './releaseDiagnostics'
 import type { OfflineDownloadStatus, ReleaseRuntime } from './runtime'
 import { startupDiagnostics } from './startupDiagnostics'
-import { prepareStartupRecovery } from './startupRecovery'
+import {
+  downloadRecoveryRelease,
+  prepareStartupRecovery,
+} from './startupRecovery'
 
 const tabId = crypto.randomUUID()
 const panel = document.createElement('section')
@@ -708,13 +713,16 @@ async function render(): Promise<void> {
     if (s.transition?.phase === 'prepare')
       button('Cancel upgrade', () => cancel(s.transition!.id))
     const label = document.createElement('label')
-    label.textContent = 'Exact release ID '
+    label.textContent = 'Commit SHA or release ID '
     const input = document.createElement('input')
     input.placeholder = '<commit>-<build ID>'
     label.append(input)
     panel.append(label)
-    button('Download exact release', () =>
-      check({ kind: 'pinned', releaseId: input.value.trim() })
+    button('Download exact release', async () =>
+      check({
+        kind: 'pinned',
+        releaseId: await resolvePublishedRelease(input.value),
+      })
     )
     button('Retry preparation / resume', async () => {
       preparation = undefined
@@ -775,8 +783,10 @@ async function main(): Promise<void> {
   report('Starting the installed release…')
   diagnostics.record('launcher', 'info', {
     path: new URL(import.meta.url).pathname,
-    source: document.documentElement.dataset.runmeLauncherSource ?? 'legacy-shell',
-    bootstrapLauncher: document.documentElement.dataset.runmeLauncher ?? 'unknown',
+    source:
+      document.documentElement.dataset.runmeLauncherSource ?? 'legacy-shell',
+    bootstrapLauncher:
+      document.documentElement.dataset.runmeLauncher ?? 'unknown',
   })
   await installLoader()
   report('Registering this tab…')
@@ -845,6 +855,7 @@ function showStartupRecovery(error: unknown): void {
   if (error instanceof ReleaseControlError)
     diagnostics.record(`release-settings-${error.stage}`, 'failed', {
       ...error.diagnosticDetails,
+      trace: JSON.stringify(error.trace ?? null),
       stage: `release-settings-${error.stage}`,
     })
   for (const node of [...panel.children])
@@ -858,15 +869,17 @@ function showStartupRecovery(error: unknown): void {
     recoverStartup({ kind: 'channel', name: 'latest' })
   )
   const label = document.createElement('label')
-  label.textContent = 'Exact release ID '
+  label.textContent = 'Commit SHA or release ID '
   const input = document.createElement('input')
   input.placeholder = '<commit>-<build ID>'
   label.append(input)
   panel.append(label)
-  button('Try exact release', () =>
-    recoverStartup(
-      validateSelection({ kind: 'pinned', releaseId: input.value.trim() })
-    )
+  input.value = new URLSearchParams(location.search).get('release') ?? ''
+  button('Try exact release', async () =>
+    recoverStartup({
+      kind: 'pinned',
+      releaseId: await resolvePublishedRelease(input.value),
+    })
   )
   // An expanded trace must never push the recovery actions below the fold.
   panel.append(diagnostics.element)
@@ -922,6 +935,22 @@ async function recoverStartup(
 }
 
 window.runmeVersions = {
+  diagnostics: releaseDatabaseDiagnostics,
+  prepareRecovery: (selection) =>
+    downloadRecoveryRelease(
+      validateSelection(selection),
+      (value) => reportProgress('Preparing recovery release', value),
+      startupScope()
+    ),
+  recover: async (selection) => {
+    const candidate = await prepareStartupRecovery(
+      validateSelection(selection),
+      (value) => reportProgress('Preparing recovery release', value),
+      startupScope()
+    )
+    await begin(candidate)
+    await tick()
+  },
   uiVersion: 1,
   registerVersionUi: () => {
     versionUiUsers++
@@ -1007,6 +1036,7 @@ void diagnostics.step('bootstrap', main).catch((error) => {
   if (startupPrepared && error instanceof ReleaseControlError) {
     diagnostics.record(`release-settings-${error.stage}`, 'failed', {
       ...error.diagnosticDetails,
+      trace: JSON.stringify(error.trace ?? null),
       stage: `release-settings-${error.stage}`,
     })
     void recoverStartup()

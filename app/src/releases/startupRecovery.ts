@@ -18,10 +18,7 @@ export async function prepareStartupRecovery(
   scope: 'all' | 'startup' = 'all',
   repair?: (candidate: Manifest) => Promise<void>
 ): Promise<Manifest> {
-  const candidate = await discover(selection)
-  await navigator.locks.request('runme-release-cache', { mode: 'shared' }, () =>
-    stage(candidate, progress, scope)
-  )
+  const candidate = await downloadRecoveryRelease(selection, progress, scope)
   // A transient error can clear while downloading. Retry a second bounded
   // transaction, always rereading state so a prior uncertain commit is safe.
   for (let attempt = 0; ; attempt++) {
@@ -39,4 +36,17 @@ export async function prepareStartupRecovery(
       if (!(error instanceof ReleaseControlError) || attempt === 1) throw error
     }
   }
+}
+
+/** Download and verify a recovery build without accessing release settings. */
+export async function downloadRecoveryRelease(
+  selection: Selection,
+  progress?: (value: ReleaseProgress) => void,
+  scope: 'all' | 'startup' = 'all'
+): Promise<Manifest> {
+  const candidate = await discover(selection)
+  await navigator.locks.request('runme-release-cache', { mode: 'shared' }, () =>
+    stage(candidate, progress, scope)
+  )
+  return candidate
 }

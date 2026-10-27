@@ -1,3 +1,4 @@
+import { appLogger } from '../lib/logging/runtime'
 import { useEffect, useState, useSyncExternalStore } from 'react'
 import { storageRecovery } from '../storage/storageRecovery'
 import {
@@ -33,6 +34,8 @@ export default function StorageRecoveryBanner({
   const [drafts, setDrafts] = useState<RecoveryDraft[]>([])
   const [currentDrafts, setCurrentDrafts] = useState<RecoveryDraft[]>([])
   const [captureMessage, setCaptureMessage] = useState('')
+  const [diagnostics, setDiagnostics] = useState('')
+  const [diagnosing, setDiagnosing] = useState(false)
   useEffect(() => {
     try {
       setDrafts(readRecoveryDrafts())
@@ -88,6 +91,52 @@ export default function StorageRecoveryBanner({
             {busy ? 'Preparing restart…' : 'Restart Runme'}
           </button>
         </>
+      )}
+      {state.phase !== 'healthy' && (
+        <div id={`storage-diagnostics-${location}`}>
+          <button
+            type="button"
+            disabled={diagnosing}
+            className="mt-2 underline"
+            onClick={async () => {
+              setDiagnosing(true)
+              try {
+                const snapshot = await storageRecovery.diagnose()
+                setDiagnostics(JSON.stringify(snapshot, null, 2))
+                appLogger.info('Storage worker diagnostic snapshot', {
+                  attrs: { scope: 'storage.owner', diagnostics: snapshot },
+                })
+              } catch (error) {
+                setDiagnostics(String(error))
+              } finally {
+                setDiagnosing(false)
+              }
+            }}
+          >
+            {diagnosing ? 'Checking worker…' : 'Check storage worker'}
+          </button>
+          {diagnostics && (
+            <pre
+              className="max-h-64 overflow-auto whitespace-pre-wrap"
+              aria-label="Storage worker diagnostics"
+            >
+              {diagnostics}
+            </pre>
+          )}
+          <p>
+            Diagnostics do not save or retry notebook operations. A reply
+            confirms the worker can process diagnostic messages, not that
+            storage writes are working.
+          </p>
+          {state.phase === 'blocked' && (
+            <p>
+              If restart cannot finish, download current editor copies in every
+              Runme tab first. Then close all Runme tabs for this site and
+              reopen Runme. If the worker remains stuck, restart the browser
+              after saving the downloads. Do not clear site data.
+            </p>
+          )}
+        </div>
       )}
       {captureMessage && <p>{captureMessage}</p>}
       {currentDrafts.map((draft, index) => (

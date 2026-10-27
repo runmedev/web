@@ -1,3 +1,4 @@
+import { ReleaseRecoveryControls } from './ReleaseRecoveryControls'
 import { Button } from '@radix-ui/themes'
 import { useCallback, useEffect, useState } from 'react'
 
@@ -6,7 +7,6 @@ import {
   type Control,
   type Manifest,
   type ReleaseProgress,
-  releaseIdValid,
 } from '../releases/control'
 import '../releases/runtime'
 import type { OfflineDownloadStatus } from '../releases/runtime'
@@ -17,16 +17,25 @@ import type { OfflineDownloadStatus } from '../releases/runtime'
  * the common commands and can use the independent recovery page for rollback.
  */
 export function ReleaseControls() {
+  return (
+    <>
+      <ReleaseRecoveryControls />
+      <InstalledReleaseControls />
+    </>
+  )
+}
+
+/** Installed-state controls may load independently of recovery controls. */
+function InstalledReleaseControls() {
   const api = window.runmeVersions
   const [state, setState] = useState<Control>()
   const [message, setMessage] = useState('')
   const [progress, setProgress] = useState<ReleaseProgress>()
   const [offline, setOffline] = useState<OfflineDownloadStatus>()
   const [error, setError] = useState('')
+  const [readError, setReadError] = useState('')
   const [busy, setBusy] = useState(false)
-  const [exact, setExact] = useState('')
   const [cached, setCached] = useState<Manifest[]>([])
-  const [published, setPublished] = useState<string[]>([])
 
   // Polling also observes other tabs and older loaders without change events.
   // Ignore late responses after unmount so a closed workspace tab stays closed.
@@ -41,6 +50,7 @@ export function ReleaseControls() {
         const next = await api.get()
         if (!disposed) {
           setState(next)
+          setReadError('')
           setProgress(api.progress?.())
           setOffline(
             next.active && api.offline?.(next.active.manifest.releaseId)
@@ -53,7 +63,7 @@ export function ReleaseControls() {
           )
         }
       } catch (e) {
-        if (!disposed) setError(String(e))
+        if (!disposed) setReadError(String(e))
       } finally {
         reading = false
       }
@@ -107,13 +117,16 @@ export function ReleaseControls() {
 
   if (!api) return <p>Release channels are available in published builds.</p>
   if (!state)
-    return <p role="status">{error || 'Loading release information…'}</p>
+    return (
+      <p role="status">
+        {readError || error || 'Loading release information…'}
+      </p>
+    )
   const active = state.active?.manifest
   const candidate = state.candidate
   const hasUpdate = candidate && candidate.releaseId !== active?.releaseId
   const selection =
     state.selection.kind === 'channel' ? state.selection.name : 'Pinned release'
-  const recoveryUrl = '/recovery.html' + location.search + location.hash
 
   return (
     <section
@@ -214,9 +227,9 @@ export function ReleaseControls() {
           </Button>
         </div>
       )}
-      {error && (
+      {(readError || error) && (
         <p role="alert" className="text-red-700">
-          {error}
+          {readError || error}
         </p>
       )}
       <p role="status" className="break-words text-nb-text-muted">
@@ -271,68 +284,6 @@ export function ReleaseControls() {
           id="release-other-actions"
           className="mt-3 flex flex-col items-start gap-3"
         >
-          <label className="w-full">
-            Exact release ID
-            <input
-              className="mt-1 w-full rounded border border-nb-border p-2 font-mono text-xs"
-              value={exact}
-              onChange={(e) => setExact(e.target.value)}
-              placeholder="<commit>-<build ID>"
-            />
-          </label>
-          <Button
-            disabled={
-              busy || !!state.transition || !releaseIdValid(exact.trim())
-            }
-            onClick={() =>
-              void run(() =>
-                api.check({ kind: 'pinned', releaseId: exact.trim() })
-              )
-            }
-          >
-            Download exact release
-          </Button>
-          <Button
-            disabled={busy}
-            onClick={() =>
-              void run(async () => {
-                const response = await fetch('/releases/catalog.json', {
-                  cache: 'no-store',
-                  credentials: 'omit',
-                  redirect: 'error',
-                })
-                if (!response.ok)
-                  throw new Error(
-                    'Published releases are unavailable. Cached releases remain available below.'
-                  )
-                const catalog = await response.json()
-                if (catalog.format !== 1 || !Array.isArray(catalog.releases))
-                  throw new Error('Unsupported release catalog')
-                setPublished(
-                  catalog.releases
-                    .slice(-100)
-                    .reverse()
-                    .map(
-                      (release: { releaseId?: unknown }) => release?.releaseId
-                    )
-                    .filter(releaseIdValid)
-                )
-              })
-            }
-          >
-            Browse published releases
-          </Button>
-          {published.map((id) => (
-            <Button
-              key={id}
-              disabled={busy || !!state.transition}
-              onClick={() =>
-                void run(() => api.check({ kind: 'pinned', releaseId: id }))
-              }
-            >
-              Download {id.slice(0, 8)} / {id.slice(41, 49)}
-            </Button>
-          ))}
           {api.activate &&
             cached
               .filter((m) => m.releaseId !== active?.releaseId)
@@ -351,14 +302,6 @@ export function ReleaseControls() {
           >
             Remove unused downloads
           </Button>
-          <a
-            className="text-blue-600 underline"
-            href={recoveryUrl}
-            target="_blank"
-            rel="noopener"
-          >
-            Open recovery in another tab
-          </a>
         </div>
       </details>
     </section>

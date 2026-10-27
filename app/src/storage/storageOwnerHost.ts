@@ -1,5 +1,7 @@
-import { control } from '../releases/control'
 import { setGoogleDriveBaseUrl } from '../lib/googleDriveRuntime'
+import { appLogger } from '../lib/logging/runtime'
+import { control } from '../releases/control'
+import { releaseDatabaseDiagnostics } from '../releases/releaseDiagnostics'
 import type { parser_pb } from '../runme/client'
 import {
   type CreationAttemptRecord,
@@ -55,6 +57,7 @@ export class StorageOwnerHost {
     method: string
     startedAt: number
     stage: string
+    stageStartedAt: number
   }>()
   private inFlight = new Set<Promise<void>>()
   private recovery?: {
@@ -64,6 +67,8 @@ export class StorageOwnerHost {
     timer?: ReturnType<typeof setTimeout>
   }
   private draining?: Promise<void>
+  private recoveryStage = 'idle'
+  private recoveryStageStartedAt = Date.now()
 
   constructor(
     private readonly store: LocalNotebooks,
@@ -103,6 +108,7 @@ export class StorageOwnerHost {
         method: request.method,
         elapsedMs: Date.now() - request.startedAt,
         stage: request.stage,
+        stageElapsedMs: Date.now() - request.stageStartedAt,
       })
       if (oldestRequests.length === 10) break
     }
@@ -122,6 +128,14 @@ export class StorageOwnerHost {
         : 'idle',
       activeRequestCount: this.activeRequests.size,
       oldestRequests,
+      releaseDatabase: releaseDatabaseDiagnostics(),
+      restart: {
+        stage: this.recoveryStage,
+        elapsedMs: Date.now() - this.recoveryStageStartedAt,
+        readyTabs: this.recovery?.ready.size ?? 0,
+        connectedTabs: this.ports.size,
+        inFlight: this.inFlight.size,
+      },
     }
   }
 
@@ -145,7 +159,15 @@ export class StorageOwnerHost {
         return
       }
       if (event.data?.type === 'storage-recovery') {
-        void this.recover(port, event.data).catch(error => port.postMessage(recoveryMessage('blocked', event.data.id, String(error))))
+        void this.recover(port, event.data).catch((error) => {
+          this.markRecovery('failed')
+          appLogger.warn('Storage restart failed', {
+            attrs: { scope: 'storage.owner', diagnostics: this.diagnostics() },
+          })
+          port.postMessage(
+            recoveryMessage('blocked', event.data.id, String(error))
+          )
+        })
         return
       }
       const operation = this.receive(port, event.data)
@@ -164,14 +186,25 @@ export class StorageOwnerHost {
   }
 
   /** Unversioned control plane: every attached tab must preserve its editor before shutdown. */
-  private async recover(port: MessagePort, message: RecoveryMessage): Promise<void> {
+  private async recover(
+    port: MessagePort,
+    message: RecoveryMessage
+  ): Promise<void> {
     if (this.releaseDraining) return
     if (!this.ports.has(port) || message.protocol !== 1) return
     if (message.action === 'restart') {
-      if (this.release) await control(s => {
-        if (s.transition || s.active?.epoch !== this.release!.epoch) throw new Error('A release transition is pending; use Versions recovery')
-        s.emergencyRestart = {epoch: this.release!.epoch, id: this.recovery?.id ?? message.id}
-      })
+      this.markRecovery('release-settings')
+      if (this.release)
+        await control((s) => {
+          if (s.transition || s.active?.epoch !== this.release!.epoch)
+            throw new Error(
+              'A release transition is pending; use Versions recovery'
+            )
+          s.emergencyRestart = {
+            epoch: this.release!.epoch,
+            id: this.recovery?.id ?? message.id,
+          }
+        })
       if (this.recovery && !this.recovery.draining) {
         port.postMessage(recoveryMessage('prepare', this.recovery.id))
         return
@@ -193,6 +226,7 @@ export class StorageOwnerHost {
         timer: undefined as ReturnType<typeof setTimeout> | undefined,
       }
       this.recovery = round
+      this.markRecovery('waiting-for-tab-backups')
       this.armRecoveryTimeout()
       for (const client of this.ports.keys())
         client.postMessage(recoveryMessage('prepare', round.id))
@@ -204,6 +238,12 @@ export class StorageOwnerHost {
       this.recovery.ready.add(port)
       void this.finishRecovery()
     }
+  }
+
+  /** Restart phases remain observable even when the release database cannot reply. */
+  private markRecovery(stage: string): void {
+    this.recoveryStage = stage
+    this.recoveryStageStartedAt = Date.now()
   }
 
   private armRecoveryTimeout(): void {
@@ -219,6 +259,7 @@ export class StorageOwnerHost {
   }
 
   private abortRecovery(error: string): void {
+    this.markRecovery('blocked')
     const round = this.recovery
     if (!round) return
     clearTimeout(round.timer)
@@ -226,9 +267,15 @@ export class StorageOwnerHost {
     // gather new editor acknowledgements after a late tab fixes its backup error.
     if (!round.draining) {
       this.recovery = undefined
-      if (this.release) void control(s => { if (s.emergencyRestart?.epoch === this.release!.epoch && s.emergencyRestart.id === round.id) delete s.emergencyRestart }).catch(() => {})
-    }
-    else round.ready.clear()
+      if (this.release)
+        void control((s) => {
+          if (
+            s.emergencyRestart?.epoch === this.release!.epoch &&
+            s.emergencyRestart.id === round.id
+          )
+            delete s.emergencyRestart
+        }).catch(() => {})
+    } else round.ready.clear()
     for (const port of this.ports.keys())
       port.postMessage(recoveryMessage('blocked', round.id, error))
   }
@@ -244,11 +291,14 @@ export class StorageOwnerHost {
     if (!round.draining) {
       round.draining = true
       this.draining = (async () => {
+        this.markRecovery('waiting-for-initialization')
         await this.store.ready
+        this.markRecovery('waiting-for-active-requests')
         await Promise.allSettled([
           ...this.inFlight,
           ...(this.scanning ? [this.scanning] : []),
         ])
+        this.markRecovery('draining-storage')
         await this.store.drainForStorageRestart()
       })()
     }
@@ -263,6 +313,7 @@ export class StorageOwnerHost {
       this.recovery = undefined
       for (const port of this.ports.keys())
         port.postMessage(recoveryMessage('reload', round.id))
+      this.markRecovery('shutdown')
       this.shutdown?.()
     } catch {
       // Remain quiescent rather than start a second owner after an uncertain drain.
@@ -412,7 +463,8 @@ export class StorageOwnerHost {
         ? request.method
         : 'unknown',
       startedAt: Date.now(),
-      stage: 'initializing',
+      stage: 'authorizing',
+      stageStartedAt: Date.now(),
     }
     this.activeRequests.add(active)
     try {
@@ -449,11 +501,16 @@ export class StorageOwnerHost {
         throw new Error(
           'Drive identity differs from the storage owner; use an isolated browser profile'
         )
+      active.stage = 'initializing'
+      active.stageStartedAt = Date.now()
       await this.store.ready
+      active.stage = 'reauthorizing'
+      active.stageStartedAt = Date.now()
       if (this.releaseDraining)
         throw new Error('Release handoff is draining storage')
       await this.authorize?.(request)
       active.stage = 'executing'
+      active.stageStartedAt = Date.now()
       let value: unknown
       switch (request.method) {
         case 'hello':
@@ -510,7 +567,11 @@ export class StorageOwnerHost {
             )?.creationMigrationError
             this.configuredBaseUrl = baseUrl
             setGoogleDriveBaseUrl(baseUrl)
-            value = { version: STORAGE_OWNER_VERSION, instanceId: this.instanceId, release: this.release }
+            value = {
+              version: STORAGE_OWNER_VERSION,
+              instanceId: this.instanceId,
+              release: this.release,
+            }
           }
           break
         case 'heartbeat':

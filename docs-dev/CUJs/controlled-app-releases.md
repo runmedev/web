@@ -85,3 +85,38 @@ Launcher selection tests cover bounded network/cache waits, incompatible
 descriptors, offline fallback, corrupted modules, interrupted publication, and
 reuse of verified modules on refresh. Releaser tests verify that the launcher
 advances even when the stable application channel is pinned.
+
+## Recovery while the app is already open
+
+- Inject a rejected or never-settling `runmeVersions.get()` after opening Version
+  Information. Recovery navigation, commit/release selection, published-release
+  discovery, and memory-only diagnostics must remain available. Also cover an
+  older launcher without the new recovery API: the selected release is carried
+  to the independent recovery page without navigating the editor tab away.
+- Preparing a build downloads and verifies it without accessing release settings.
+  It must not activate the build. Explicit activation still uses the existing
+  tab preparation, compatibility checks and exclusive storage-owner handoff.
+- A commit prefix with several published builds must require selecting a full
+  release ID rather than guessing a build. An unpublished commit is not runnable.
+- Diagnostic traces distinguish missing initial get callbacks, incomplete chunk
+  reads and pending transaction completion. Include elapsed time, realm and mode;
+  exclude record values, notebook contents, credentials and arbitrary keys.
+- These failure-injection checks are automated in `ReleaseRecoveryControls.test.tsx`,
+  `releaseCatalog.test.ts`, `releaseDatabase.test.ts` and `startupRecovery.test.ts`.
+
+## Unresponsive storage owner
+
+- The recovery banner's **Check storage worker** action works while restart or
+  normal RPC admission is waiting. A diagnostic reply must not replay a mutation.
+- Report authorization before initialization, initialization, authorization after
+  initialization, and execution separately. Restart diagnostics identify release
+  settings, waiting for tab backups, waiting for active requests and draining.
+- Keep diagnostic snapshots bounded and memory-only, including release database
+  traces from the worker realm. A diagnostic reply proves message-loop liveness,
+  not persistence health; absence of a reply does not prove the worker is dead.
+- Never steal the ownership lock or launch a competing writer after a timeout.
+  Explain that users must download current editor copies in every tab before
+  closing tabs or restarting the browser; session copies alone are insufficient.
+- Automated coverage: `storageOwner.test.ts`, `storageRecovery.test.ts`, and
+  `StorageRecoveryBanner.test.tsx`. Existing browser restart and upgrade journeys
+  remain in `storage-owner-recovery.ts` and `controlled-releases.ts`.

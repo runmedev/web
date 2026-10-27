@@ -84,3 +84,14 @@ it('offers current editor downloads while storage is unavailable and restart is 
   vi.unstubAllGlobals()
   vi.restoreAllMocks()
 })
+
+it('allows diagnostics while restart is waiting and reports an unresponsive worker', async () => {
+  storageRecovery.set({ phase: 'preparing', message: 'Waiting for tabs' })
+  const dispose = storageRecovery.registerDiagnostics(async () => {
+    throw new Error('No diagnostic reply')
+  })
+  render(<StorageRecoveryBanner location="notebook" />)
+  fireEvent.click(screen.getByRole('button', { name: 'Check storage worker' }))
+  expect(await screen.findByText('Error: No diagnostic reply')).toBeTruthy()
+  dispose()
+})
