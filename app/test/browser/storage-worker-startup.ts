@@ -30,8 +30,12 @@ async function main() {
   await mkdir(output, { recursive: true })
   const events: unknown[] = []
   const watchdog = setTimeout(() => void browser.close(), 90000)
+  let contextForDiagnostics:
+    | import('playwright-core').BrowserContext
+    | undefined
   try {
     const context = await browser.newContext()
+    contextForDiagnostics = context
     const page = await context.newPage()
     page.on('console', (message) => events.push(message.text()))
     await page.goto(`${base}/recovery.html`)
@@ -238,6 +242,22 @@ async function main() {
       'PASS: real IndexedDB get stall is observable; force close bypasses a stalled drain; replacement starts without page reload'
     )
   } finally {
+    const diagnostics = await Promise.all(
+      contextForDiagnostics
+        ?.pages()
+        .map(async (page) =>
+          page
+            .evaluate(() => ({
+              status: (window as any).workerStatus,
+              events: (window as any).events,
+            }))
+            .catch((error) => ({ error: String(error) }))
+        ) ?? []
+    )
+    await writeFile(
+      `${output}/diagnostics.json`,
+      JSON.stringify(diagnostics, null, 2)
+    )
     clearTimeout(watchdog)
     await writeFile(`${output}/browser.log`, events.join('\n'))
     await browser.close()
