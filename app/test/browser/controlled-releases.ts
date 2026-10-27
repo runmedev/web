@@ -891,7 +891,13 @@ async function main() {
       )
     }
     await context.setOffline(true)
-    await one.reload()
+    if (historicalApp) {
+      // Its historical service worker caches the old root launcher. Restart
+      // through the cached migration entry so this tab uses the current contract.
+      await one.goto(
+        `${base}/version/${expected.b}/launcher.html?session=release-one`
+      )
+    } else await one.reload()
     await ready(one)
     assert.equal(await active(one), b)
     await one.screenshot({ path: output + '/04-offline-restart.png' })
