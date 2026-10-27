@@ -767,7 +767,7 @@ async function main(): Promise<void> {
       'Runme upgrades require SharedWorker, Web Locks and service workers in a secure browser.'
     )
   if (
-    /^\/version\/[a-f0-9]{40}-[a-f0-9]{64}\/(index.html)?$/.test(
+    /^\/version\/[a-f0-9]{40}-[a-f0-9]{64}\/(index.html|launcher.html)?$/.test(
       location.pathname
     )
   )
@@ -775,6 +775,8 @@ async function main(): Promise<void> {
   report('Starting the installed release…')
   diagnostics.record('launcher', 'info', {
     path: new URL(import.meta.url).pathname,
+    source: document.documentElement.dataset.runmeLauncherSource ?? 'legacy-shell',
+    bootstrapLauncher: document.documentElement.dataset.runmeLauncher ?? 'unknown',
   })
   await installLoader()
   report('Registering this tab…')

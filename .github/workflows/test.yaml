@@ -96,10 +96,16 @@ jobs:
           --maxWorkers=2 --minWorkers=1
 
   controlled-releases:
+    strategy:
+      fail-fast: false
+      matrix:
+        baseline: [current, '9a5fdbf0ca30bf73431b7c4eb90f75f3c91e3ecf']
     runs-on: ubuntu-24.04
     timeout-minutes: 25
     steps:
       - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
       - uses: actions/setup-node@v4
         with:
           node-version: '20'
@@ -113,14 +119,16 @@ jobs:
         run: >-
           pnpm -C app exec vitest run
           src/releases/control.test.ts src/releases/runtime.test.ts
-          src/releases/loaderController.test.ts
+          src/releases/bootstrap.test.ts src/releases/launcherSelection.test.ts src/releases/loaderController.test.ts
           src/releases/releaseDatabase.test.ts src/releases/startupRecovery.test.ts src/releases/recoverControl.test.ts src/releases/controlChunks.test.ts src/releases/recoveryOwnerLock.test.ts src/storage/releaseOwnerFailure.test.ts
           src/releases/startupDiagnostics.test.ts
           src/pwa/loader-worker.test.ts src/components/ReleaseControls.test.tsx
       - run: pnpm -C app exec playwright-core install --with-deps chromium
       - run: pnpm -C app run cuj:releases
+        env:
+          RUNME_RELEASE_BASELINE_COMMIT: ${{ matrix.baseline != 'current' && matrix.baseline || '' }}
       - uses: actions/upload-artifact@v4
         if: always()
         with:
-          name: controlled-release-evidence
+          name: controlled-release-evidence-${{ matrix.baseline }}
           path: app/test/browser/test-output/controlled-releases/

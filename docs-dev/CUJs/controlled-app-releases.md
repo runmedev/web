@@ -42,7 +42,17 @@ Acceptance:
   adds its default root. Show a persistence warning until a successful reload.
   Missing folder metadata hides only that unresolved root; it must not remove
   the saved mount. Unit tests cover both cases and healthy legacy migration.
-- Deploy B while A is installed. Refresh and new tabs still use A.
+- Deploy B while A is installed. Refresh and new tabs still use app/owner A,
+  while the bootstrap selects launcher B. An existing A tab stays open during
+  this assertion, and the screenshot must show the rendered app, not merely
+  initialized automation APIs or a router error page.
+- For a pre-bootstrap installation, enter through B's immutable
+  `/version/<release-id>/launcher.html`. This entry must normalize its route and
+  open the selected older app without forcing the existing tabs to reload.
+- Hold a new tab's launcher discovery pending and probe it from another tab
+  through the real service worker. It must answer before importing the launcher,
+  then open the selected app when discovery resumes. Slow discovery must never
+  misclassify a controlled bootstrap as an incompatible legacy window.
 - Channel changes and exact pins only stage; activation requires Upgrade all tabs.
 - Pending notebook edits in multiple tabs persist before upgrade readiness.
 - A failed preparation blocks activation and leaves that tab editable.
@@ -59,11 +69,19 @@ Acceptance:
   recovers storage ownership and preserves current notebook contents.
 
 Production also supplies its frozen candidate snapshot as B; it publishes those
-exact tested files without rebuilding. The other builds are emitted fixtures
-within the current storage compatibility contract, not historical schema tests.
+exact tested files without rebuilding. CI runs both current-source fixtures and
+the frozen pre-bootstrap commit `9a5fdbf0ca30bf73431b7c4eb90f75f3c91e3ecf` as A,
+built with its own lockfile. Set `RUNME_RELEASE_BASELINE_COMMIT` to reproduce that
+compatibility run, or `RUNME_RELEASE_BASELINE` to use a previously built release.
+Both runs use the current storage compatibility contract; they do not establish
+compatibility with arbitrary historical notebook schemas.
 
 Artifacts include screenshots for each visible phase, one video per tab, build
 logs and `result.json`. Inspect both assertions and screenshots: a rendered diagram
 or a successful development-server reload does not establish these guarantees.
 Unit tests separately cover checksum corruption/eviction, manifest rejection,
 failed/uncertain flushes, owner RPC boundaries and existing corrupt-data recovery.
+Launcher selection tests cover bounded network/cache waits, incompatible
+descriptors, offline fallback, corrupted modules, interrupted publication, and
+reuse of verified modules on refresh. Releaser tests verify that the launcher
+advances even when the stable application channel is pinned.

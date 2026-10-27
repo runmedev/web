@@ -1,3 +1,8 @@
+import {
+  LAUNCHER_CACHE,
+  LAUNCHER_POINTER,
+  launcherDescriptor,
+} from './launcherSelection'
 import { releaseTransaction } from './releaseDatabase'
 
 /** Loader protocol 1 is independent of notebook schemas and application builds. */
@@ -362,6 +367,20 @@ export async function pruneUnusedCaches(): Promise<number> {
       state.selection.kind === 'pinned' ? state.selection.releaseId : undefined,
       ...Object.values(state.tabs).map((tab) => tab.releaseId),
     ])
+    // A newer launcher can host an older selected app. Keep its modules for
+    // offline startup even when no app tab references that release.
+    if (typeof document !== 'undefined')
+      keep.add(document.documentElement.dataset.runmeLauncher)
+    const launcher = await (
+      await caches.open(LAUNCHER_CACHE)
+    ).match(LAUNCHER_POINTER)
+    if (launcher) {
+      try {
+        keep.add(launcherDescriptor(await launcher.json()).releaseId)
+      } catch {
+        /* Invalid marker is not a root. */
+      }
+    }
     let removed = 0
     for (const name of await caches.keys()) {
       if (!name.startsWith('runme-release-v1-')) continue

@@ -50,6 +50,7 @@ async function main() {
       () =>
         (window as any).__releaseTools?.has('ExecuteCode') &&
         typeof (window as any).runmeRelease?.prepare === 'function' &&
+        document.getElementById('main-page') !== null &&
         !document.getElementById('root')?.inert,
       undefined,
       { timeout: 60000 }
@@ -181,7 +182,7 @@ async function main() {
       'PASS: unknown legacy window blocks new storage ownership until closed'
     )
     const a = await active(one)
-    assert.match(a, /^a{40}-b{64}$/)
+    assert.equal(a, expected.a)
     const two = await context.newPage()
     pages.push(two)
     await two.goto(base + '/?session=release-two')
@@ -357,8 +358,14 @@ async function main() {
               name: 'Preserved workspace folder',
               children: [],
             })
-            tx.oncomplete = () => { db.close(); resolve() }
-            tx.onabort = tx.onerror = () => { db.close(); reject(tx.error) }
+            tx.oncomplete = () => {
+              db.close()
+              resolve()
+            }
+            tx.onabort = tx.onerror = () => {
+              db.close()
+              reject(tx.error)
+            }
           }
         })
         const workspace = JSON.parse(localStorage.getItem('runme/workspace')!)
@@ -368,7 +375,9 @@ async function main() {
       await original.evaluate(() => (window as any).runmeRelease.prepare())
       await original.reload()
       await ready(original)
-      await original.getByText('Preserved workspace folder', { exact: true }).waitFor()
+      await original
+        .getByText('Preserved workspace folder', { exact: true })
+        .waitFor()
       assert.match(
         await execute(
           original,
@@ -435,7 +444,9 @@ async function main() {
           .click()
       }
       await ready(repaired)
-      await repaired.getByText('Preserved workspace folder', { exact: true }).waitFor()
+      await repaired
+        .getByText('Preserved workspace folder', { exact: true })
+        .waitFor()
       const repairState = await repaired.evaluate(() =>
         (window as any).runmeVersions.get()
       )
@@ -481,7 +492,9 @@ async function main() {
       assert.equal(schema.encoding, 'runme-control-json-chunks-v1')
       await repaired.reload()
       await ready(repaired)
-      await repaired.getByText('Preserved workspace folder', { exact: true }).waitFor()
+      await repaired
+        .getByText('Preserved workspace folder', { exact: true })
+        .waitFor()
       assert.match(
         await execute(
           repaired,
@@ -513,6 +526,93 @@ async function main() {
     await one.reload()
     await ready(one)
     assert.equal(await active(one), a)
+    if (process.env.RUNME_RELEASE_BASELINE) {
+      // Historical service workers cannot learn a new bootstrap while still
+      // controlling old windows. Verify the explicit migration entrypoint.
+      await one.goto(
+        `${base}/version/${expected.b}/launcher.html?session=release-one`
+      )
+      await ready(one)
+      assert.equal(await active(one), a)
+    }
+    assert.equal(
+      await one.evaluate(() => document.documentElement.dataset.runmeLauncher),
+      expected.b,
+      'Refresh must use launcher B even while the installed app and existing worker remain A'
+    )
+    assert.equal(
+      await one.evaluate(
+        () => document.documentElement.dataset.runmeLauncherSource
+      ),
+      'latest'
+    )
+    await one.screenshot({ path: output + '/latest-launcher-older-app.png' })
+    console.log(
+      'PASS: latest launcher B loads selected app A alongside existing A tabs'
+    )
+    // A slow bootstrap is already a safe protocol-1 participant, even before
+    // its launcher loads. Exercise the actual worker's two-second peer probe.
+    const booting = await context.newPage()
+    try {
+      await booting.addInitScript(() => {
+        const fetcher = window.fetch.bind(window)
+        const timer = window.setTimeout.bind(window)
+        // Keep discovery pending deterministically while CI probes the tab.
+        // All service-worker deadlines remain real and unchanged.
+        window.setTimeout = ((
+          handler: TimerHandler,
+          delay?: number,
+          ...args: any[]
+        ) =>
+          timer(
+            handler,
+            delay === 4000 ? 30000 : delay,
+            ...args
+          )) as typeof window.setTimeout
+        window.fetch = async (...args) => {
+          if (args[0] === '/launcher.json')
+            await new Promise<void>((resolve) => {
+              ;(window as any).__finishLauncherCheck = resolve
+            })
+          return fetcher(...args)
+        }
+      })
+      await booting.goto(
+        `${base}/version/${expected.b}/launcher.html?session=slow-bootstrap`
+      )
+      await booting.waitForFunction(
+        () => typeof (window as any).__finishLauncherCheck === 'function'
+      )
+      const reply = await one.evaluate(
+        () =>
+          new Promise((resolve, reject) => {
+            const channel = new MessageChannel()
+            const timer = setTimeout(() => {
+              channel.port1.close()
+              reject(new Error('Loader peer probe stalled'))
+            }, 5000)
+            channel.port1.onmessage = (event) => {
+              clearTimeout(timer)
+              channel.port1.close()
+              resolve(event.data)
+            }
+            navigator.serviceWorker.controller!.postMessage(
+              'runme-loader-version',
+              [channel.port2]
+            )
+          })
+      )
+      assert.equal(reply, 'runme-loader-1')
+      assert.equal(await booting.locator('#runme-release-panel').count(), 0)
+      await booting.evaluate(() => (window as any).__finishLauncherCheck())
+      await ready(booting)
+      assert.equal(await active(booting), a)
+      console.log(
+        'PASS: a tab checking the latest launcher answers peer compatibility probes'
+      )
+    } finally {
+      await booting.close()
+    }
     await waitControl(one, (s) => s.candidate?.releaseId === expected.b)
     const three = await context.newPage()
     pages.push(three)
@@ -715,16 +815,14 @@ async function main() {
     await one.getByText('Other releases and recovery', { exact: true }).click()
     await one
       .getByRole('button', {
-        name: 'Use cached aaaaaaaa / bbbbbbbb',
+        name: `Use cached ${a.slice(0, 8)} / ${a.split('-')[1].slice(0, 8)}`,
         exact: true,
       })
       .click()
     for (const page of pages) {
       await page.waitForFunction(
-        () =>
-          (window as any).runmeRelease?.active.manifest.webCommit ===
-          'a'.repeat(40),
-        undefined,
+        (id) => (window as any).runmeRelease?.active.manifest.releaseId === id,
+        a,
         { timeout: 60000 }
       )
       await ready(page)
@@ -771,7 +869,7 @@ async function main() {
       // app entry. Close failed app tabs to prove they cannot hold unsaved edits.
       await recovery
         .getByRole('button', {
-          name: 'Use cached aaaaaaaa / bbbbbbbb',
+          name: `Use cached ${a.slice(0, 8)} / ${a.split('-')[1].slice(0, 8)}`,
           exact: true,
         })
         .waitFor({ timeout: 30000 })
@@ -781,7 +879,7 @@ async function main() {
       await Promise.all([one, two, three].map((page) => page.close()))
       await recovery
         .getByRole('button', {
-          name: 'Use cached aaaaaaaa / bbbbbbbb',
+          name: `Use cached ${a.slice(0, 8)} / ${a.split('-')[1].slice(0, 8)}`,
           exact: true,
         })
         .click()
@@ -822,7 +920,7 @@ async function main() {
       })
       await recovery
         .getByRole('button', {
-          name: 'Use cached aaaaaaaa / bbbbbbbb',
+          name: `Use cached ${a.slice(0, 8)} / ${a.split('-')[1].slice(0, 8)}`,
           exact: true,
         })
         .click()
