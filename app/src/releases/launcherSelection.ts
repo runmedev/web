@@ -99,11 +99,26 @@ async function writeLauncherCache(
   for (const asset of d.assets) {
     signal.throwIfAborted()
     const url = `/version/${d.releaseId}/${asset.path}`
-    const response =
-      (await cache.match(url)) ??
-      (await fetch(url, { cache: 'no-store', redirect: 'error', signal }))
-    if (!response.ok) throw new Error('Launcher asset unavailable')
-    await verifyLauncherAsset(response.clone(), asset)
+    let response = await cache.match(url)
+    if (response) {
+      try {
+        await verifyLauncherAsset(response.clone(), asset)
+      } catch {
+        // The old loader worker serves cache hits even with no-store. Remove
+        // only this proven-invalid application module before fetching it again.
+        signal.throwIfAborted()
+        await cache.delete(url)
+        response = undefined
+      }
+    }
+    if (!response) {
+      response = await fetch(url, {
+        cache: 'no-store',
+        redirect: 'error',
+        signal,
+      })
+      await verifyLauncherAsset(response.clone(), asset)
+    }
     signal.throwIfAborted()
     await cache.put(url, response)
   }

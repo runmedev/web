@@ -181,7 +181,7 @@ async function main() {
       'PASS: unknown legacy window blocks new storage ownership until closed'
     )
     const a = await active(one)
-    assert.match(a, /^a{40}-b{64}$/)
+    assert.equal(a, expected.a)
     const two = await context.newPage()
     pages.push(two)
     await two.goto(base + '/?session=release-two')
@@ -751,16 +751,14 @@ async function main() {
     await one.getByText('Other releases and recovery', { exact: true }).click()
     await one
       .getByRole('button', {
-        name: 'Use cached aaaaaaaa / bbbbbbbb',
+        name: `Use cached ${a.slice(0, 8)} / ${a.split('-')[1].slice(0, 8)}`,
         exact: true,
       })
       .click()
     for (const page of pages) {
       await page.waitForFunction(
-        () =>
-          (window as any).runmeRelease?.active.manifest.webCommit ===
-          'a'.repeat(40),
-        undefined,
+        (id) => (window as any).runmeRelease?.active.manifest.releaseId === id,
+        a,
         { timeout: 60000 }
       )
       await ready(page)
@@ -807,7 +805,7 @@ async function main() {
       // app entry. Close failed app tabs to prove they cannot hold unsaved edits.
       await recovery
         .getByRole('button', {
-          name: 'Use cached aaaaaaaa / bbbbbbbb',
+          name: `Use cached ${a.slice(0, 8)} / ${a.split('-')[1].slice(0, 8)}`,
           exact: true,
         })
         .waitFor({ timeout: 30000 })
@@ -817,7 +815,7 @@ async function main() {
       await Promise.all([one, two, three].map((page) => page.close()))
       await recovery
         .getByRole('button', {
-          name: 'Use cached aaaaaaaa / bbbbbbbb',
+          name: `Use cached ${a.slice(0, 8)} / ${a.split('-')[1].slice(0, 8)}`,
           exact: true,
         })
         .click()
@@ -858,7 +856,7 @@ async function main() {
       })
       await recovery
         .getByRole('button', {
-          name: 'Use cached aaaaaaaa / bbbbbbbb',
+          name: `Use cached ${a.slice(0, 8)} / ${a.split('-')[1].slice(0, 8)}`,
           exact: true,
         })
         .click()

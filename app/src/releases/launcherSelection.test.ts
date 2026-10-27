@@ -47,6 +47,7 @@ beforeEach(async () => {
       const store = stores.get(name)!
       return {
         match: async (key: string) => store.get(key)?.clone(),
+        delete: async (key: string) => store.delete(key),
         put: async (key: string, value: Response) => {
           store.set(key, value.clone())
         },
@@ -163,4 +164,20 @@ it('retains the completed launcher after an interrupted replacement download', a
     descriptor: latest,
     source: 'cached',
   })
+})
+
+it('repairs a corrupt module online before selecting its launcher', async () => {
+  await selectLauncher(fallback, vi.fn())
+  stores
+    .get(`runme-release-v1-${newId}`)!
+    .set(`/version/${newId}/launcher.js`, new Response('broken'))
+  fetcher.mockClear()
+  expect((await selectLauncher(fallback, vi.fn())).source).toBe('latest')
+  expect(fetcher).toHaveBeenCalledTimes(2)
+  expect(
+    await stores
+      .get(`runme-release-v1-${newId}`)!
+      .get(`/version/${newId}/launcher.js`)!
+      .text()
+  ).toBe(code)
 })
