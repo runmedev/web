@@ -528,16 +528,14 @@ function ReadOnlyTabIndicator({ uri }: { uri: string }) {
 /** Compact icon-only run button that sits in the cell toolbar.
  *  Shows a spinner while running, otherwise always shows the play icon. */
 function RunActionButton({
-  pid,
+  isRunning,
   onClick,
   disabled = false,
 }: {
-  pid: number | null
+  isRunning: boolean
   onClick: () => void
   disabled?: boolean
 }) {
-  const isRunning = pid !== null
-
   return (
     <button
       type="button"
@@ -834,6 +832,13 @@ export function Action({
     cell?.metadata?.[RunmeMetadataKey.ExitCode],
     cell?.metadata?.[RunmeMetadataKey.Pid],
   ])
+
+  // Runner streams report a PID, but Jupyter and AppKernel executions do not.
+  // Ask the model whether it still owns a live execution so the run button
+  // spins for every backend. This is derived during render rather than kept
+  // in state: starting a run and every way a run ends update the cell
+  // metadata, and that content change is what re-renders this component.
+  const isRunning = pid !== null || cellData.isExecuting()
 
   useEffect(() => {
     const fallbackUri = docUri.trim() || null
@@ -2331,7 +2336,7 @@ export function Action({
                 className={`relative h-7 w-7 ${cellCommentVisibilityClass}`}
               />
               <RunActionButton
-                pid={pid}
+                isRunning={isRunning}
                 onClick={runCode}
                 disabled={readOnly}
               />
