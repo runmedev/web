@@ -1,4 +1,3 @@
-import { registerReleaseDatabase } from '../releases/databases'
 import { create, fromJsonString, toJsonString } from '@bufbuild/protobuf'
 import Dexie, { Table } from 'dexie'
 import md5 from 'md5'
@@ -89,6 +88,7 @@ import {
 } from '../lib/outputReference'
 import { appState } from '../lib/runtime/AppState'
 import type { ExampleJob } from '../lib/trainingExamples/protocol'
+import { registerReleaseDatabase } from '../releases/databases'
 import { RunmeMetadataKey, parser_pb } from '../runme/client'
 import {
   type ConflictDocStorage,
@@ -1924,7 +1924,8 @@ export class LocalNotebooks extends Dexie {
           ? await this.updateFolder(item.uri, item.name)
           : await this.driveSyncCoordinator.runExclusive(
               this.driveFolderMembershipLockKey(item.uri),
-              async () => (await this.ensureFolderMirror(item.uri, item.name)).folderId
+              async () =>
+                (await this.ensureFolderMirror(item.uri, item.name)).folderId
             )
         childUris.push(localFolderUri)
       }
@@ -1981,7 +1982,10 @@ export class LocalNotebooks extends Dexie {
     return folderId
   }
 
-  async sync(localUri: string, options: { recursive?: boolean } = {}): Promise<void> {
+  async sync(
+    localUri: string,
+    options: { recursive?: boolean } = {}
+  ): Promise<void> {
     if (localUri.startsWith('drive-create:')) {
       const id = localUri.slice('drive-create:'.length)
       await this.queueDriveWork(
@@ -2296,7 +2300,10 @@ export class LocalNotebooks extends Dexie {
   /** Create a tab-local snapshot adapter that appends .runme operations. */
   async createOperationLogSaveStore(
     uri: string,
-    options: { actorId?: string; initialDocument?: string } = {}
+    options: {
+      actorId?: string
+      initialDocument?: string
+    } = {}
   ): Promise<{
     save(saveUri: string, notebook: parser_pb.Notebook): Promise<void>
     getObservedOperationHeads(): string[]
@@ -2392,6 +2399,63 @@ export class LocalNotebooks extends Dexie {
         queue = operation.catch(() => undefined)
         await operation
       },
+    }
+  }
+
+  /** Commit a tab-prepared batch by identity, including after a lost reply.
+   * The tab retains the exact bytes and causal baseline. Matching operations
+   * are acknowledged without duplication; conflicting IDs or missing history
+   * fail before writing. No editor identity is used to infer what it saw.
+   */
+  async commitEditorOperations(
+    uri: string,
+    notebookId: string,
+    operations: RunmeOperation[]
+  ): Promise<void> {
+    const record = await this.files.get(uri)
+    if (
+      !record?.operationLogRef ||
+      detectNotebookFileFormat(record.name) !== 'runme-operation-log'
+    )
+      throw new Error(`Operation-log reference missing for ${uri}`)
+    const stored = await this.operationLogStorage.appendTransaction(
+      record.operationLogRef,
+      (document) => {
+        const current = parseOperationLog(document)
+        if (current.header.notebook_id !== notebookId)
+          throw new Error(`Operation-log notebook identity changed for ${uri}`)
+        // mergeOperationSets rejects different contents under the same ID.
+        const merged = mergeOperationSets(current.operations, operations)
+        const observed = ancestorClosure(
+          merged,
+          operations.map((op) => op.op_id)
+        )
+        snapshotHeads(
+          observed,
+          observed.map((op) => op.op_id)
+        )
+        const existing = new Set(current.operations.map((op) => op.op_id))
+        const missing = operations.filter((op) => !existing.has(op.op_id))
+        return missing.length
+          ? `${missing.map(encodeOperation).join('\n')}\n`
+          : ''
+      },
+      {
+        prepareDocument: upgradeOperationLogToV2,
+        validate: (document) => void parseOperationLog(document),
+      }
+    )
+    // Repeat metadata repair even when the OPFS append already succeeded. A
+    // previous worker may have stopped between these two durable writes.
+    await this.updateFile(uri, {
+      doc: '',
+      md5Checksum: this.localWriteChecksum(stored),
+      operationLogRef: stored.ref,
+    })
+    this.notifySync(uri)
+    if (!record.conflict) {
+      this.enqueueSync(uri)
+      this.enqueueMarkdownSync(uri)
     }
   }
 
@@ -3300,21 +3364,28 @@ export class LocalNotebooks extends Dexie {
    * authoritative local history only: a remote refetch must not hide lost commits.
    * Newer operations may supersede these heads without invalidating their history.
    */
-  async verifyReleaseCommits(refs: { uri: string; heads: string[] }[]): Promise<void> {
+  async verifyReleaseCommits(
+    refs: { uri: string; heads: string[] }[]
+  ): Promise<void> {
     const byUri = new Map<string, Set<string>>()
     for (const ref of refs) {
       if (!ref.heads.length) continue
       const heads = byUri.get(ref.uri) ?? new Set<string>()
-      ref.heads.forEach(head => heads.add(head))
+      ref.heads.forEach((head) => heads.add(head))
       byUri.set(ref.uri, heads)
     }
     for (const [uri, heads] of byUri) {
       const record = await this.files.get(uri)
-      if (!record?.operationLogRef) throw new Error(`Confirmed notebook history is unavailable for ${uri}`)
+      if (!record?.operationLogRef)
+        throw new Error(`Confirmed notebook history is unavailable for ${uri}`)
       const stored = await this.operationLogStorage.read(record.operationLogRef)
-      const operations = new Set(parseOperationLog(stored.document).operations.map(op => op.op_id))
-      if ([...heads].some(head => !operations.has(head)))
-        throw new Error(`Confirmed notebook commits are missing for ${uri}; preserve the existing data and use recovery`)
+      const operations = new Set(
+        parseOperationLog(stored.document).operations.map((op) => op.op_id)
+      )
+      if ([...heads].some((head) => !operations.has(head)))
+        throw new Error(
+          `Confirmed notebook commits are missing for ${uri}; preserve the existing data and use recovery`
+        )
     }
   }
 

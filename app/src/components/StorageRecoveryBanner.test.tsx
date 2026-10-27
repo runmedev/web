@@ -31,7 +31,7 @@ it('shows a startup failure detected before mounting in both UI locations', () =
       <StorageRecoveryBanner location="storage-status" />
     </>
   )
-  const buttons = screen.getAllByRole('button', { name: 'Restart Runme' })
+  const buttons = screen.getAllByRole('button', { name: 'Restart storage' })
   expect(buttons).toHaveLength(2)
   fireEvent.click(buttons[1])
   expect(restart).toHaveBeenCalledOnce()
@@ -40,14 +40,19 @@ it('does not show a recovery control for healthy storage', () => {
   render(<StorageRecoveryBanner location="notebook" />)
   expect(screen.queryByRole('alert')).toBeNull()
 })
-it('disables duplicate requests while every tab prepares for reload', () => {
+it('keeps force restart available while graceful restart is waiting', () => {
   storageRecovery.set({ phase: 'preparing', message: 'Preserving edits' })
   render(<StorageRecoveryBanner location="notebook" />)
   expect(
     screen
-      .getByRole('button', { name: 'Preparing restart…' })
+      .getByRole('button', { name: 'Restarting storage…' })
       .hasAttribute('disabled')
   ).toBe(true)
+  expect(
+    screen
+      .getByRole('button', { name: 'Force restart storage' })
+      .hasAttribute('disabled')
+  ).toBe(false)
 })
 it('offers retry with the reason when preservation or coordination fails', () => {
   storageRecovery.set({
@@ -58,7 +63,7 @@ it('offers retry with the reason when preservation or coordination fails', () =>
   expect(screen.getByText(/did not acknowledge/)).toBeTruthy()
   expect(
     screen
-      .getByRole('button', { name: 'Restart Runme' })
+      .getByRole('button', { name: 'Restart storage' })
       .hasAttribute('disabled')
   ).toBe(false)
 })
@@ -80,7 +85,7 @@ it('offers current editor downloads while storage is unavailable and restart is 
   )
   expect(createURL).toHaveBeenCalledWith(expect.any(Blob))
   expect(click).toHaveBeenCalledOnce()
-  expect(screen.getByText(/Session copies do not survive/)).toBeTruthy()
+  expect(screen.getByText(/Storage restart keeps this page/)).toBeTruthy()
   vi.unstubAllGlobals()
   vi.restoreAllMocks()
 })

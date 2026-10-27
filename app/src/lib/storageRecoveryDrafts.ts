@@ -99,39 +99,14 @@ export async function prepareNotebookStorageRestart(
   try {
     // Copy all notebooks before a stalled first flush can block the rest.
     backupNotebookRecoveryDrafts()
-    for (const model of models) {
-      signal.throwIfAborted()
-      if (model!.isReadOnly()) continue
-      try {
-        await waitForPersist(model!.flushPendingPersist(), signal)
-      } catch {
-        /* The recovery copy remains available after reload. */
-      }
-      signal.throwIfAborted()
-    }
+    // Recovery must not wait on the persistence service being restarted. The
+    // worker drains admitted writes in graceful mode; snapshots cover unsaved edits.
+    signal.throwIfAborted()
     return release
   } catch (error) {
     release()
     throw new Error(
       `Could not preserve all editor copies; no automatic reload was performed. ${String(error)}`
     )
-  }
-}
-
-/** Cancel waiting, not the underlying commit. The owner still drains active writes. */
-async function waitForPersist(
-  persist: Promise<void>,
-  signal: AbortSignal
-): Promise<void> {
-  let onAbort!: () => void
-  const aborted = new Promise<never>((_resolve, reject) => {
-    onAbort = () => reject(signal.reason)
-    signal.addEventListener('abort', onAbort, { once: true })
-    if (signal.aborted) onAbort()
-  })
-  try {
-    await Promise.race([persist, aborted])
-  } finally {
-    signal.removeEventListener('abort', onAbort)
   }
 }

@@ -7,7 +7,7 @@ export type StorageRecoveryState = {
 }
 let state: StorageRecoveryState = { phase: 'healthy', message: '' }
 const listeners = new Set<() => void>()
-let restart: (() => void) | undefined
+let restart: ((force?: boolean) => void) | undefined
 let diagnose: (() => Promise<StorageOwnerDiagnostics>) | undefined
 let backup: (() => number) | undefined
 let prepare: ((signal: AbortSignal) => Promise<() => void>) | undefined
@@ -48,7 +48,7 @@ export const storageRecovery = {
           new Error('Storage worker diagnostics are not connected.')
         )
   },
-  registerRestart(callback: () => void) {
+  registerRestart(callback: (force?: boolean) => void) {
     restart = callback
   },
   registerPreparation(
@@ -78,9 +78,9 @@ export const storageRecovery = {
       )
     return prepare(signal)
   },
-  restart() {
+  restart(force = false) {
     if (!restart) return
-    restart()
+    restart(force)
   },
 }
 

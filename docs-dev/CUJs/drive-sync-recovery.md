@@ -351,26 +351,29 @@ all notebooks copied before a hung first flush, cancellation after worker loss,
 downloads with unavailable session storage, and bounded diagnostic probes outside
 storage initialization. A timeout never retries the uncertain operation.
 
-On an isolated test origin, reproduce a storage protocol mismatch and verify
-**Restart Runme** appears above the notebook and inside Google Drive Sync Status.
-With two tabs open, make an edit, click the button, and verify both tabs reload
-without closing the browser, notebook storage works again, and recovery JSON
-contains the editor content. Block one tab's acknowledgement: neither tab should
-reload. Block a storage/network write: restart must wait for the write to settle.
-Repeat against an older worker without the recovery protocol: show the actionable
-fallback and retain editor content rather than silently reloading in a loop.
-Verify the initiating tab has session copies even without a worker response. Fill
-session storage, click **Get recovery copies**, and download the current editors;
-verify exact cell text in the JSON. The banner must distinguish earlier snapshots
-from current captures, and explain that session copies do not survive tab closure.
-Perform these destructive failure injections only in an isolated test profile.
+On an isolated test origin, verify **Restart storage** and **Force restart
+storage** appear above the notebook when storage fails. Open the Version
+Information page and verify worker discovery and stop controls remain available
+while release settings fail. Discovery must label nonresponders as unknown.
 
-The emitted-worker/browser check is `test/browser/storage-owner-recovery.ts`.
-Against a production preview on port 5194, compile it with the same `tsc` flags
-above and run `node test/browser/.generated/storage-owner-recovery.js`. It asserts
-that two pages reload, the old SharedWorker target terminates, recovery copies
-survive, durable notebook bytes are unchanged, and a new owner accepts requests.
-A frontend worker fixture then verifies the actual notebook and status-page
-buttons and legacy fallback. Screenshots and JSON results are written under
-`test/browser/test-output/storage-*recovery*`. Use an isolated Chromium for Testing
-binary via `CHROMIUM_PATH`; the test never uses an existing browser profile.
+With two tabs open, save a notebook and discard its successful worker reply.
+Let the other tab save an additional cell. Force restart storage: both pages and
+editor objects must remain open, the worker instance must change, the retained
+batch must be acknowledged without changing persisted bytes, and a subsequent
+edit must preserve the other tab's cell. Repeat with graceful restart. Neither
+path may call page reload. Block a drain and verify diagnostics and force restart
+still work. Block release settings during startup and inspect the last reached
+phase. App upgrade/reload continues to require its separate preservation protocol.
+
+The browser regression is `test/browser/storage-worker-reconnect.ts`, running
+against Vite on localhost:5194 with disposable Chromium storage. Compile it with
+`tsc --target es2022 --module nodenext --moduleResolution nodenext
+--esModuleInterop --skipLibCheck --outDir test/browser/.generated
+ test/browser/storage-worker-reconnect.ts`, then run the generated script with
+`CHROMIUM_PATH` pointing to an isolated Chromium for Testing binary. Evidence goes
+to `test/browser/test-output/storage-worker-reconnect`.
+
+`storage-owner-recovery.ts` retains coverage of the older coordinated reload wire
+protocol for compatibility. It is not evidence for the new in-place restart path.
+Current editor downloads remain available independently of session storage and
+worker health. Never inject failures into a live user's browser profile.

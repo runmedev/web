@@ -1,3 +1,4 @@
+import { StorageWorkerControls } from './StorageWorkerControls'
 import { ReleaseRecoveryControls } from './ReleaseRecoveryControls'
 import { Button } from '@radix-ui/themes'
 import { useCallback, useEffect, useState } from 'react'
@@ -20,6 +21,7 @@ export function ReleaseControls() {
   return (
     <>
       <ReleaseRecoveryControls />
+      <StorageWorkerControls />
       <InstalledReleaseControls />
     </>
   )

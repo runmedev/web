@@ -42,6 +42,7 @@ import { ancestorClosure } from '../lib/operationLog/versions'
 import { createNotebookCommentsRuntimeApi } from '../lib/runtime/notebookCommentsRuntime'
 import { MimeType, RunmeMetadataKey, parser_pb } from '../runme/client'
 import { MemoryConflictDocStorage } from './conflictDocs'
+import { EditorSaveSession } from './editorSaveSession'
 import { DriveNotebookStore } from './drive'
 import type { DriveSyncCoordinator } from './driveSyncCoordinator'
 import {
@@ -1105,6 +1106,53 @@ describe('LocalNotebooks operation-log storage', () => {
     expect(
       parseOperationLog(await store.loadContent(created.uri)).operations
     ).toHaveLength(2)
+  })
+
+  it('retries the exact pending editor save after owner loss without duplicating or deleting unseen edits', async () => {
+    const storage = new MemoryOperationLogStorage()
+    const store = createTestStore({}, { operationLogStorage: storage })
+    await store.folders.put({ id: LOCAL_FOLDER_URI, name: 'Local Notebooks', remoteId: '', children: [], lastSynced: '' })
+    const created = await store.create(LOCAL_FOLDER_URI, 'resume.runme')
+    const seed = await store.createOperationLogSaveStore(created.uri, {actorId: 'seed'})
+    await seed.save(created.uri, create(parser_pb.NotebookSchema, {cells: [create(parser_pb.CellSchema, {
+      refId: 'original', kind: parser_pb.CellKind.MARKUP, value: 'Original',
+    })]}))
+    let loseReply = true
+    const commit = vi.fn(async (...args: Parameters<LocalNotebooks['commitEditorOperations']>) => {
+      await store.commitEditorOperations(...args)
+      if (loseReply) throw new Error('Worker stopped before reply')
+    })
+    const first = new EditorSaveSession(created.uri, await store.loadContent(created.uri), commit)
+    const acknowledged = first.getObservedOperationHeads()
+    const second = await store.createOperationLogSaveStore(created.uri, {actorId: 'other-editor'})
+    const editor = first.initialNotebook
+    editor.cells[0].value = 'Saved, acknowledgement lost'
+    await expect(first.save(created.uri, editor)).rejects.toThrow('Worker stopped')
+    expect(first.getObservedOperationHeads()).toEqual(acknowledged)
+    const other = second.initialNotebook
+    other.cells.push(create(parser_pb.CellSchema, {refId: 'unseen', kind: parser_pb.CellKind.MARKUP, value: 'Other tab added this'}))
+    await second.save(created.uri, other)
+    const before = await store.loadContent(created.uri)
+    loseReply = false
+    await first.resume()
+    expect(commit.mock.calls[1]).toEqual(commit.mock.calls[0])
+    expect(await store.loadContent(created.uri)).toBe(before)
+    expect(first.getObservedOperationHeads()).not.toEqual(acknowledged)
+    editor.cells[0].value = 'Edited after reconnect'
+    await first.save(created.uri, editor)
+    const result = await store.loadOperationLogSnapshot(created.uri)
+    expect(result.cells.map(cell => cell.value)).toEqual(['Edited after reconnect', 'Other tab added this'])
+    const saved = await store.loadContent(created.uri)
+    const [uri, notebookId, operations] = commit.mock.calls[0]
+    await expect(store.commitEditorOperations(uri, 'different-notebook', operations)).rejects.toThrow('identity changed')
+    const conflicting = structuredClone(operations)
+    conflicting[0].created_at = '2000-01-01T00:00:00Z'
+    await expect(store.commitEditorOperations(uri, notebookId, conflicting)).rejects.toThrow('Conflicting operations')
+    const missingHistory = structuredClone(operations)
+    missingHistory[0].op_id += '-new'
+    missingHistory[0].deps = ['missing-history']
+    await expect(store.commitEditorOperations(uri, notebookId, missingHistory)).rejects.toThrow()
+    expect(await store.loadContent(created.uri)).toBe(saved)
   })
 
   it('verifies acknowledged history across later commits and rejects missing commits before owner activation', async () => {

@@ -1,6 +1,7 @@
 import { appLogger } from '../lib/logging/runtime'
 import { OWNER_LOCK, control, readControl } from '../releases/control'
 import { retireUnreadableOwner } from './releaseOwnerFailure'
+import { installStorageWorkerControl } from './storageWorkerControl'
 
 const scope = globalThis as unknown as {
   onconnect: (event: MessageEvent) => void
@@ -9,9 +10,55 @@ const scope = globalThis as unknown as {
 const releaseId = import.meta.env.VITE_RUNME_RELEASE_ID as string | undefined
 // CacheStorage responses retain their original URL, which can drop a query.
 // The browser-assigned worker name is the authoritative instance identity.
-const epoch = Number(
-  (globalThis as unknown as { name: string }).name.split('-').pop()
-)
+const epoch = releaseId
+  ? Number((globalThis as unknown as { name: string }).name.split('-').pop())
+  : 0
+const instanceId = crypto.randomUUID()
+const startedAt = Date.now()
+let phase = 'waiting-for-lock'
+let phaseStartedAt = startedAt
+let runtime:
+  | Awaited<
+      ReturnType<(typeof import('./storageOwnerRuntime'))['startStorageOwner']>
+    >
+  | undefined
+let stopping = false
+/** Track the last reached boundary even while an awaited operation is stuck. */
+function setPhase(next: string) {
+  phase = next
+  phaseStartedAt = Date.now()
+  appLogger.info('Storage worker lifecycle', {
+    attrs: { scope: 'storage.owner', instanceId, phase, releaseId, epoch },
+  })
+}
+installStorageWorkerControl({
+  status: () => ({
+    instanceId,
+    releaseId,
+    epoch,
+    phase,
+    phaseElapsedMs: Date.now() - phaseStartedAt,
+    uptimeMs: Date.now() - startedAt,
+    diagnostics: runtime?.diagnostics(),
+  }),
+  phase: setPhase,
+  drain: async () => {
+    stopping = true
+    // Before a runtime is available there are no admitted notebook requests.
+    // Startup may nevertheless be opening stores: wait for it to settle before
+    // graceful close. Force-close remains available on this independent channel.
+    if (!runtime) await runtimeReady
+    await runtime?.drain()
+  },
+  close: () => {
+    stopping = true
+    scope.close()
+  },
+})
+let finishRuntime!: () => void
+const runtimeReady = new Promise<void>((resolve) => {
+  finishRuntime = resolve
+})
 const ports: MessagePort[] = []
 let attach: ((port: MessagePort) => void) | undefined
 scope.onconnect = (event) => {
@@ -29,6 +76,7 @@ async function start(): Promise<void> {
   if (!navigator.locks)
     throw new Error('Web Locks are required for storage ownership')
   await navigator.locks.request(OWNER_LOCK, async () => {
+    setPhase('reading-release-settings')
     if (releaseId) {
       const state = await readControl()
       const pending = state.transition
@@ -46,14 +94,21 @@ async function start(): Promise<void> {
       )
         throw new Error('Storage candidate is no longer selected')
     }
+    setPhase('recording-startup')
     if (releaseId)
       await control((s) => {
         s.ownerStartup = { releaseId, epoch, phase: 'initializing' }
       })
+    setPhase('importing-runtime')
     const { startStorageOwner } = await import('./storageOwnerRuntime')
-    const runtime = await startStorageOwner(
+    setPhase('initializing-storage')
+    runtime = await startStorageOwner(
       releaseId ? { releaseId, epoch } : undefined
     )
+    finishRuntime()
+    if (stopping) await new Promise<never>(() => {})
+    const activeRuntime = runtime
+    setPhase('publishing-ready')
     try {
       if (releaseId)
         await control((state) => {
@@ -79,11 +134,12 @@ async function start(): Promise<void> {
         })
     } catch (error) {
       // If startup lost admission, finish maintenance before releasing ownership.
-      await runtime.drain()
-      runtime.close()
+      await activeRuntime.drain()
+      activeRuntime.close()
       throw error
     }
-    attach = runtime.attach
+    setPhase('ready')
+    attach = activeRuntime.attach
     for (const port of ports.splice(0)) attach(port)
     await new Promise<void>((resolve) => {
       let checking = false
@@ -96,9 +152,9 @@ async function start(): Promise<void> {
             state.transition?.phase === 'handoff' ||
             state.active?.epoch !== epoch
           ) {
-            await runtime.drain()
+            await activeRuntime.drain()
             clearInterval(timer)
-            runtime.close()
+            activeRuntime.close()
             resolve()
           }
         } catch (error) {
@@ -106,7 +162,7 @@ async function start(): Promise<void> {
           // lock and retry reconciliation; never release it on a timeout/error.
           try {
             if (
-              await retireUnreadableOwner(error, runtime, () => {
+              await retireUnreadableOwner(error, activeRuntime, () => {
                 clearInterval(timer)
                 resolve()
               })
@@ -135,6 +191,8 @@ async function start(): Promise<void> {
   scope.close()
 }
 void start().catch(async (error) => {
+  finishRuntime()
+  setPhase('failed')
   await control((state) => {
     if (
       releaseId &&

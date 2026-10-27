@@ -97,6 +97,7 @@ export async function startStorageOwner(identity?: {
   }
   return {
     attach: (port: MessagePort) => host.attach(port),
+    diagnostics: () => host.diagnostics(),
     drain: () => {
       clearInterval(timer)
       return host.drainForRelease()

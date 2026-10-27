@@ -1,6 +1,5 @@
 import { setGoogleDriveBaseUrl } from '../lib/googleDriveRuntime'
 import { appLogger } from '../lib/logging/runtime'
-import { control } from '../releases/control'
 import { releaseDatabaseDiagnostics } from '../releases/releaseDiagnostics'
 import type { parser_pb } from '../runme/client'
 import {
@@ -25,7 +24,12 @@ import { SyncDeferred } from './syncWorkQueue'
 export class StorageOwnerHost {
   private ports = new Map<
     MessagePort,
-    { available: boolean; lastSeen: number; credentialBoundary: string }
+    {
+      available: boolean
+      lastSeen: number
+      credentialBoundary: string
+      editor: boolean
+    }
   >()
   private tokenRequests = new Map<
     string,
@@ -99,7 +103,7 @@ export class StorageOwnerHost {
   private releaseDraining = false
 
   /** A bounded memory-only snapshot still answers while IndexedDB or an RPC is stalled. */
-  private diagnostics(): StorageOwnerDiagnostics {
+  diagnostics(): StorageOwnerDiagnostics {
     // Stop iterating at the response limit: a stalled owner may have many
     // outstanding requests, and diagnosis must not copy the whole backlog.
     const oldestRequests: StorageOwnerDiagnostics['oldestRequests'] = []
@@ -117,7 +121,8 @@ export class StorageOwnerHost {
       release: this.release,
       instanceId: this.instanceId,
       uptimeMs: Date.now() - this.startedAt,
-      connectedTabs: this.ports.size,
+      connectedTabs: this.editorPorts().length,
+      connectedPorts: this.ports.size,
       initialization: this.initialization,
       pendingCredentials: this.tokenRequests.size,
       scanning: Boolean(this.scanning),
@@ -133,7 +138,7 @@ export class StorageOwnerHost {
         stage: this.recoveryStage,
         elapsedMs: Date.now() - this.recoveryStageStartedAt,
         readyTabs: this.recovery?.ready.size ?? 0,
-        connectedTabs: this.ports.size,
+        connectedTabs: this.editorPorts().length,
         inFlight: this.inFlight.size,
       },
     }
@@ -144,6 +149,7 @@ export class StorageOwnerHost {
       available: false,
       lastSeen: Date.now(),
       credentialBoundary: 'default',
+      editor: false,
     })
     this.views.set(port, new Map())
     port.onmessage = (event) => {
@@ -179,6 +185,19 @@ export class StorageOwnerHost {
     }
     port.onmessageerror = () => this.detach(port)
     port.start()
+  }
+
+  /** Only application connections own editors; passive launcher ports do not vote. */
+  private editorPorts(): MessagePort[] {
+    return [...this.ports]
+      .filter(([, state]) => state.editor)
+      .map(([port]) => port)
+  }
+
+  private registerEditor(port: MessagePort): void {
+    const state = this.ports.get(port)
+    if (!state || state.editor) return
+    state.editor = true
     if (this.recovery) {
       port.postMessage(recoveryMessage('prepare', this.recovery.id))
       this.armRecoveryTimeout()
@@ -192,19 +211,12 @@ export class StorageOwnerHost {
   ): Promise<void> {
     if (this.releaseDraining) return
     if (!this.ports.has(port) || message.protocol !== 1) return
+    if (message.action === 'register') {
+      this.registerEditor(port)
+      return
+    }
     if (message.action === 'restart') {
-      this.markRecovery('release-settings')
-      if (this.release)
-        await control((s) => {
-          if (s.transition || s.active?.epoch !== this.release!.epoch)
-            throw new Error(
-              'A release transition is pending; use Versions recovery'
-            )
-          s.emergencyRestart = {
-            epoch: this.release!.epoch,
-            id: this.recovery?.id ?? message.id,
-          }
-        })
+      this.registerEditor(port)
       if (this.recovery && !this.recovery.draining) {
         port.postMessage(recoveryMessage('prepare', this.recovery.id))
         return
@@ -228,7 +240,7 @@ export class StorageOwnerHost {
       this.recovery = round
       this.markRecovery('waiting-for-tab-backups')
       this.armRecoveryTimeout()
-      for (const client of this.ports.keys())
+      for (const client of this.editorPorts())
         client.postMessage(recoveryMessage('prepare', round.id))
     } else if (message.action === 'ready' && message.id === this.recovery?.id) {
       if (message.error) {
@@ -267,26 +279,18 @@ export class StorageOwnerHost {
     // gather new editor acknowledgements after a late tab fixes its backup error.
     if (!round.draining) {
       this.recovery = undefined
-      if (this.release)
-        void control((s) => {
-          if (
-            s.emergencyRestart?.epoch === this.release!.epoch &&
-            s.emergencyRestart.id === round.id
-          )
-            delete s.emergencyRestart
-        }).catch(() => {})
     } else round.ready.clear()
-    for (const port of this.ports.keys())
+    for (const port of this.editorPorts())
       port.postMessage(recoveryMessage('blocked', round.id, error))
   }
 
   /** No timer may force termination while a storage or network commit is still active. */
   private async finishRecovery(): Promise<void> {
     const round = this.recovery
-    if (!round || [...this.ports.keys()].some((port) => !round.ready.has(port)))
+    if (!round || this.editorPorts().some((port) => !round.ready.has(port)))
       return
     clearTimeout(round.timer)
-    for (const port of this.ports.keys())
+    for (const port of this.editorPorts())
       port.postMessage(recoveryMessage('draining', round.id))
     if (!round.draining) {
       round.draining = true
@@ -307,17 +311,17 @@ export class StorageOwnerHost {
       // A tab attached during draining must preserve its editor too.
       if (
         this.recovery !== round ||
-        [...this.ports.keys()].some((port) => !round.ready.has(port))
+        this.editorPorts().some((port) => !round.ready.has(port))
       )
         return
       this.recovery = undefined
-      for (const port of this.ports.keys())
+      for (const port of this.editorPorts())
         port.postMessage(recoveryMessage('reload', round.id))
       this.markRecovery('shutdown')
       this.shutdown?.()
     } catch {
       // Remain quiescent rather than start a second owner after an uncertain drain.
-      for (const port of this.ports.keys())
+      for (const port of this.editorPorts())
         port.postMessage(
           recoveryMessage(
             'blocked',
@@ -414,12 +418,12 @@ export class StorageOwnerHost {
   }
 
   event(type: string, detail: unknown): void {
-    for (const port of this.ports.keys())
+    for (const port of this.editorPorts())
       port.postMessage({ type: 'event', eventType: type, detail })
   }
 
   notify(uri: string): void {
-    for (const port of this.ports.keys())
+    for (const port of this.editorPorts())
       port.postMessage({ type: 'changed', uri })
   }
 
@@ -445,6 +449,7 @@ export class StorageOwnerHost {
       return
     }
     if (request.type !== 'request' || typeof request.id !== 'string') return
+    if (request.method !== 'disconnect') this.registerEditor(port)
     // Closing a stale tab must release its port even when its data protocol differs.
     if (request.method === 'disconnect') {
       this.detach(port)
@@ -569,6 +574,7 @@ export class StorageOwnerHost {
             setGoogleDriveBaseUrl(baseUrl)
             value = {
               version: STORAGE_OWNER_VERSION,
+              editorCommitVersion: 1,
               instanceId: this.instanceId,
               release: this.release,
             }

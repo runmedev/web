@@ -7,6 +7,7 @@ export type StorageOwnerDiagnostics = {
   instanceId: string
   uptimeMs: number
   connectedTabs: number
+  connectedPorts?: number
   initialization: 'pending' | 'ready' | 'failed'
   pendingCredentials: number
   scanning: boolean

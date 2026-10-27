@@ -1,9 +1,14 @@
 import { getWorkloadIdentityConfig } from '../auth/workloadIdentity'
 import { getGoogleDriveBaseUrl } from '../lib/googleDriveRuntime'
 import { appLogger } from '../lib/logging/runtime'
-import { RELEASE_CAPABILITIES, releasePrefix } from '../releases/control'
+import {
+  OWNER_LOCK,
+  RELEASE_CAPABILITIES,
+  releasePrefix,
+} from '../releases/control'
 import { registerUpgradeBlocker } from '../releases/runtime'
 import { DriveCreateNotCommittedError, type DriveNotebookStore } from './drive'
+import { EditorSaveSession } from './editorSaveSession'
 import { FilesystemEntryAlreadyExistsError } from './fs'
 import { readLegacyCreationJournal } from './legacyCreationJournal'
 import LocalNotebooks, {
@@ -14,9 +19,14 @@ import type { StorageOwnerDiagnostics } from './storageOwnerDiagnostics'
 import { STORAGE_METHODS, STORAGE_OWNER_VERSION } from './storageOwnerProtocol'
 import { requiresStorageReload, storageRecovery } from './storageRecovery'
 import { StorageRecoveryClient } from './storageRecoveryClient'
-import type { RecoveryMessage } from './storageRecoveryProtocol'
+import {
+  type RecoveryMessage,
+  recoveryMessage,
+} from './storageRecoveryProtocol'
+import { StorageWorkerControl, type WorkerStatus } from './storageWorkerControl'
 
 type Pending = {
+  method: string
   resolve: (value: unknown) => void
   reject: (error: Error) => void
   timer: ReturnType<typeof setTimeout>
@@ -50,6 +60,14 @@ export class StorageOwnerClient {
     private readonly getCredentialBoundary: () => string = () => 'default'
   ) {
     port.onmessage = (event) => {
+      if (event.data?.type === 'release-owner-error') {
+        this.close(
+          new Error(
+            `Notebook storage worker failed: ${String(event.data.error)}`
+          )
+        )
+        return
+      }
       if (event.data?.type === 'storage-owner-diagnostics') {
         const diagnostic = this.diagnostic
         if (diagnostic && diagnostic.id === event.data.id) {
@@ -68,7 +86,7 @@ export class StorageOwnerClient {
     port.onmessageerror = () =>
       this.close(
         new Error(
-          'Storage worker message failed. Local saves may have committed; reload to recover.'
+          'Storage worker message failed. Local saves may have committed; reconnect storage to recover.'
         )
       )
     port.start()
@@ -107,10 +125,17 @@ export class StorageOwnerClient {
     return promise
   }
 
+  /** A failed transport can be replaced without discarding tab-owned saves. */
+  get disconnected(): boolean {
+    return this.closed
+  }
+
   request(method: string, args: unknown[] = []): Promise<unknown> {
     if (
       (this.uncertain.size || this.unresolvedCommit) &&
-      !['disconnect', 'heartbeat', 'hello'].includes(method)
+      !['disconnect', 'heartbeat', 'hello', 'commitEditorOperations'].includes(
+        method
+      )
     )
       return Promise.reject(
         new Error(
@@ -120,7 +145,7 @@ export class StorageOwnerClient {
     if (this.closed)
       return Promise.reject(
         new Error(
-          'Storage worker disconnected. Reload to recover saved content.'
+          'Storage worker disconnected. Reconnect to resume pending editor saves.'
         )
       )
     const id = crypto.randomUUID()
@@ -136,6 +161,7 @@ export class StorageOwnerClient {
               'heartbeat',
               'disconnect',
               'getDriveQueueMetrics',
+              'commitEditorOperations',
             ].includes(method)
           )
             this.uncertain.add(id)
@@ -143,7 +169,9 @@ export class StorageOwnerClient {
           const error = new Error(
             method === 'getDriveQueueMetrics'
               ? 'Storage worker did not respond to queue diagnostics.'
-              : 'Storage worker did not acknowledge the request. Its outcome is uncertain; do not repeat creation blindly.'
+              : method === 'commitEditorOperations'
+                ? 'Storage worker did not acknowledge an editor save. Pending operations remain in this tab; reconnect storage to retry them.'
+                : 'Storage worker did not acknowledge the request. Its outcome is uncertain; do not repeat creation blindly.'
           )
           appLogger.warn('Storage owner request timed out', {
             attrs: {
@@ -177,7 +205,7 @@ export class StorageOwnerClient {
           ? 10_000
           : 300_000
       )
-      this.pending.set(id, { resolve, reject, timer })
+      this.pending.set(id, { method, resolve, reject, timer })
       try {
         this.port.postMessage({
           type: 'request',
@@ -287,7 +315,19 @@ export class StorageOwnerClient {
     // Losing the transport does not settle an outstanding effect. Keep the
     // upgrade blocker until document reload/recovery; never turn disconnect
     // into an acknowledgement of an uncertain save or create.
-    if (this.pending.size || this.uncertain.size || this.unresolvedCommit)
+    if (
+      [...this.pending.values()].some(
+        (p) =>
+          ![
+            'hello',
+            'heartbeat',
+            'disconnect',
+            'commitEditorOperations',
+          ].includes(p.method)
+      ) ||
+      this.uncertain.size ||
+      this.unresolvedCommit
+    )
       this.unresolvedCommit = true
     else this.unregisterReleaseBlocker()
     if (this.diagnostic) {
@@ -313,99 +353,282 @@ export function createSharedNotebookStore(
   drive: DriveNotebookStore
 ): LocalNotebooks {
   const release = window.runmeRelease?.active
-  const worker = release
-    ? new SharedWorker(
-        `${releasePrefix(release.manifest.releaseId)}${release.manifest.owner.entry}`,
-        {
-          type: 'module',
-          name: `runme-storage-owner-${release.manifest.releaseId}-${release.epoch}`,
-        }
-      )
-    : new SharedWorker(new URL('./storageOwner.worker.ts', import.meta.url), {
-        type: 'module',
-        name: 'runme-storage-owner',
-      })
-  const client = new StorageOwnerClient(
-    worker.port,
-    (options) => drive.getAccessToken(options),
-    credentialBoundary
-  )
-  client.onFailure = (error) => {
-    if (requiresStorageReload(error)) storageRecovery.report(error)
-  }
-  client.recovery = new StorageRecoveryClient(
-    (message) => worker.port.postMessage(message),
-    () => {
-      // This is an acknowledged shutdown, not worker failure. Keep editors frozen
-      // until navigation completes so no last keystroke escapes the recovery copy.
-      client.onFailure = undefined
-      client.recovery = undefined
-      client.close()
-      window.location.reload()
-    }
-  )
-  storageRecovery.registerRestart(() => client.recovery!.restart())
-  // Migration is part of the handshake: do not let a recovery scan generate a
-  // second remote identity while an old reserved ID only exists in localStorage.
-  const ready = Promise.resolve().then(async () => {
-    let attempts: ReturnType<typeof readLegacyCreationJournal> = []
-    let creationMigrationError: string | undefined
-    try {
-      attempts = readLegacyCreationJournal(localStorage)
-    } catch (error) {
-      creationMigrationError = String(error)
-    }
-    const hello = await client.request('hello', [
-      {
-        driveBaseUrl: getGoogleDriveBaseUrl(),
-        credentialBoundary: credentialBoundary(),
-        profileCredentialBoundary: localStorage.getItem(
-          'runme/storageCredentialBoundary'
-        ),
-        attempts,
-        creationMigrationError,
-      },
-    ])
-    const handshake = hello as {
-      version: number
-      instanceId?: string
-      release?: { releaseId: string; epoch: number; capabilities: string[] }
-    }
-    if (
-      release &&
-      (handshake.version !== STORAGE_OWNER_VERSION ||
-        !handshake.instanceId ||
-        handshake.release?.releaseId !== release.manifest.releaseId ||
-        handshake.release.epoch !== release.epoch ||
-        RELEASE_CAPABILITIES.some(
-          (c) => !handshake.release?.capabilities?.includes(c)
-        ))
+  const listeners = new Map<string, Set<() => void>>()
+  /** Preserve subscriptions when a new transport replaces a stopped worker. */
+  function notifyChange(uri: string) {
+    for (const callback of listeners.get(uri) ?? []) callback()
+    window.dispatchEvent(
+      new CustomEvent('local-notebook-sync-updated', { detail: { uri } })
     )
-      throw new Error(
-        'Storage owner identity or lifecycle capabilities do not match this tab'
-      )
-    for (const record of attempts) {
-      // Cleanup is optional after durable import. Failure cannot disconnect an
-      // otherwise healthy editor or discard its notebook persistence channel.
+    window.dispatchEvent(
+      new CustomEvent('local-notebook-updated', { detail: { uri } })
+    )
+  }
+  /** A fresh handshake is mandatory for every replacement owner. */
+  function connect() {
+    let ownerInstance: string | undefined
+    const worker = release
+      ? new SharedWorker(
+          `${releasePrefix(release.manifest.releaseId)}${release.manifest.owner.entry}`,
+          {
+            type: 'module',
+            name: `runme-storage-owner-${release.manifest.releaseId}-${release.epoch}`,
+          }
+        )
+      : new SharedWorker(new URL('./storageOwner.worker.ts', import.meta.url), {
+          type: 'module',
+          name: 'runme-storage-owner',
+        })
+    const client = new StorageOwnerClient(
+      worker.port,
+      (options) => drive.getAccessToken(options),
+      credentialBoundary
+    )
+    client.onFailure = (error) => {
+      if (requiresStorageReload(error)) storageRecovery.report(error)
+    }
+    worker.port.postMessage(recoveryMessage('register', 'editor-client'))
+    // Migration is part of the handshake: do not let a recovery scan generate a
+    // second remote identity while an old reserved ID only exists in localStorage.
+    const ready = Promise.resolve().then(async () => {
+      let attempts: ReturnType<typeof readLegacyCreationJournal> = []
+      let creationMigrationError: string | undefined
       try {
-        if (localStorage.getItem(record.id) === JSON.stringify(record.attempt))
-          localStorage.removeItem(record.id)
-      } catch {
-        /* A later handshake can safely repeat the import. */
+        attempts = readLegacyCreationJournal(localStorage)
+      } catch (error) {
+        creationMigrationError = String(error)
       }
+      const hello = await client.request('hello', [
+        {
+          driveBaseUrl: getGoogleDriveBaseUrl(),
+          credentialBoundary: credentialBoundary(),
+          profileCredentialBoundary: localStorage.getItem(
+            'runme/storageCredentialBoundary'
+          ),
+          attempts,
+          creationMigrationError,
+        },
+      ])
+      const handshake = hello as {
+        editorCommitVersion?: number
+        version: number
+        instanceId?: string
+        release?: { releaseId: string; epoch: number; capabilities: string[] }
+      }
+      if (
+        release &&
+        (handshake.version !== STORAGE_OWNER_VERSION ||
+          !handshake.instanceId ||
+          handshake.release?.releaseId !== release.manifest.releaseId ||
+          handshake.release.epoch !== release.epoch ||
+          RELEASE_CAPABILITIES.some(
+            (c) => !handshake.release?.capabilities?.includes(c)
+          ))
+      )
+        throw new Error(
+          'Storage owner identity or lifecycle capabilities do not match this tab'
+        )
+      for (const record of attempts) {
+        // Cleanup is optional after durable import. Failure cannot disconnect an
+        // otherwise healthy editor or discard its notebook persistence channel.
+        try {
+          if (
+            localStorage.getItem(record.id) === JSON.stringify(record.attempt)
+          )
+            localStorage.removeItem(record.id)
+        } catch {
+          /* A later handshake can safely repeat the import. */
+        }
+      }
+      ownerInstance = handshake.instanceId
+      return handshake
+    })
+    void ready.catch((error) =>
+      appLogger.error('Notebook storage worker unavailable', {
+        attrs: { scope: 'storage.owner', error: String(error) },
+      })
+    )
+    client.onChange = notifyChange
+    worker.onerror = (event) => {
+      if (connection.client === client) needsConnection = true
+      client.close(
+        new Error(
+          `Notebook storage worker failed: ${event.message || 'startup error'} (${event.filename}:${event.lineno}). Reconnect storage to resume saving.`
+        )
+      )
+    }
+    return {
+      worker,
+      client,
+      ready,
+      get instanceId() {
+        return ownerInstance
+      },
+    }
+  }
+  let connection = connect()
+  let needsConnection = false
+  let connecting: Promise<void> | undefined
+  let retrying: Promise<void> | undefined
+  let restartRequested = false
+  let driveAvailable = false
+  let currentWorker: WorkerStatus | undefined
+  let lastManagementReply = 0
+  const sessions = new Map<
+    EditorSaveSession,
+    { disposed: boolean; unregister: () => void }
+  >()
+  const management = new StorageWorkerControl((event) => {
+    if (
+      event.status.releaseId !== release?.manifest.releaseId ||
+      event.status.epoch !== (release?.epoch ?? 0)
+    )
+      return
+    currentWorker = event.status
+    lastManagementReply = Date.now()
+    // Status replies are observations only. No tab tells another tab to connect.
+    if (event.type === 'stopping')
+      storageRecovery.set({
+        phase: 'restarting',
+        message:
+          'Storage is stopping. Editors and pending saves remain in this tab.',
+      })
+    if (event.type === 'stopped') {
+      connection.client.onFailure = undefined
+      connection.client.close(
+        new Error('Storage worker stopped; pending editor saves retained')
+      )
+      needsConnection = true
+      storageRecovery.set({
+        phase: 'required',
+        message:
+          'Storage stopped. Retry a save or restart storage to reconnect; editors remain open.',
+      })
+      if (
+        event.restart &&
+        (restartRequested ||
+          [...sessions.keys()].some((session) => session.hasPending))
+      )
+        void retryPending()
+      restartRequested = false
     }
   })
-  void ready.catch((error) =>
-    appLogger.error('Notebook storage worker unavailable', {
-      attrs: { scope: 'storage.owner', error: String(error) },
-    })
-  )
-  worker.onerror = (event) =>
-    client.close(
-      new Error(
-        `Notebook storage worker failed: ${event.message || 'startup error'} (${event.filename}:${event.lineno}). Reload to recover durable edits.`
+  /** A tab reconnects lazily on its own next request. The browser joins the same
+   * named SharedWorker; the worker's lifetime lock remains the only writer gate.
+   */
+  async function ensureConnected(): Promise<void> {
+    if (connection.client.disconnected) needsConnection = true
+    if (connecting) return connecting
+    if (!needsConnection) {
+      await connection.ready
+      return
+    }
+    const operation = (async () => {
+      connection = connect()
+      const handshake = await connection.ready
+      if (handshake.editorCommitVersion !== 1)
+        throw new Error(
+          'This worker cannot resume pending editor saves. Keep this tab open and upgrade Runme.'
+        )
+      needsConnection = false
+      if (driveAvailable)
+        await connection.client.request('availability', [
+          true,
+          credentialBoundary(),
+        ])
+    })()
+    connecting = operation
+    try {
+      await operation
+    } catch (error) {
+      needsConnection = true
+      throw error
+    } finally {
+      connecting = undefined
+    }
+  }
+  /** Retry only this tab's retained idempotent batches, independently of peers. */
+  async function retryPending(): Promise<void> {
+    if (retrying) return retrying
+    const operation = (async () => {
+      try {
+        await ensureConnected()
+        const results = await Promise.allSettled(
+          [...sessions.keys()].map((session) => session.resume())
+        )
+        for (const [session, state] of sessions) {
+          if (state.disposed && !session.hasPending) {
+            state.unregister()
+            sessions.delete(session)
+          }
+        }
+        const failed = results.filter((result) => result.status === 'rejected')
+        storageRecovery.set(
+          failed.length
+            ? {
+                phase: 'blocked',
+                message: `${failed.length} notebook save(s) still need recovery. Editors and pending batches remain in this tab.`,
+              }
+            : { phase: 'healthy', message: '' }
+        )
+        management.discover()
+      } catch (error) {
+        storageRecovery.set({
+          phase: 'blocked',
+          message: `Storage reconnect failed: ${String(error)}. Editors and pending saves remain in this tab.`,
+        })
+      }
+    })()
+    retrying = operation
+    try {
+      await operation
+    } finally {
+      retrying = undefined
+    }
+  }
+  storageRecovery.registerRestart((force = false) => {
+    const requestedAt = Date.now()
+    const sendStop = async () => {
+      if (
+        currentWorker &&
+        lastManagementReply >= requestedAt &&
+        currentWorker.phase !== 'closing'
+      ) {
+        restartRequested = true
+        management.stop(currentWorker.instanceId, { force, restart: true })
+        return
+      }
+      // Silence alone is not death. A free ownership lock permits reconnecting
+      // after a crash without a stopped event; never steal an occupied lock.
+      const absent = await navigator.locks.request(
+        OWNER_LOCK,
+        { mode: 'shared', ifAvailable: true },
+        (lock) => Boolean(lock)
       )
+      if (absent) {
+        connection.client.onFailure = undefined
+        connection.client.close()
+        needsConnection = true
+        void retryPending()
+      } else
+        storageRecovery.set({
+          phase: 'blocked',
+          message:
+            'No management reply and storage ownership is still held. Keep editors open and use browser worker inspection.',
+        })
+    }
+    management.discover()
+    setTimeout(
+      () =>
+        void sendStop().catch((error) =>
+          storageRecovery.report(
+            error instanceof Error ? error : new Error(String(error))
+          )
+        ),
+      250
     )
+  })
+  management.discover()
   const local = new LocalNotebooks(
     drive,
     undefined,
@@ -416,43 +639,36 @@ export function createSharedNotebookStore(
     undefined,
     { client: true }
   )
-  const listeners = new Map<string, Set<() => void>>()
-  client.onChange = (uri) => {
-    for (const callback of listeners.get(uri) ?? []) callback()
-    window.dispatchEvent(
-      new CustomEvent('local-notebook-sync-updated', { detail: { uri } })
-    )
-    window.dispatchEvent(
-      new CustomEvent('local-notebook-updated', { detail: { uri } })
-    )
+  const call = async (method: string, args: unknown[]): Promise<unknown> => {
+    const reconnect = needsConnection
+    await ensureConnected()
+    if (reconnect) void retryPending()
+    return connection.client.request(method, args)
   }
-  const call = async (method: string, args: unknown[]) => {
-    await ready
-    return client.request(method, args)
-  }
-  const heartbeat = setInterval(
-    () => void call('heartbeat', []).catch(() => {}),
-    15_000
-  )
+  const heartbeat = setInterval(() => {
+    if (!needsConnection) void call('heartbeat', []).catch(() => {})
+  }, 15_000)
   window.addEventListener(
     'pagehide',
     (event) => {
       if (event.persisted) return
       clearInterval(heartbeat)
-      void client.request('disconnect').catch(() => {})
-      client.close()
+      void connection.client.request('disconnect').catch(() => {})
+      connection.client.close()
+      management.close()
     }
     // A BFCache round trip must not remove the eventual disconnect handler.
   )
   const methods = new Set<string>(STORAGE_METHODS)
   return new Proxy(local, {
     get(target, key) {
-      if (key === 'ready') return ready
+      if (key === 'ready') return connection.ready
       if (key === 'setFilesystemStore' || key === 'stopSyncQueue')
         return () => {}
       if (key === 'operationLogSupportsConcurrentWriters') return () => true
       if (key === 'setDriveSyncAvailable')
         return (available: boolean) => {
+          driveAvailable = available
           const boundary = credentialBoundary()
           const saved = localStorage.getItem('runme/storageCredentialBoundary')
           // Existing queued edits belong to this profile's identity. A different
@@ -484,7 +700,52 @@ export function createSharedNotebookStore(
           }
         }
       if (key === 'createOperationLogSaveStore')
-        return async (uri: string, options: unknown) => {
+        return async (
+          uri: string,
+          options: Parameters<
+            LocalNotebooks['createOperationLogSaveStore']
+          >[1] = {}
+        ) => {
+          const handshake = await connection.ready
+          if (handshake.editorCommitVersion === 1) {
+            const document =
+              options.initialDocument ??
+              ((await call('loadContent', [uri])) as string)
+            const session = new EditorSaveSession(
+              uri,
+              document,
+              async (...args) => {
+                await call('commitEditorOperations', args)
+              },
+              options.actorId
+            )
+            const state = {
+              disposed: false,
+              unregister: registerUpgradeBlocker(
+                () =>
+                  session.hasPending
+                    ? 'A notebook has pending editor saves; reconnect storage before upgrading'
+                    : undefined,
+                true
+              ),
+            }
+            sessions.set(session, state)
+            return {
+              initialNotebook: session.initialNotebook,
+              getObservedOperationHeads: () =>
+                session.getObservedOperationHeads(),
+              save: session.save.bind(session),
+              dispose: () => {
+                state.disposed = true
+                if (!session.hasPending) {
+                  state.unregister()
+                  sessions.delete(session)
+                }
+              },
+            }
+          }
+          // Older releases still support their original view protocol. Never
+          // assume they understand immutable editor commits merely from version 8.
           const view = (await call('createView', [uri, options])) as {
             id: string
             heads: string[]

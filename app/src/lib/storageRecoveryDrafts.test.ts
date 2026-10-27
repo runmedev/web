@@ -96,29 +96,20 @@ it('also blocks restart for running cells in read-only notebooks', async () => {
   expect(m.setReleasePending).not.toHaveBeenCalled()
 })
 
-it('cancels a hung flush promptly and does not unlock a later recovery round', async () => {
+it('backs up without flushing and abort does not unlock a later recovery round', async () => {
   const m = model()
-  let finish!: () => void
-  m.flushPendingPersist.mockImplementationOnce(
-    () =>
-      new Promise<void>((resolve) => {
-        finish = resolve
-      })
-  )
+  m.flushPendingPersist.mockImplementation(() => new Promise(() => {}))
   const controller = new AbortController()
-  const preparation = prepareNotebookStorageRestart(controller.signal)
-  const rejected = expect(preparation).rejects.toThrow('Could not preserve')
+  const releaseOld = await prepareNotebookStorageRestart(controller.signal)
   expect(readRecoveryDrafts()).toHaveLength(1)
+  expect(m.flushPendingPersist).not.toHaveBeenCalled()
   controller.abort()
   expect(m.setReleasePending).toHaveBeenLastCalledWith(false)
-  await rejected
   const releaseNew = await prepareNotebookStorageRestart()
   expect(m.setReleasePending).toHaveBeenLastCalledWith(true)
-  const callsBeforeOldFlush = m.setReleasePending.mock.calls.length
-  finish()
-  await Promise.resolve()
-  await Promise.resolve()
-  expect(m.setReleasePending).toHaveBeenCalledTimes(callsBeforeOldFlush)
+  const calls = m.setReleasePending.mock.calls.length
+  releaseOld()
+  expect(m.setReleasePending).toHaveBeenCalledTimes(calls)
   releaseNew()
   expect(m.setReleasePending).toHaveBeenLastCalledWith(false)
 })
@@ -132,7 +123,7 @@ it.each(['[null]', '[{"uri":"local://file/a"}]', '{}'])(
   }
 )
 
-it('backs up every notebook before waiting for a hung first save', async () => {
+it('backs up every notebook independently of a hung first save', async () => {
   const first = model()
   const second = model()
   second.getSnapshot = () => ({
@@ -149,14 +140,14 @@ it('backs up every notebook before waiting for a hung first save', async () => {
   )
   first.flushPendingPersist.mockImplementation(() => new Promise(() => {}))
   const controller = new AbortController()
-  const preparing = prepareNotebookStorageRestart(controller.signal)
-  const rejected = expect(preparing).rejects.toThrow('Could not preserve')
+  const release = await prepareNotebookStorageRestart(controller.signal)
+  expect(first.flushPendingPersist).not.toHaveBeenCalled()
   expect(readRecoveryDrafts().map((draft) => draft.name)).toEqual([
     'draft.runme',
     'second.runme',
   ])
   controller.abort()
-  await rejected
+  release()
   expect(second.setReleasePending).toHaveBeenLastCalledWith(false)
 })
 

@@ -56,10 +56,10 @@ export default function StorageRecoveryBanner({
           <p className="font-semibold">Runme storage needs to reconnect</p>
           <p>{state.message}</p>
           <p>
-            Restart first backs up this tab’s editors in session storage.
-            Connected tabs reload only after all tabs preserve edits and pending
-            writes finish. Session copies do not survive closing a tab and are
-            not persistent autosave.
+            Storage restart keeps this page and its editors open. Pending editor
+            saves remain in this tab and retry after reconnecting. Keep this tab
+            open until saves finish, or download recovery copies before closing
+            it.
           </p>
           <button
             type="button"
@@ -88,8 +88,19 @@ export default function StorageRecoveryBanner({
             disabled={busy}
             onClick={() => storageRecovery.restart()}
           >
-            {busy ? 'Preparing restart…' : 'Restart Runme'}
+            {busy ? 'Restarting storage…' : 'Restart storage'}
           </button>
+          <button
+            type="button"
+            className="ml-2 mt-2 rounded border px-3 py-1"
+            onClick={() => storageRecovery.restart(true)}
+          >
+            Force restart storage
+          </button>
+          <p>
+            Force restart skips draining pending work. Editor saves can retry;
+            other operations may have an uncertain outcome.
+          </p>
         </>
       )}
       {state.phase !== 'healthy' && (
