@@ -357,8 +357,14 @@ async function main() {
               name: 'Preserved workspace folder',
               children: [],
             })
-            tx.oncomplete = () => { db.close(); resolve() }
-            tx.onabort = tx.onerror = () => { db.close(); reject(tx.error) }
+            tx.oncomplete = () => {
+              db.close()
+              resolve()
+            }
+            tx.onabort = tx.onerror = () => {
+              db.close()
+              reject(tx.error)
+            }
           }
         })
         const workspace = JSON.parse(localStorage.getItem('runme/workspace')!)
@@ -368,7 +374,9 @@ async function main() {
       await original.evaluate(() => (window as any).runmeRelease.prepare())
       await original.reload()
       await ready(original)
-      await original.getByText('Preserved workspace folder', { exact: true }).waitFor()
+      await original
+        .getByText('Preserved workspace folder', { exact: true })
+        .waitFor()
       assert.match(
         await execute(
           original,
@@ -435,7 +443,9 @@ async function main() {
           .click()
       }
       await ready(repaired)
-      await repaired.getByText('Preserved workspace folder', { exact: true }).waitFor()
+      await repaired
+        .getByText('Preserved workspace folder', { exact: true })
+        .waitFor()
       const repairState = await repaired.evaluate(() =>
         (window as any).runmeVersions.get()
       )
@@ -481,7 +491,9 @@ async function main() {
       assert.equal(schema.encoding, 'runme-control-json-chunks-v1')
       await repaired.reload()
       await ready(repaired)
-      await repaired.getByText('Preserved workspace folder', { exact: true }).waitFor()
+      await repaired
+        .getByText('Preserved workspace folder', { exact: true })
+        .waitFor()
       assert.match(
         await execute(
           repaired,
@@ -516,15 +528,27 @@ async function main() {
     if (process.env.RUNME_RELEASE_BASELINE) {
       // Historical service workers cannot learn a new bootstrap while still
       // controlling old windows. Verify the explicit migration entrypoint.
-      await one.goto(`${base}/version/${expected.b}/launcher.html?session=release-one`)
+      await one.goto(
+        `${base}/version/${expected.b}/launcher.html?session=release-one`
+      )
       await ready(one)
       assert.equal(await active(one), a)
     }
-    assert.equal(await one.evaluate(() => document.documentElement.dataset.runmeLauncher), expected.b,
-      'Refresh must use launcher B even while the installed app and existing worker remain A')
-    assert.equal(await one.evaluate(() => document.documentElement.dataset.runmeLauncherSource), 'latest')
+    assert.equal(
+      await one.evaluate(() => document.documentElement.dataset.runmeLauncher),
+      expected.b,
+      'Refresh must use launcher B even while the installed app and existing worker remain A'
+    )
+    assert.equal(
+      await one.evaluate(
+        () => document.documentElement.dataset.runmeLauncherSource
+      ),
+      'latest'
+    )
     await one.screenshot({ path: output + '/latest-launcher-older-app.png' })
-    console.log('PASS: latest launcher B loads selected app A alongside existing A tabs')
+    console.log(
+      'PASS: latest launcher B loads selected app A alongside existing A tabs'
+    )
     await waitControl(one, (s) => s.candidate?.releaseId === expected.b)
     const three = await context.newPage()
     pages.push(three)

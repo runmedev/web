@@ -1,6 +1,6 @@
 // Gate publication on tests of this exact source commit. Newer commits are handled
 // by later reconciliations; the Go publisher separately rechecks the branch head.
-const required = new Set(['test (ubuntu-latest)', 'controlled-releases'])
+const required = new Set(['test (ubuntu-latest)', 'controlled-releases (current)', 'controlled-releases (9a5fdbf0ca30bf73431b7c4eb90f75f3c91e3ecf)'])
 const url = `https://api.github.com/repos/${process.env.GITHUB_REPOSITORY}/commits/${process.env.GITHUB_SHA}/check-runs?per_page=100`
 for (let attempt = 0; attempt < 150; attempt++) {
   const runs = []

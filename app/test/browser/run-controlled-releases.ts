@@ -21,7 +21,34 @@ async function main() {
   // Preserve the production snapshot before fixture builds mutate app/dist.
   const candidate = process.env.RUNME_RELEASE_CANDIDATE
   if (candidate) await cp(candidate, join(dir, 'b'), { recursive: true })
-  const baseline = process.env.RUNME_RELEASE_BASELINE
+  let baseline = process.env.RUNME_RELEASE_BASELINE
+  const baselineCommit = process.env.RUNME_RELEASE_BASELINE_COMMIT
+  if (baselineCommit && !baseline) {
+    if (!/^[a-f0-9]{40}$/.test(baselineCommit))
+      throw new Error('Expected exact compatibility baseline commit')
+    const source = join(dir, 'baseline-source')
+    // Build frozen source with its own lockfile. CI fetches history so this is
+    // independent of moving branch heads and requires no extra remote fetch.
+    for (const [command, args, cwd] of [
+      ['git', ['clone', '--shared', '--no-checkout', root, source], root],
+      ['git', ['checkout', '--detach', baselineCommit], source],
+      ['pnpm', ['install', '--frozen-lockfile'], source],
+      ['pnpm', ['run', 'build:renderers'], source],
+      ['pnpm', ['run', 'build:console'], source],
+      ['pnpm', ['run', 'build:app'], source],
+    ] as [string, string[], string][]) {
+      const result = spawnSync(command, args, {
+        cwd,
+        env: { ...process.env, VITE_RUNME_RELEASE_ID: ids[0] },
+        stdio: 'inherit',
+      })
+      if (result.status !== 0)
+        throw new Error(
+          `Compatibility baseline failed: ${command} ${args.join(' ')}`
+        )
+    }
+    baseline = join(source, 'app', 'dist')
+  }
   if (baseline) await cp(baseline, join(dir, 'a'), { recursive: true })
   for (const [index, name] of ['a', 'b', 'broken', 'broken-owner'].entries()) {
     if ((name === 'b' && candidate) || (name === 'a' && baseline)) continue
@@ -96,6 +123,7 @@ async function main() {
           ...process.env,
           RUNME_TEST_URL: 'http://127.0.0.1:5198',
           RUNME_TEST_BROKEN: '1',
+          ...(baseline ? { RUNME_RELEASE_BASELINE: baseline } : {}),
         },
         stdio: 'inherit',
       }

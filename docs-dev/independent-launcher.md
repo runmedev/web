@@ -42,5 +42,7 @@ Tests cover incompatible descriptors, invalid paths, incomplete/corrupt caches,
 network and CacheStorage hangs, offline fallback, and publication with pinned
 stable. The controlled-release browser suite asserts launcher B with app/owner A
 while A tabs remain open, then exercises coordinated upgrade, durable edits,
-offline restart, rollback, and damaged release settings. Historical launcher
-protocol changes must extend this matrix before publication.
+offline restart, rollback, and damaged release settings. CI also builds the frozen pre-bootstrap commit
+`9a5fdbf0ca30bf73431b7c4eb90f75f3c91e3ecf` with its own lockfile and runs the same
+suite, entering through the explicit migration URL while older tabs remain open.
+Historical launcher protocol changes must extend this matrix before publication.
