@@ -50,6 +50,7 @@ async function main() {
       () =>
         (window as any).__releaseTools?.has('ExecuteCode') &&
         typeof (window as any).runmeRelease?.prepare === 'function' &&
+        document.getElementById('main-page') !== null &&
         !document.getElementById('root')?.inert,
       undefined,
       { timeout: 60000 }
