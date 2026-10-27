@@ -775,6 +775,8 @@ async function main(): Promise<void> {
   report('Starting the installed release…')
   diagnostics.record('launcher', 'info', {
     path: new URL(import.meta.url).pathname,
+    source: document.documentElement.dataset.runmeLauncherSource ?? 'legacy-shell',
+    bootstrapLauncher: document.documentElement.dataset.runmeLauncher ?? 'unknown',
   })
   await installLoader()
   report('Registering this tab…')

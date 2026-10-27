@@ -169,7 +169,7 @@ function pwaServiceWorkerPlugin(): Plugin {
     async generateBundle(_outputOptions, bundle) {
       if (releaseId) {
         const launcher = Object.values(bundle).find(output => output.type === 'chunk' && output.name === 'launcher');
-        const entry = Object.values(bundle).find(output => output.type === 'chunk' && output.isEntry && output.name !== 'launcher');
+        const entry = Object.values(bundle).find(output => output.type === 'chunk' && output.isEntry && output.name === 'app');
         if (!launcher || launcher.type !== 'chunk' || !entry || entry.type !== 'chunk') this.error('Missing release entries');
         const bootstrap = new Set<string>();
         const collect = (name: string) => {
@@ -179,7 +179,17 @@ function pwaServiceWorkerPlugin(): Plugin {
           if (chunk?.type === 'chunk') chunk.imports.forEach(collect);
         };
         collect(launcher.fileName);
-        const shell = `<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>Runme</title><link rel="manifest" href="${assetBase}manifest.webmanifest"></head><body><div id="root"></div><script type="module" src="${assetBase}${launcher.fileName}"></script></body></html>`;
+        const descriptor = { format: 1, protocol: 1, releaseId, entry: launcher.fileName,
+          assets: [...bootstrap].map(name => {
+            const chunk = bundle[name];
+            if (chunk?.type !== 'chunk') throw new Error('Launcher dependency is not a module');
+            return { path: name, sha256: createHash('sha256').update(chunk.code).digest('hex'), bytes: Buffer.byteLength(chunk.code) };
+          }) };
+        this.emitFile({ type: 'asset', fileName: 'launcher.json', source: JSON.stringify(descriptor) });
+        const boot = Object.values(bundle).find(output => output.type === 'chunk' && output.name === 'bootstrap');
+        if (!boot || boot.type !== 'chunk') this.error('Missing bootstrap entry');
+        collect(boot.fileName);
+        const shell = `<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>Runme</title><link rel="manifest" href="${assetBase}manifest.webmanifest"></head><body><div id="root"></div><script id="runme-launcher-fallback" type="application/json">${JSON.stringify(descriptor)}</script><script type="module" src="${assetBase}${boot.fileName}"></script></body></html>`;
         this.emitFile({ type: 'asset', fileName: 'launcher.html', source: shell });
         // Direct visits to an immutable index must also pass launcher admission.
         const html = bundle['index.html'];
@@ -337,7 +347,7 @@ export default defineConfig({
   build: {
     chunkSizeWarningLimit: 999999,
     rollupOptions: {
-      input: releaseId ? { app: path.resolve('index.html'), launcher: path.resolve('src/releases/launcher.ts') } : undefined,
+      input: releaseId ? { app: path.resolve('index.html'), launcher: path.resolve('src/releases/launcher.ts'), bootstrap: path.resolve('src/releases/bootstrap.ts') } : undefined,
       output: {
         manualChunks: undefined,
         // Use hash in file names for cache busting. This ensures that when the user clicks

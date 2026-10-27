@@ -513,6 +513,18 @@ async function main() {
     await one.reload()
     await ready(one)
     assert.equal(await active(one), a)
+    if (process.env.RUNME_RELEASE_BASELINE) {
+      // Historical service workers cannot learn a new bootstrap while still
+      // controlling old windows. Verify the explicit migration entrypoint.
+      await one.goto(`${base}/version/${expected.b}/launcher.html?session=release-one`)
+      await ready(one)
+      assert.equal(await active(one), a)
+    }
+    assert.equal(await one.evaluate(() => document.documentElement.dataset.runmeLauncher), expected.b,
+      'Refresh must use launcher B even while the installed app and existing worker remain A')
+    assert.equal(await one.evaluate(() => document.documentElement.dataset.runmeLauncherSource), 'latest')
+    await one.screenshot({ path: output + '/latest-launcher-older-app.png' })
+    console.log('PASS: latest launcher B loads selected app A alongside existing A tabs')
     await waitControl(one, (s) => s.candidate?.releaseId === expected.b)
     const three = await context.newPage()
     pages.push(three)

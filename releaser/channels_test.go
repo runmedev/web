@@ -62,7 +62,7 @@ func TestRuntimePublicationAndStablePin(t *testing.T) {
 		writeArchiveFixture(t, dist, "release-acceptance.json", string(receipt))
 		raw, _ := json.Marshal(metadata)
 		writeArchiveFixture(t, dist, "release-metadata.json", string(raw))
-		for _, name := range []string{"app.js", "storage-owner.js", "launcher.html", "sw.js"} {
+		for _, name := range []string{"app.js", "storage-owner.js", "launcher.html", "launcher.json", "sw.js"} {
 			writeArchiveFixture(t, dist, name, "fixture "+id)
 		}
 		if err := runArchive(ctx, archiveConfig{dist: dist, bucket: inputs.Bucket, inputs: &inputs}, io.Discard); err != nil {
@@ -106,6 +106,10 @@ func TestRuntimePublicationAndStablePin(t *testing.T) {
 	latest, _, _ = readObject(ctx, inputs.Bucket, "channels/latest.json")
 	if !strings.Contains(string(latest), second) {
 		t.Fatal("latest failed to advance")
+	}
+	launcher, _, _ := readObject(ctx, inputs.Bucket, "launcher.json")
+	if !strings.Contains(string(launcher), second) {
+		t.Fatal("launcher must advance independently of pinned stable")
 	}
 	// An older source job is allowed to leave its archive, never regress pointers.
 	git("-c", "user.name=Release Test", "-c", "user.email=release-test@example.invalid", "commit", "-s", "--allow-empty", "-m", "new source")

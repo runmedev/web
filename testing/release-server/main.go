@@ -163,6 +163,10 @@ func main() {
 				return
 			}
 		}
+		if r.URL.Path == "/launcher.json" {
+			serve(w, selected.dir, "launcher.json")
+			return
+		}
 		if r.URL.Path == "/sw.js" {
 			serve(w, selected.dir, "sw.js")
 			return

@@ -21,8 +21,10 @@ async function main() {
   // Preserve the production snapshot before fixture builds mutate app/dist.
   const candidate = process.env.RUNME_RELEASE_CANDIDATE
   if (candidate) await cp(candidate, join(dir, 'b'), { recursive: true })
+  const baseline = process.env.RUNME_RELEASE_BASELINE
+  if (baseline) await cp(baseline, join(dir, 'a'), { recursive: true })
   for (const [index, name] of ['a', 'b', 'broken', 'broken-owner'].entries()) {
-    if (name === 'b' && candidate) continue
+    if ((name === 'b' && candidate) || (name === 'a' && baseline)) continue
     const result = spawnSync('pnpm', ['exec', 'vite', 'build'], {
       env: { ...process.env, VITE_RUNME_RELEASE_ID: ids[index] },
       encoding: 'utf8',

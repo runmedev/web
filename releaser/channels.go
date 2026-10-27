@@ -235,7 +235,7 @@ func publishRuntime(ctx context.Context, inputs buildInputs, followStable bool, 
 	for _, asset := range archive.Assets {
 		paths[asset.Path] = true
 	}
-	for _, path := range append([]string{manifest.AppEntry, manifest.Owner.Entry, "launcher.html", "sw.js", "release-acceptance.json"}, manifest.Styles...) {
+	for _, path := range append([]string{manifest.AppEntry, manifest.Owner.Entry, "launcher.html", "launcher.json", "sw.js", "release-acceptance.json"}, manifest.Styles...) {
 		if !paths[path] {
 			return fmt.Errorf("missing runtime asset %s", path)
 		}
@@ -327,7 +327,7 @@ func publishRuntime(ctx context.Context, inputs buildInputs, followStable bool, 
 	}
 	// The service worker embeds its matching shell. Partial root updates still
 	// reference complete immutable bootstrap assets and never select an app version.
-	for _, pair := range [][2]string{{"sw.js", "sw.js"}, {"storage-owner.js", ""}, {"recovery.html", "launcher.html"}, {"index.html", "launcher.html"}} {
+	for _, pair := range [][2]string{{"launcher.json", "launcher.json"}, {"sw.js", "sw.js"}, {"storage-owner.js", ""}, {"recovery.html", "launcher.html"}, {"index.html", "launcher.html"}} {
 		var data []byte
 		if pair[1] == "" {
 			data = []byte("self.onconnect=e=>{const p=e.ports[0];p.onmessage=()=>p.postMessage('runme-legacy-owner-retired');p.start();p.postMessage('runme-legacy-owner-retired')}")
