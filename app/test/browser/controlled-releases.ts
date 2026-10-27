@@ -870,8 +870,18 @@ async function main() {
     if (historicalApp) {
       rollbackPeer = await context.newPage()
       pages.push(rollbackPeer)
-      await rollbackPeer.goto(base + '/?session=historical-rollback-peer')
+      // The frozen service worker still serves its historical root loader.
+      // Explicitly enter the current launcher to test the new peer contract.
+      await rollbackPeer.goto(
+        `${base}/version/${expected.b}/launcher.html?session=historical-rollback-peer`
+      )
       await ready(rollbackPeer)
+      assert.equal(
+        await rollbackPeer.evaluate(
+          () => typeof (window as any).runmeVersions.reloadTab
+        ),
+        'function'
+      )
       rollbackPeerId = await rollbackPeer.evaluate(
         () => (window as any).runmeRelease.tabId
       )
