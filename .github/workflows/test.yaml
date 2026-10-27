@@ -125,6 +125,15 @@ jobs:
           src/releases/startupDiagnostics.test.ts
           src/pwa/loader-worker.test.ts src/components/ReleaseControls.test.tsx
           src/components/ReleaseRecoveryControls.test.tsx src/components/StorageWorkerControls.test.tsx src/releases/releaseCatalog.test.ts
+      - name: Use the primary Ubuntu package mirror
+        shell: bash
+        run: |
+          set -euo pipefail
+          # Match app-tests: the Azure mirror can stall browser dependencies for
+          # several minutes before apt falls back to the primary archive.
+          if [[ -f /etc/apt/apt-mirrors.txt ]]; then
+            sudo sed -i 's|http://azure.archive.ubuntu.com/ubuntu|https://archive.ubuntu.com/ubuntu|g' /etc/apt/apt-mirrors.txt
+          fi
       - run: pnpm -C app exec playwright-core install --with-deps chromium
       - name: Test independent storage reconnect
         if: matrix.baseline == 'current'
