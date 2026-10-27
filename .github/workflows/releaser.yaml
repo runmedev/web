@@ -33,7 +33,9 @@ concurrency:
 
 jobs:
   releaser:
-    runs-on: ubuntu-latest
+    # Keep the release builder on the same supported image as browser acceptance.
+    # ubuntu-latest can advance ahead of the pinned Playwright browser packages.
+    runs-on: ubuntu-24.04
     env:
       GCP_PROJECT_ID: runme-lewi-dev
       GCP_PROJECT_NUMBER: "690012737568"
@@ -98,7 +100,9 @@ jobs:
         run: node releaser/wait-for-acceptance.mjs
 
       - name: Install candidate acceptance browser
-        if: github.event_name != 'pull_request' && github.event.inputs.dry_run != 'true'
+        # Exercise provisioning in PRs too; a dry-run-only PR previously missed
+        # unsupported runner images that blocked every production publication.
+        if: github.event.inputs.dry_run != 'true'
         run: |
           pnpm install --frozen-lockfile
           pnpm -C app exec playwright-core install --with-deps chromium
