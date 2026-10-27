@@ -371,6 +371,9 @@ Set `CHROMIUM_PATH` when using a Chromium for Testing binary instead of Playwrig
 installed browser. Evidence goes to `test/browser/test-output/storage-worker-reconnect`.
 The test also stops the worker without requesting a restart, then verifies that
 each tab independently reconnects on its next save and joins the same replacement.
+It then drops management notifications for one tab, lets a save on its stale
+port time out, and verifies that retrying replaces the connection and commits
+the retained batch without losing either tab's edits.
 
 `pnpm -C app run cuj:releases` also runs `storage-worker-startup.ts` against emitted
 production assets and the Go release fixture server. It holds a real IndexedDB

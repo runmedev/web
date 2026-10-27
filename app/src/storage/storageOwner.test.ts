@@ -531,6 +531,7 @@ it('blocks upgrade and mutation replay after a timeout until the original acknow
   ).rejects.toThrow('uncertain')
   await vi.advanceTimersByTimeAsync(300_000)
   await outcome
+  expect(client.needsReconnect).toBe(false)
   const { assertNoUpgradeBlockers } = await import('../releases/runtime')
   expect(assertNoUpgradeBlockers).toThrow('unconfirmed')
   await expect(client.request('save', ['retry', {}])).rejects.toThrow(
@@ -547,6 +548,26 @@ it('blocks upgrade and mutation replay after a timeout until the original acknow
   })
   await vi.waitFor(() => expect(assertNoUpgradeBlockers).not.toThrow())
   expect(sent.filter((m) => m.method === 'save')).toHaveLength(1)
+})
+
+it('allows reconnect after an editor-save timeout without requiring a stop notification', async () => {
+  vi.useFakeTimers()
+  const channel = new MessageChannel()
+  ports.push(channel.port1 as unknown as MessagePort)
+  const client = new StorageOwnerClient(
+    channel.port2 as unknown as MessagePort,
+    async () => 'token'
+  )
+  clients.push(client)
+  const outcome = expect(
+    client.request('commitEditorOperations', ['uri', 'notebook', []])
+  ).rejects.toThrow('Pending operations remain')
+  await vi.advanceTimersByTimeAsync(300_000)
+  await outcome
+  expect(client.needsReconnect).toBe(true)
+  client.close()
+  const { assertNoUpgradeBlockers } = await import('../releases/runtime')
+  expect(assertNoUpgradeBlockers).not.toThrow()
 })
 
 it('does not treat disconnect as acknowledgement of an outstanding write', async () => {

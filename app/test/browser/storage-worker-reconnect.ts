@@ -54,6 +54,43 @@ async function main() {
       await page.evaluate(async () => {
         const w = window as any
         w.pageIdentity = crypto.randomUUID()
+        // Exercise a missed lifecycle notification without waiting five minutes
+        // for the real RPC timeout. All other timer behavior remains unchanged.
+        const nativeTimeout = window.setTimeout.bind(window)
+        w.setTimeout = (
+          callback: TimerHandler,
+          delay: number,
+          ...args: any[]
+        ) =>
+          nativeTimeout(
+            callback,
+            w.fastTimeout && delay === 300000 ? 1000 : delay,
+            ...args
+          )
+        const NativeChannel = BroadcastChannel
+        w.BroadcastChannel = class extends NativeChannel {
+          constructor(name: string) {
+            super(name)
+            const descriptor = Object.getOwnPropertyDescriptor(
+              NativeChannel.prototype,
+              'onmessage'
+            )!
+            Object.defineProperty(this, 'onmessage', {
+              set(handler) {
+                descriptor.set!.call(this, (event: MessageEvent) => {
+                  if (
+                    w.dropManagement &&
+                    name === 'runme-storage-worker-control-v1'
+                  ) {
+                    w.droppedManagement = (w.droppedManagement ?? 0) + 1
+                    return
+                  }
+                  handler?.(event)
+                })
+              },
+            })
+          }
+        }
         // Drop only a successful editor-commit reply, after the actual OPFS write.
         // The tab must keep the same batch and deduplicate it on the new owner.
         const NativeWorker = SharedWorker
@@ -278,6 +315,59 @@ async function main() {
       ownerIds[1],
       'Independent retries join the same worker'
     )
+    await pages[1].evaluate(() => {
+      const w = window as any
+      w.dropManagement = true
+      w.fastTimeout = true
+    })
+    await pages[0].evaluate(async () => {
+      const path = '/src/storage/storageWorkerControl.ts'
+      const { StorageWorkerControl } = await import(path)
+      await new Promise<void>((resolve) => {
+        const control = new StorageWorkerControl((event: any) => {
+          if (event.type !== 'status') return
+          control.stop(event.status.instanceId, { force: true, restart: false })
+          control.close()
+          resolve()
+        })
+        control.discover()
+      })
+    })
+    await pages[0].waitForFunction(
+      () => (window as any).recovery.getSnapshot().phase === 'required'
+    )
+    const missedNotification = await pages[1].evaluate(async () => {
+      const w = window as any
+      w.editor.cells[1].value = 'Saved after missing the stop notification'
+      let timedOut = false
+      try {
+        await w.view.save(w.uri, w.editor)
+      } catch (error) {
+        timedOut = String(error).includes('did not acknowledge an editor save')
+      }
+      if (!timedOut) throw new Error('Stale port should time out before retry')
+      await w.view.save(w.uri, w.editor)
+      return {
+        timedOut,
+        droppedManagement: w.droppedManagement,
+        instanceId: (await w.recovery.diagnose()).instanceId,
+        cells: (await w.store.loadOperationLogSnapshot(w.uri)).cells.map(
+          (cell: any) => cell.value
+        ),
+      }
+    })
+    assert.ok(missedNotification.droppedManagement > 0)
+    assert.notEqual(missedNotification.instanceId, ownerIds[1])
+    assert.deepEqual(missedNotification.cells, [
+      'Edited after reconnect',
+      'Saved after missing the stop notification',
+    ])
+    assert.deepEqual(
+      await Promise.all(
+        pages.map((page) => page.evaluate(() => (window as any).pageIdentity))
+      ),
+      identities
+    )
     await writeFile(
       `${output}/result.json`,
       JSON.stringify(
@@ -291,6 +381,7 @@ async function main() {
           independentRetryAfterStop: true,
           finalCells,
           ownerIds,
+          missedNotification,
         },
         null,
         2

@@ -38,6 +38,7 @@ export class StorageOwnerClient {
   private uncertain = new Set<string>()
   private unresolvedCommit = false
   private closed = false
+  private retryConnection = false
   private unregisterDiagnostics?: () => void
   private unregisterReleaseBlocker = registerUpgradeBlocker(() =>
     this.uncertain.size || this.unresolvedCommit
@@ -125,9 +126,12 @@ export class StorageOwnerClient {
     return promise
   }
 
-  /** A failed transport can be replaced without discarding tab-owned saves. */
-  get disconnected(): boolean {
-    return this.closed
+  /** Missing stop notifications must not strand a tab on a dead MessagePort.
+   * Safe request timeouts allow the next call to replace this connection. Keep
+   * generic uncertain mutations on their original correlation until recovery.
+   */
+  get needsReconnect(): boolean {
+    return this.closed || this.retryConnection
   }
 
   request(method: string, args: unknown[] = []): Promise<unknown> {
@@ -153,6 +157,8 @@ export class StorageOwnerClient {
     return new Promise((resolve, reject) => {
       const timer = setTimeout(
         () => {
+          if (['hello', 'heartbeat', 'commitEditorOperations'].includes(method))
+            this.retryConnection = true
           // Keep the original correlation until its late acknowledgement. An
           // upgrade retry must not turn a timed-out mutation into a new mutation.
           if (
@@ -517,13 +523,15 @@ export function createSharedNotebookStore(
    * named SharedWorker; the worker's lifetime lock remains the only writer gate.
    */
   async function ensureConnected(): Promise<void> {
-    if (connection.client.disconnected) needsConnection = true
+    if (connection.client.needsReconnect) needsConnection = true
     if (connecting) return connecting
     if (!needsConnection) {
       await connection.ready
       return
     }
     const operation = (async () => {
+      connection.client.onFailure = undefined
+      connection.client.close()
       connection = connect()
       const handshake = await connection.ready
       if (handshake.editorCommitVersion !== 1)
@@ -662,7 +670,8 @@ export function createSharedNotebookStore(
   const methods = new Set<string>(STORAGE_METHODS)
   return new Proxy(local, {
     get(target, key) {
-      if (key === 'ready') return connection.ready
+      if (key === 'ready')
+        return ensureConnected().then(() => connection.ready)
       if (key === 'setFilesystemStore' || key === 'stopSyncQueue')
         return () => {}
       if (key === 'operationLogSupportsConcurrentWriters') return () => true
@@ -706,6 +715,7 @@ export function createSharedNotebookStore(
             LocalNotebooks['createOperationLogSaveStore']
           >[1] = {}
         ) => {
+          await ensureConnected()
           const handshake = await connection.ready
           if (handshake.editorCommitVersion === 1) {
             const document =

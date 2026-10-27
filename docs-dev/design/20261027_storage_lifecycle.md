@@ -13,6 +13,8 @@ lifetime lock, validate release admission, and accept the retained batches.
 Stopping the worker requires no tab acknowledgement or session-storage write.
 Each tab reconnects independently on its next request; idle tabs need not connect
 immediately, and there are no tab readiness or reconnect broadcasts.
+An editor-save timeout also makes the next request replace the connection, so
+recovery does not depend on receiving the old worker's stop notification.
 Only app upgrade/reload requires coordinated editor preservation.
 
 The tab owns the save baseline: the snapshot last loaded into the editor or
