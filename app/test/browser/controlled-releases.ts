@@ -348,6 +348,10 @@ async function main() {
           .getByRole('button', { name: 'Retry worker activation', exact: true })
           .waitFor()
         await newcomer.waitForTimeout(2200)
+        await newcomer
+          .getByRole('status')
+          .filter({ hasText: 'An upgrade is pending' })
+          .waitFor()
         assert.equal(
           await newcomer.evaluate(() => (window as any).__candidateStarts),
           0

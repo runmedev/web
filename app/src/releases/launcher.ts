@@ -699,6 +699,13 @@ async function render(state?: Control): Promise<void> {
       ? `Runme ${s.active.manifest.webCommit.slice(0, 8)} · ${s.selection.kind === 'channel' ? s.selection.name : 'pinned'}`
       : 'Installing Runme…'
   )
+  if (s.ownerError) report(s.ownerError.message)
+  else if (s.transition)
+    report(
+      activating
+        ? 'Activating the selected release; other tabs stay open…'
+        : 'An upgrade is pending. Choose Retry worker activation to resume it; other tabs stay open.'
+    )
   if (tabUpdateAvailable) {
     report(
       'The selected application version has changed. Reload this tab when ready; other tabs stay open.'
