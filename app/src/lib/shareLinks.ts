@@ -205,6 +205,24 @@ export async function copyGoogleColabNotebookUrl(
   return colabUrl
 }
 
+/** Copy a generated notebook's Colab URL with its filename as Markdown text. */
+export async function copyGoogleColabNotebookMarkdownLink(
+  name: string,
+  driveFileId: string
+): Promise<string> {
+  if (
+    typeof window === 'undefined' ||
+    !window.navigator?.clipboard?.writeText
+  ) {
+    throw new Error('Clipboard access is unavailable in this browser')
+  }
+
+  const link = `[${escapeMarkdownLinkText(name)}](${buildGoogleColabNotebookUrl(driveFileId)})`
+  await window.navigator.clipboard.writeText(link)
+  markOnboardingTaskComplete('share-notebook')
+  return link
+}
+
 export async function copyNotebookCellShareUrl(
   remoteUri: string,
   cellRefId: string

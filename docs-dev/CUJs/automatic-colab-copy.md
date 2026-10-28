@@ -60,3 +60,18 @@ race; these tests do not assert a server-side lock.
 `storage/derivedCopyOwnership.test.ts` exercises the REST client with separate
 workload and end-user tokens, shared properties and no private markers. It also
 covers legacy migration, unrelated-file refusal and ambiguous recovery.
+
+## Copy the generated notebook link
+
+1. Enable automatic Colab saving on a source notebook. Before the first copy is
+   created, right-click the tab and verify **Copy Colab link** is disabled.
+2. Keep the menu open while export finishes; verify the action becomes enabled.
+3. Select it and paste into a Markdown editor. Verify the label is the `.ipynb`
+   filename and the Colab URL contains the generated file ID, not the source ID.
+4. Repeat by right-clicking an inactive notebook tab; verify that notebook's copy
+   is linked. Titles containing brackets must remain valid Markdown link text.
+5. Disable automatic saving. Verify the menu action disappears despite the old
+   copy still existing.
+
+`components/Actions/Actions.test.tsx` covers the menu, clipboard contents,
+source/copy distinction, inactive tabs, pending exports, and export completion.

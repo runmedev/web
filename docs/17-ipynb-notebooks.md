@@ -171,3 +171,12 @@ avoid relying on files or credentials that exist only in one runtime.
 - OPFS preserves Jupyter-only fields that the Runme model cannot represent.
 - Only Drive-backed IPYNB notebooks expose a Google Colab link.
 - Drive permissions determine who can open the copied Colab link.
+
+### Copy a link to the generated notebook
+
+With automatic Colab saving enabled, right-click the source notebook tab and
+choose **Copy Colab link**. The clipboard contains a Markdown link such as
+`[report.ipynb](https://colab.research.google.com/drive/FILE_ID)`.
+The link points to the generated copy, not the `.runme` source. The action is
+disabled until a copy exists in Drive and becomes available when export finishes.
+Disabling automatic Colab saving hides this action; the last copy is kept.

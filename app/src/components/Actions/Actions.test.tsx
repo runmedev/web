@@ -97,6 +97,7 @@ const contextMocks = vi.hoisted(() => ({
   notebookStore: null as null | {
     files?: { get: ReturnType<typeof vi.fn> }
     getMetadata: ReturnType<typeof vi.fn>
+    getIpynbExportState?: ReturnType<typeof vi.fn>
     getSyncState: ReturnType<typeof vi.fn>
     rename: ReturnType<typeof vi.fn>
     refreshConflictWithLatestUpstream?: ReturnType<typeof vi.fn>
@@ -2402,6 +2403,158 @@ describe('Actions tabs', () => {
         'https://colab.research.google.com/drive/1cDDvmvjrBKQDkZi6nojVC_CSAfTSj7EV'
       )
     })
+  })
+
+  it.each([
+    { enabled: true, exported: true },
+    { enabled: true, exported: false },
+    { enabled: false, exported: true },
+  ])('offers a Markdown Colab copy link: %j', async ({ enabled, exported }) => {
+    const writeText = vi.fn(async () => undefined)
+    Object.defineProperty(window.navigator, 'clipboard', {
+      configurable: true,
+      value: { writeText },
+    })
+    const uri = 'local://file/source'
+    const getIpynbExportState = vi.fn(async () => ({
+      uri: exported
+        ? 'https://drive.google.com/file/d/colab-copy/view'
+        : undefined,
+    }))
+    contextMocks.getNotebookData.mockReturnValue({
+      getSnapshot: () => ({
+        notebook: { metadata: { 'runme.dev/autoIpynb': String(enabled) } },
+      }),
+    })
+    contextMocks.notebookStore = {
+      getMetadata: vi.fn(async () => ({
+        uri,
+        name: 'report [latest].runme',
+        type: 'file',
+        remoteUri: 'https://drive.google.com/file/d/source/view',
+      })),
+      getIpynbExportState,
+      getSyncState: vi.fn(async () => null),
+      rename: vi.fn(),
+      subscribeSync: vi.fn(() => () => {}),
+    }
+    // The right-clicked tab need not be the active tab.
+    contextMocks.currentDoc = 'local://file/other'
+    contextMocks.workspaceDocuments = [
+      { uri, title: 'report [latest].runme' },
+      { uri: 'local://file/other', title: 'other.runme' },
+    ]
+
+    render(<Actions />)
+    fireEvent.contextMenu(
+      screen.getByRole('tab', { name: 'report [latest].runme' })
+    )
+    await screen.findByRole('button', { name: 'Copy Google Drive Link' })
+    if (!enabled) {
+      expect(
+        screen.queryByRole('button', { name: 'Copy Colab link' })
+      ).toBeNull()
+      expect(getIpynbExportState).not.toHaveBeenCalled()
+    } else {
+      const button = screen.getByRole('button', { name: 'Copy Colab link' })
+      expect(getIpynbExportState).toHaveBeenCalledWith(uri)
+      if (!exported) {
+        expect(button.hasAttribute('disabled')).toBe(true)
+        expect(writeText).not.toHaveBeenCalled()
+      } else {
+        await waitFor(() => expect(button.hasAttribute('disabled')).toBe(false))
+        fireEvent.click(button)
+        await waitFor(() =>
+          expect(writeText).toHaveBeenCalledWith(
+            '[report \\[latest\\].ipynb](https://colab.research.google.com/drive/colab-copy)'
+          )
+        )
+      }
+    }
+  })
+
+  it('enables Copy Colab link when export finishes with the menu open', async () => {
+    const uri = 'local://file/source'
+    let exportUri: string | undefined
+    let sync: (() => void) | undefined
+    contextMocks.getNotebookData.mockReturnValue({
+      getSnapshot: () => ({
+        notebook: { metadata: { 'runme.dev/autoIpynb': 'true' } },
+      }),
+    })
+    contextMocks.notebookStore = {
+      getMetadata: vi.fn(async () => ({
+        uri,
+        name: 'report.runme',
+        type: 'file',
+      })),
+      getIpynbExportState: vi.fn(async () => ({ uri: exportUri })),
+      getSyncState: vi.fn(async () => null),
+      rename: vi.fn(),
+      subscribeSync: vi.fn((_uri, callback) => {
+        sync = callback
+        return () => {}
+      }),
+    }
+    contextMocks.currentDoc = uri
+    contextMocks.workspaceDocuments = [{ uri, title: 'report.runme' }]
+    render(<Actions />)
+    fireEvent.contextMenu(screen.getByRole('tab', { name: 'report.runme' }))
+    const button = await screen.findByRole('button', {
+      name: 'Copy Colab link',
+    })
+    expect(button.hasAttribute('disabled')).toBe(true)
+    exportUri = 'https://drive.google.com/file/d/colab-copy/view'
+    sync?.()
+    await waitFor(() => expect(button.hasAttribute('disabled')).toBe(false))
+  })
+
+  it('ignores an old export lookup after right-clicking another tab', async () => {
+    const writeText = vi.fn(async () => undefined)
+    Object.defineProperty(window.navigator, 'clipboard', {
+      configurable: true,
+      value: { writeText },
+    })
+    let resolveFirst!: (value: { uri: string }) => void
+    const first = new Promise<{ uri: string }>((resolve) => {
+      resolveFirst = resolve
+    })
+    contextMocks.getNotebookData.mockReturnValue({
+      getSnapshot: () => ({
+        notebook: { metadata: { 'runme.dev/autoIpynb': 'true' } },
+      }),
+    })
+    contextMocks.notebookStore = {
+      getMetadata: vi.fn(async () => null),
+      getSyncState: vi.fn(async () => null),
+      rename: vi.fn(),
+      getIpynbExportState: vi.fn((uri: string) =>
+        uri === 'local://file/first'
+          ? first
+          : Promise.resolve({
+              uri: 'https://drive.google.com/file/d/second-copy/view',
+            })
+      ),
+      subscribeSync: vi.fn(() => () => {}),
+    }
+    contextMocks.currentDoc = 'local://file/first'
+    contextMocks.workspaceDocuments = [
+      { uri: 'local://file/first', title: 'first.runme' },
+      { uri: 'local://file/second', title: 'second.runme' },
+    ]
+    render(<Actions />)
+    fireEvent.contextMenu(screen.getByRole('tab', { name: 'first.runme' }))
+    fireEvent.contextMenu(screen.getByRole('tab', { name: 'second.runme' }))
+    const button = screen.getByRole('button', { name: 'Copy Colab link' })
+    await waitFor(() => expect(button.hasAttribute('disabled')).toBe(false))
+    resolveFirst({ uri: 'https://drive.google.com/file/d/first-copy/view' })
+    await first
+    fireEvent.click(button)
+    await waitFor(() =>
+      expect(writeText).toHaveBeenCalledWith(
+        '[second.ipynb](https://colab.research.google.com/drive/second-copy)'
+      )
+    )
   })
 
   it('opens an upstream diff from the Drive-backed tab context menu', async () => {
