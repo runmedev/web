@@ -39,6 +39,17 @@ async function main() {
     const page = await context.newPage()
     page.on('console', (message) => events.push(message.text()))
     await page.goto(`${base}/recovery.html`)
+    // Recovery is inert until the user chooses a release. Prepare and activate
+    // explicitly before testing worker diagnostics and a real IndexedDB stall.
+    await page
+      .getByRole('button', { name: 'Check for updates', exact: true })
+      .click()
+    await page
+      .getByRole('button', {
+        name: 'Activate release and update this tab',
+        exact: true,
+      })
+      .click()
     await until(
       page,
       async () => Boolean((await (window as any).runmeVersions?.get())?.active),
@@ -243,16 +254,14 @@ async function main() {
     )
   } finally {
     const diagnostics = await Promise.all(
-      contextForDiagnostics
-        ?.pages()
-        .map(async (page) =>
-          page
-            .evaluate(() => ({
-              status: (window as any).workerStatus,
-              events: (window as any).events,
-            }))
-            .catch((error) => ({ error: String(error) }))
-        ) ?? []
+      contextForDiagnostics?.pages().map(async (page) =>
+        page
+          .evaluate(() => ({
+            status: (window as any).workerStatus,
+            events: (window as any).events,
+          }))
+          .catch((error) => ({ error: String(error) }))
+      ) ?? []
     )
     await writeFile(
       `${output}/diagnostics.json`,

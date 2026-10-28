@@ -3,7 +3,7 @@ import {
   LAUNCHER_POINTER,
   launcherDescriptor,
 } from './launcherSelection'
-import { notifyReleaseChange } from './releaseChanges'
+import { notifyReleaseChange, releaseChangeKey } from './releaseChanges'
 import { releaseTransaction } from './releaseDatabase'
 
 /** Loader protocol 1 is independent of notebook schemas and application builds. */
@@ -85,6 +85,7 @@ export async function control<T>(
   mutate: (state: Control) => T,
   write = true
 ): Promise<T> {
+  let changed = false
   const result = await releaseTransaction(CONTROL_DB, write, (value) => {
     const state: Control = (value as Control | undefined) ?? {
       format: 1,
@@ -93,10 +94,12 @@ export async function control<T>(
     }
     if (state.format !== 1)
       throw new Error('Unsupported release-control format')
+    const before = write ? releaseChangeKey(state) : undefined
     const result = mutate(state)
+    changed = write && before !== releaseChangeKey(state)
     return { state, result }
   })
-  if (write) notifyReleaseChange()
+  if (changed) notifyReleaseChange()
   return result
 }
 

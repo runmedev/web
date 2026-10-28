@@ -1,6 +1,7 @@
 import { afterEach, expect, it, vi } from 'vitest'
 
-import { notifyReleaseChange } from './releaseChanges'
+import type { Control } from './control'
+import { notifyReleaseChange, releaseChangeKey } from './releaseChanges'
 
 afterEach(() => {
   vi.unstubAllGlobals()
@@ -39,4 +40,19 @@ it('only observes change hints and can unsubscribe', async () => {
   unsubscribe()
   channel.dispatchEvent(new MessageEvent('message', { data: 'changed' }))
   expect(listener).toHaveBeenCalledOnce()
+})
+
+it('does not wake peers for tab bookkeeping or readiness, but does for selection', () => {
+  const state: Control = {
+    format: 1,
+    selection: { kind: 'channel', name: 'stable' },
+    tabs: {},
+  }
+  const before = releaseChangeKey(state)
+  state.tabs.editor = { epoch: 1, releaseId: 'installed' }
+  state.healthy = 'installed'
+  state.ownerStartup = { releaseId: 'installed', epoch: 1, phase: 'ready' }
+  expect(releaseChangeKey(state)).toBe(before)
+  state.selection = { kind: 'channel', name: 'latest' }
+  expect(releaseChangeKey(state)).not.toBe(before)
 })

@@ -1,3 +1,5 @@
+import type { Control } from './control'
+
 /** A hint to reread selected-release state, never an instruction to activate it.
  * No documents or manifests cross this channel. Missed hints are reconciled on
  * pageshow or explicit version actions; correctness rests on DB admission.
@@ -29,4 +31,19 @@ export function subscribeReleaseChanges(listener: () => void): () => void {
   }
   channel?.addEventListener('message', receive)
   return () => channel?.removeEventListener('message', receive)
+}
+
+/** Ignore tab bookkeeping and healthy/readiness writes, which can happen on
+ * every edit. Only changes relevant to version controls should wake peer tabs.
+ */
+export function releaseChangeKey(state: Control): string {
+  return JSON.stringify([
+    state.active?.manifest.releaseId,
+    state.active?.epoch,
+    state.candidate?.releaseId,
+    state.selection,
+    state.transition?.id,
+    state.transition?.phase,
+    state.ownerError,
+  ])
 }
