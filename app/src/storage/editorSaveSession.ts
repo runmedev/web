@@ -60,7 +60,8 @@ export class EditorSaveSession {
       operations: RunmeOperation[]
     ) => Promise<void>,
     private readonly actorId = `editor:${crypto.randomUUID()}`,
-    checkpoint?: EditorSaveCheckpoint
+    checkpoint?: EditorSaveCheckpoint,
+    private onRecovered?: () => void
   ) {
     const parsed = parseOperationLog(upgradeOperationLogToV2(document))
     this.header = parsed.header
@@ -148,11 +149,11 @@ export class EditorSaveSession {
     return this.uri
   }
 
-  /** Reconnect can finish a pending save without replacing the mounted model. */
+  /** Replay the original batch first, then save later typing retained in the
+   * snapshot. A failed replay may have prevented that snapshot's diff entirely.
+   */
   resume(): Promise<void> {
-    const operation = this.queue.then(() => this.commitPending())
-    this.queue = operation.catch(() => undefined)
-    return operation
+    return this.save(this.uri, this.latest)
   }
 
   /** Capture at call time: keystrokes during an acknowledgement wait belong to
@@ -185,6 +186,12 @@ export class EditorSaveSession {
         }
         this.pending = { operations, snapshot: next }
         await this.commitPending()
+      })
+      .then(() => {
+        // A checkpoint is consumed only after its full editor state is durable,
+        // including when the initial replay failed and reconnect completed it.
+        this.onRecovered?.()
+        this.onRecovered = undefined
       })
       .finally(() => {
         this.saving -= 1

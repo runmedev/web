@@ -99,15 +99,27 @@ it('restores a lost-ack batch and later typing without overwriting another tabâ€
   await other.save(uri, other.initialNotebook)
   editor.cells[0].value = 'typed after submission'
   const checkpoint = JSON.parse(JSON.stringify(await first.checkpoint(editor)))
+  const recovered = vi.fn()
   const restored = new EditorSaveSession(
     uri,
     checkpoint.document,
-    commit,
+    vi
+      .fn()
+      .mockRejectedValueOnce(new Error('Worker unavailable during replay'))
+      .mockImplementation(commit),
     checkpoint.actorId,
-    checkpoint
+    checkpoint,
+    recovered
   )
   expect(restored.initialNotebook.cells[0].value).toBe('typed after submission')
-  await restored.save(uri, restored.initialNotebook)
+  await expect(restored.save(uri, restored.initialNotebook)).rejects.toThrow(
+    'Worker unavailable during replay'
+  )
+  expect(recovered).not.toHaveBeenCalled()
+  // No new keystroke/save callback is required to persist the restored snapshot.
+  await restored.resume()
+  expect(recovered).toHaveBeenCalledOnce()
+  expect(restored.hasPending).toBe(false)
   expect(commit.mock.calls[2][2]).toEqual(originalBatch)
   const parsed = parseOperationLog(durable)
   expect(new Set(parsed.operations.map((op) => op.op_id)).size).toBe(

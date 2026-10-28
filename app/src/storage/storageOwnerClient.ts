@@ -848,7 +848,10 @@ export function createSharedNotebookStore(
                 await call('commitEditorOperations', args)
               },
               checkpoint?.actorId ?? options.actorId,
+              checkpoint,
               checkpoint
+                ? () => acknowledgeTabCheckpoint(uri, checkpoint.actorId)
+                : undefined
             )
             const state = {
               disposed: false,
@@ -865,7 +868,6 @@ export function createSharedNotebookStore(
             if (checkpoint) {
               void session
                 .save(uri, session.initialNotebook)
-                .then(() => acknowledgeTabCheckpoint(uri, checkpoint.actorId))
                 .catch((error) =>
                   storageRecovery.report(
                     error instanceof Error ? error : new Error(String(error))

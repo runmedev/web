@@ -63,7 +63,9 @@ Acceptance:
 - Historical rollback requires a durable flush of the initiating tab. Current peers refuse checkpoint reload into an app without `tabRecoveryFormat: 1`, retaining their mounted editors.
 - Historical launchers retain their original behavior. The frozen-baseline migration closes durable legacy peers before activation; the initiating historical app flushes locally before worker replacement.
 - After full offline readiness, offline restart uses B; offline rollback to A preserves edits made on B and leaves other tabs on their loaded UI versions.
-- The recovery selector works independently of React/application imports.
+- The recovery selector works independently of React/application imports, explains
+  that notebooks open in the app, and keeps **Return to Runme** visible. Returning
+  opens the app in the same tab with its session and hash preserved.
 - A checksum-valid but throwing app entry can be recovered through the selector
   after failed app tabs close, retaining current notebook content.
 

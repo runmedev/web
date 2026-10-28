@@ -29,11 +29,36 @@ import {
 } from './startupRecovery'
 
 const tabId = crypto.randomUUID()
+const recovery = location.pathname === '/recovery.html'
 const panel = document.createElement('section')
 panel.id = 'runme-release-panel'
 panel.setAttribute('aria-label', 'Runme versions')
 panel.style.cssText =
   'position:fixed;right:12px;bottom:12px;z-index:2147483647;background:white;color:#222;border:1px solid #aaa;border-radius:8px;padding:12px;max-width:480px;font:14px system-ui;max-height:80vh;overflow:auto'
+// Recovery deliberately never imports the app. Keep its explanation and exit
+// outside the dynamic controls so errors and collapsed details cannot hide them.
+const recoveryIntro = document.createElement('header')
+if (recovery) {
+  recoveryIntro.id = 'runme-recovery-intro'
+  const heading = document.createElement('h1')
+  heading.textContent = 'Runme recovery'
+  heading.style.cssText = 'font-size:20px;margin:0 0 8px'
+  const explanation = document.createElement('p')
+  explanation.textContent =
+    'This page manages app versions. Your notebooks open in Runme when you return.'
+  const returnLink = document.createElement('a')
+  const appUrl = new URL(location.href)
+  appUrl.pathname = '/'
+  // Recovery requests have already been applied; returning must not replay them.
+  appUrl.searchParams.delete('release')
+  appUrl.searchParams.delete('channel')
+  returnLink.href = appUrl.pathname + appUrl.search + appUrl.hash
+  returnLink.textContent = 'Return to Runme'
+  returnLink.style.cssText =
+    'display:inline-block;background:#1463d6;color:white;padding:10px 16px;border-radius:6px;font-weight:600;text-decoration:none'
+  recoveryIntro.append(heading, explanation, returnLink)
+  panel.append(recoveryIntro)
+}
 const status = document.createElement('p')
 status.setAttribute('role', 'status')
 panel.append(status)
@@ -61,8 +86,7 @@ let appReady = false
 let versionUiUsers = 0
 let transitioning = false
 let tabUpdateAvailable = false
-let details = location.pathname === '/recovery.html'
-const recovery = details
+let details = recovery
 let startupPrepared = false
 let recoveringStartup = false
 let deferredFonts = false
@@ -635,7 +659,12 @@ async function render(): Promise<void> {
     s.selection,
   ])
   for (const node of [...panel.children])
-    if (node !== status && node !== progressBar && node !== diagnostics.element)
+    if (
+      node !== status &&
+      node !== progressBar &&
+      node !== diagnostics.element &&
+      node !== recoveryIntro
+    )
       node.remove()
   report(
     s.active
@@ -850,7 +879,12 @@ function showStartupRecovery(error: unknown): void {
       stage: `release-settings-${error.stage}`,
     })
   for (const node of [...panel.children])
-    if (node !== status && node !== progressBar && node !== diagnostics.element)
+    if (
+      node !== status &&
+      node !== progressBar &&
+      node !== diagnostics.element &&
+      node !== recoveryIntro
+    )
       node.remove()
   report(
     `${String(error instanceof Error ? error.message : error)} Retry loading stable, or choose another release below. Browser storage must respond before Runme can safely open notebooks.`

@@ -628,20 +628,35 @@ async function main() {
     console.log('PASS: deploy B; refresh and new tabs retain A')
     await openVersions(one)
     await one.screenshot({ path: output + '/00-version-information.png' })
-    const pinFlow = one.getByRole('button', { name: 'Pin Release', exact: true })
-    const hasPinFlow = await pinFlow.count() > 0
+    const pinFlow = one.getByRole('button', {
+      name: 'Pin Release',
+      exact: true,
+    })
+    const hasPinFlow = (await pinFlow.count()) > 0
     if (hasPinFlow) {
       await pinFlow.click()
       await one.getByRole('tab', { name: 'Pin Release', exact: true }).waitFor()
       await one.screenshot({ path: output + '/00-pin-release-choices.png' })
       await one.getByRole('button', { name: /Choose another release/ }).click()
-      await one.getByRole('button', { name: 'Load published releases', exact: true }).click()
-      await one.getByRole('button', { name: new RegExp(`Commit ${expected.b.slice(0, 8)}`) }).click()
+      await one
+        .getByRole('button', { name: 'Load published releases', exact: true })
+        .click()
+      await one
+        .getByRole('button', {
+          name: new RegExp(`Commit ${expected.b.slice(0, 8)}`),
+        })
+        .click()
       await one.screenshot({ path: output + '/00-pin-release-review.png' })
-      assert.equal((await one.evaluate(() => (window as any).runmeVersions.get())).selection.kind, 'channel')
+      assert.equal(
+        (await one.evaluate(() => (window as any).runmeVersions.get()))
+          .selection.kind,
+        'channel'
+      )
       await one.getByRole('button', { name: 'Back', exact: true }).click()
       await one.getByRole('button', { name: 'Back', exact: true }).click()
-      await one.getByRole('button', { name: /Keep the installed release/ }).click()
+      await one
+        .getByRole('button', { name: /Keep the installed release/ })
+        .click()
     }
     await one
       .getByRole('button', { name: 'Pin installed release', exact: true })
@@ -653,7 +668,13 @@ async function main() {
         s.selection.releaseId === a &&
         !s.candidate
     )
-    if (hasPinFlow) await one.getByRole('button', { name: 'Back to version information', exact: true }).click()
+    if (hasPinFlow)
+      await one
+        .getByRole('button', {
+          name: 'Back to version information',
+          exact: true,
+        })
+        .click()
     await one
       .getByRole('button', { name: 'Check for updates', exact: true })
       .click()
@@ -984,14 +1005,39 @@ async function main() {
     console.log('PASS: compatible offline rollback keeps edits made on B')
     const recovery = await context.newPage()
     pages.push(recovery)
-    await recovery.goto(base + '/recovery.html')
+    await recovery.goto(
+      base + '/recovery.html?session=recovery-return#notebooks'
+    )
     await recovery
       .getByRole('button', { name: 'Check for updates', exact: true })
       .waitFor({ timeout: 30000 })
     assert.equal(await recovery.locator('#root').textContent(), '')
     await recovery.screenshot({ path: output + '/06-independent-recovery.png' })
+    // Return explicitly enters the notebook app, preserving this tab's session.
+    // Leave the independent selector open afterward for broken-release recovery.
+    const returnLink = recovery.getByRole('link', {
+      name: 'Return to Runme',
+      exact: true,
+    })
+    assert.equal(
+      await returnLink.getAttribute('href'),
+      '/?session=recovery-return#notebooks'
+    )
+    await returnLink.click()
+    await ready(recovery)
+    assert.equal(new URL(recovery.url()).pathname, '/')
+    assert.equal(
+      new URL(recovery.url()).searchParams.get('session'),
+      'recovery-return'
+    )
+    assert.equal(new URL(recovery.url()).hash, '#notebooks')
+    await recovery.screenshot({ path: output + '/06-return-to-runme.png' })
+    await recovery.goto(base + '/recovery.html')
+    await recovery
+      .getByRole('link', { name: 'Return to Runme', exact: true })
+      .waitFor()
     console.log(
-      'PASS: recovery selector works without importing the application'
+      'PASS: recovery stays independent and explicitly returns to the app with the same session'
     )
     if (process.env.RUNME_TEST_BROKEN) {
       await context.setOffline(false)
