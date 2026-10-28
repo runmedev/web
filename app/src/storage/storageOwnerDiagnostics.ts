@@ -1,3 +1,5 @@
+import type { releaseDatabaseDiagnostics } from '../releases/releaseDiagnostics'
+
 /** Diagnostics bypass store initialization and never include notebook contents or credentials. */
 export type StorageOwnerDiagnostics = {
   release?: { releaseId: string; epoch: number; capabilities: string[] }
@@ -5,10 +7,24 @@ export type StorageOwnerDiagnostics = {
   instanceId: string
   uptimeMs: number
   connectedTabs: number
+  connectedPorts?: number
   initialization: 'pending' | 'ready' | 'failed'
   pendingCredentials: number
   scanning: boolean
   recovery: 'idle' | 'preparing' | 'draining'
   activeRequestCount: number
-  oldestRequests: { method: string; elapsedMs: number; stage: string }[]
+  releaseDatabase?: ReturnType<typeof releaseDatabaseDiagnostics>
+  restart?: {
+    stage: string
+    elapsedMs: number
+    readyTabs: number
+    connectedTabs: number
+    inFlight: number
+  }
+  oldestRequests: {
+    method: string
+    elapsedMs: number
+    stage: string
+    stageElapsedMs?: number
+  }[]
 }

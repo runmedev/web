@@ -1,3 +1,7 @@
+import { useReleaseAttention } from '../releases/useReleaseAttention'
+import { StorageWorkerControls } from './StorageWorkerControls'
+import { showWorkspaceDocument } from '../lib/workspaceDocuments/workspaceDocumentController'
+import { PIN_RELEASE_DOCUMENT_URI } from '../lib/workspaceDocuments/workspaceDocumentTypes'
 import { Button } from '@radix-ui/themes'
 import { useCallback, useEffect, useState } from 'react'
 
@@ -6,7 +10,6 @@ import {
   type Control,
   type Manifest,
   type ReleaseProgress,
-  releaseIdValid,
 } from '../releases/control'
 import '../releases/runtime'
 import type { OfflineDownloadStatus } from '../releases/runtime'
@@ -17,16 +20,51 @@ import type { OfflineDownloadStatus } from '../releases/runtime'
  * the common commands and can use the independent recovery page for rollback.
  */
 export function ReleaseControls() {
+  const attention = useReleaseAttention()
+  return (
+    <>
+      <section
+        aria-label="Application versions"
+        className="space-y-4 rounded-lg border border-nb-border bg-white p-4"
+      >
+        <div
+          id="release-controls-heading"
+          className="flex items-center justify-between gap-4"
+        >
+          <h2 className="text-base font-semibold">Application versions</h2>
+          <Button
+            onClick={() => showWorkspaceDocument(PIN_RELEASE_DOCUMENT_URI)}
+          >
+            Pin Release
+          </Button>
+        </div>
+        {attention && (
+          <p
+            id="release-attention"
+            role="status"
+            className="rounded-md border border-blue-200 bg-blue-50 px-3 py-2 font-medium text-blue-900"
+          >
+            {attention.message}. Manage this tab’s version below.
+          </p>
+        )}
+        <InstalledReleaseControls />
+      </section>
+      <StorageWorkerControls />
+    </>
+  )
+}
+
+/** Installed-state controls may load independently of recovery controls. */
+function InstalledReleaseControls() {
   const api = window.runmeVersions
   const [state, setState] = useState<Control>()
   const [message, setMessage] = useState('')
   const [progress, setProgress] = useState<ReleaseProgress>()
   const [offline, setOffline] = useState<OfflineDownloadStatus>()
   const [error, setError] = useState('')
+  const [readError, setReadError] = useState('')
   const [busy, setBusy] = useState(false)
-  const [exact, setExact] = useState('')
   const [cached, setCached] = useState<Manifest[]>([])
-  const [published, setPublished] = useState<string[]>([])
 
   // Polling also observes other tabs and older loaders without change events.
   // Ignore late responses after unmount so a closed workspace tab stays closed.
@@ -41,6 +79,7 @@ export function ReleaseControls() {
         const next = await api.get()
         if (!disposed) {
           setState(next)
+          setReadError('')
           setProgress(api.progress?.())
           setOffline(
             next.active && api.offline?.(next.active.manifest.releaseId)
@@ -53,7 +92,7 @@ export function ReleaseControls() {
           )
         }
       } catch (e) {
-        if (!disposed) setError(String(e))
+        if (!disposed) setReadError(String(e))
       } finally {
         reading = false
       }
@@ -107,20 +146,19 @@ export function ReleaseControls() {
 
   if (!api) return <p>Release channels are available in published builds.</p>
   if (!state)
-    return <p role="status">{error || 'Loading release information…'}</p>
+    return (
+      <p role="status">
+        {readError || error || 'Loading release information…'}
+      </p>
+    )
   const active = state.active?.manifest
   const candidate = state.candidate
   const hasUpdate = candidate && candidate.releaseId !== active?.releaseId
   const selection =
     state.selection.kind === 'channel' ? state.selection.name : 'Pinned release'
-  const recoveryUrl = '/recovery.html' + location.search + location.hash
 
   return (
-    <section
-      aria-label="Application versions"
-      className="space-y-4 rounded-lg border border-nb-border bg-white p-4"
-    >
-      <h2 className="text-base font-semibold">Application versions</h2>
+    <div id="installed-release-controls" className="space-y-4">
       <dl className="grid grid-cols-[120px_1fr] gap-2">
         <dt>Current channel</dt>
         <dd>{selection}</dd>
@@ -145,9 +183,28 @@ export function ReleaseControls() {
           </>
         )}
       </dl>
+      {window.runmeRelease &&
+        active &&
+        window.runmeRelease.active.manifest.releaseId !== active.releaseId && (
+          <div id="release-tab-update" role="status">
+            <p>
+              This tab is running{' '}
+              {window.runmeRelease.active.manifest.webCommit.slice(0, 8)}. The
+              selected worker uses a different version; other tabs can update
+              independently.
+            </p>
+            <Button
+              disabled={busy || !api.reloadTab}
+              onClick={() => void run(() => api.reloadTab!())}
+            >
+              Preserve edits and reload this tab
+            </Button>
+          </div>
+        )}
       <p className="text-nb-text-muted">
         Choose a channel to download its release in the background. Your
-        installed version stays active until you choose Upgrade all tabs.
+        selected worker version stays active until you activate the release.
+        Other tabs keep their current UI until you reload them individually.
       </p>
       <div id="release-channel-actions" className="flex flex-wrap gap-2">
         <Button
@@ -172,34 +229,21 @@ export function ReleaseControls() {
         >
           Check for updates
         </Button>
-        {active && (
-          <Button
-            disabled={busy || !!state.transition}
-            onClick={() =>
-              void run(() =>
-                api.pin
-                  ? api.pin()
-                  : api.check({ kind: 'pinned', releaseId: active.releaseId })
-              )
-            }
-          >
-            Pin installed release
-          </Button>
-        )}
       </div>
       {hasUpdate && (
         <Button
           disabled={busy || !!state.transition}
           onClick={() => void run(() => api.upgrade())}
         >
-          Upgrade all tabs
+          Activate release and update this tab
         </Button>
       )}
       {state.transition && (
         <div id="release-transition-actions" className="space-y-2">
           <p>
-            Upgrade {state.transition.phase}. Each tab must preserve its edits
-            before the upgrade can finish.
+            {state.transition.phase === 'prepare'
+              ? 'An older upgrade is pending. Cancel it to start a new upgrade.'
+              : 'Starting the selected storage worker. Other tabs stay open.'}
           </p>
           {state.transition.phase === 'prepare' && (
             <Button
@@ -214,9 +258,9 @@ export function ReleaseControls() {
           </Button>
         </div>
       )}
-      {error && (
+      {(readError || error) && (
         <p role="alert" className="text-red-700">
-          {error}
+          {readError || error}
         </p>
       )}
       <p role="status" className="break-words text-nb-text-muted">
@@ -271,68 +315,6 @@ export function ReleaseControls() {
           id="release-other-actions"
           className="mt-3 flex flex-col items-start gap-3"
         >
-          <label className="w-full">
-            Exact release ID
-            <input
-              className="mt-1 w-full rounded border border-nb-border p-2 font-mono text-xs"
-              value={exact}
-              onChange={(e) => setExact(e.target.value)}
-              placeholder="<commit>-<build ID>"
-            />
-          </label>
-          <Button
-            disabled={
-              busy || !!state.transition || !releaseIdValid(exact.trim())
-            }
-            onClick={() =>
-              void run(() =>
-                api.check({ kind: 'pinned', releaseId: exact.trim() })
-              )
-            }
-          >
-            Download exact release
-          </Button>
-          <Button
-            disabled={busy}
-            onClick={() =>
-              void run(async () => {
-                const response = await fetch('/releases/catalog.json', {
-                  cache: 'no-store',
-                  credentials: 'omit',
-                  redirect: 'error',
-                })
-                if (!response.ok)
-                  throw new Error(
-                    'Published releases are unavailable. Cached releases remain available below.'
-                  )
-                const catalog = await response.json()
-                if (catalog.format !== 1 || !Array.isArray(catalog.releases))
-                  throw new Error('Unsupported release catalog')
-                setPublished(
-                  catalog.releases
-                    .slice(-100)
-                    .reverse()
-                    .map(
-                      (release: { releaseId?: unknown }) => release?.releaseId
-                    )
-                    .filter(releaseIdValid)
-                )
-              })
-            }
-          >
-            Browse published releases
-          </Button>
-          {published.map((id) => (
-            <Button
-              key={id}
-              disabled={busy || !!state.transition}
-              onClick={() =>
-                void run(() => api.check({ kind: 'pinned', releaseId: id }))
-              }
-            >
-              Download {id.slice(0, 8)} / {id.slice(41, 49)}
-            </Button>
-          ))}
           {api.activate &&
             cached
               .filter((m) => m.releaseId !== active?.releaseId)
@@ -351,16 +333,8 @@ export function ReleaseControls() {
           >
             Remove unused downloads
           </Button>
-          <a
-            className="text-blue-600 underline"
-            href={recoveryUrl}
-            target="_blank"
-            rel="noopener"
-          >
-            Open recovery in another tab
-          </a>
         </div>
       </details>
-    </section>
+    </div>
   )
 }

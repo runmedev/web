@@ -290,3 +290,65 @@ it('keeps exception text and arbitrary names out of visible diagnostics', () => 
   expect(arbitrary.message).not.toContain('secret')
   expect(arbitrary.diagnosticDetails).not.toHaveProperty('browserError')
 })
+
+it.each(['get', 'chunks', 'commit'] as const)(
+  'identifies the last callback reached when %s stalls',
+  async (phase) => {
+    vi.useFakeTimers()
+    const mock = database(
+      phase === 'chunks'
+        ? { encoding: 'runme-control-json-chunks-v1', count: 2 }
+        : undefined
+    )
+    const chunks: any[] = []
+    if (phase === 'chunks')
+      mock.table.get.mockImplementation((key?: string) => {
+        if (key === 'control') return mock.get
+        const request = { result: '{}' }
+        chunks.push(request)
+        return request
+      })
+    const pending = readControl()
+    const failed = expect(pending).rejects.toMatchObject({
+      diagnosticDetails: {
+        trace: {
+          mode: 'readonly',
+          phase:
+            phase === 'get'
+              ? 'get-requested'
+              : phase === 'chunks'
+                ? 'reading-chunks'
+                : 'waiting-for-commit',
+          ...(phase === 'chunks' ? { chunksRead: 1, chunksTotal: 2 } : {}),
+        },
+      },
+    })
+    await opened(mock)
+    if (phase !== 'get') mock.get.onsuccess()
+    if (phase === 'chunks') chunks[0].onsuccess()
+    await vi.advanceTimersByTimeAsync(5000)
+    await failed
+    expect(mock.tx.abort).toHaveBeenCalledOnce()
+  }
+)
+
+it('offers memory-only pending diagnostics and keeps stored values out of traces', async () => {
+  const { releaseDatabaseDiagnostics } = await import('./releaseDiagnostics')
+  const mock = database({ format: 1, private: 'secret notebook contents' })
+  const pending = readControl()
+  await opened(mock)
+  const before = mock.factory.open.mock.calls.length
+  expect(releaseDatabaseDiagnostics().active).toEqual(
+    expect.arrayContaining([
+      expect.objectContaining({ phase: 'get-requested' }),
+    ])
+  )
+  expect(mock.factory.open).toHaveBeenCalledTimes(before)
+  mock.get.onsuccess()
+  mock.tx.oncomplete()
+  await pending
+  expect(releaseDatabaseDiagnostics().activeCount).toBe(0)
+  expect(JSON.stringify(releaseDatabaseDiagnostics())).not.toContain(
+    'secret notebook contents'
+  )
+})

@@ -159,6 +159,8 @@ import RunnerStatusTab from '../RunnerStatusTab'
 import KernelStatusTab from '../KernelStatusTab'
 import { NotebookDiffContent } from '../NotebookDiff/NotebookDiffView'
 import VersionInfoTab from '../VersionInfoTab'
+import { ReleaseRecoveryControls } from '../ReleaseRecoveryControls'
+import { PIN_RELEASE_DOCUMENT_URI } from '../../lib/workspaceDocuments/workspaceDocumentTypes'
 import { NotebookCommentsPanel } from '../NotebookCommentsPanel'
 import AppConsole from '../AppConsole/AppConsole'
 import LogsPane from '../Logs/LogsPane'
@@ -4532,6 +4534,8 @@ function renderWorkspaceDocument({
   }
 
   if (isOidcStatusUri(document.uri)) return <OidcStatusTab />
+
+  if (document.uri === PIN_RELEASE_DOCUMENT_URI) return <ReleaseRecoveryControls />
 
   if (isVersionInfoUri(document.uri)) {
     return <VersionInfoTab />

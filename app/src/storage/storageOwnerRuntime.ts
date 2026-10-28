@@ -51,7 +51,6 @@ export async function startStorageOwner(identity?: {
           if (
             request.epoch !== identity.epoch ||
             !tab ||
-            tab.epoch !== identity.epoch ||
             state.active?.epoch !== identity.epoch ||
             state.active.manifest.releaseId !== identity.releaseId ||
             state.transition?.phase === 'handoff' ||
@@ -97,6 +96,7 @@ export async function startStorageOwner(identity?: {
   }
   return {
     attach: (port: MessagePort) => host.attach(port),
+    diagnostics: () => host.diagnostics(),
     drain: () => {
       clearInterval(timer)
       return host.drainForRelease()

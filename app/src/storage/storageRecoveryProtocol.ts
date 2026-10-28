@@ -3,7 +3,14 @@ export const STORAGE_RECOVERY_PROTOCOL = 1
 export type RecoveryMessage = {
   type: 'storage-recovery'
   protocol: 1
-  action: 'restart' | 'prepare' | 'ready' | 'blocked' | 'draining' | 'reload'
+  action:
+    | 'register'
+    | 'restart'
+    | 'prepare'
+    | 'ready'
+    | 'blocked'
+    | 'draining'
+    | 'reload'
   id: string
   error?: string
 }

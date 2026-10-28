@@ -52,6 +52,41 @@ function setup() {
 }
 
 describe('SharedWorker message boundary', () => {
+  it('negotiates across RPC versions without authorization or storage effects', async () => {
+    const { store } = setup()
+    const authorize = vi.fn(async () => {
+      throw new Error('must not authorize negotiation')
+    })
+    const host = new StorageOwnerHost(
+      store as unknown as LocalNotebooks,
+      undefined,
+      authorize
+    )
+    const channel = new MessageChannel()
+    ports.push(
+      channel.port1 as unknown as MessagePort,
+      channel.port2 as unknown as MessagePort
+    )
+    host.attach(channel.port1 as unknown as MessagePort)
+    const reply = new Promise<any>((resolve) =>
+      channel.port2.once('message', resolve)
+    )
+    channel.port2.postMessage({
+      type: 'request',
+      id: 'negotiate',
+      method: 'handshake',
+      version: -1,
+      args: [],
+    })
+    expect((await reply).value).toMatchObject({
+      protocol: 1,
+      recoveryFormat: 1,
+      editorCommitVersion: 1,
+    })
+    expect(authorize).not.toHaveBeenCalled()
+    expect(store.setDriveSyncAvailable).not.toHaveBeenCalled()
+    expect(store.save).not.toHaveBeenCalled()
+  })
   it('restores the profile boundary before unauthenticated tabs can queue writes', async () => {
     const { host, store } = setup()
     const human = connect(host)
@@ -382,7 +417,12 @@ it('answers diagnostics outside initialization and reports waiting requests with
   const diagnostics = await client.diagnose()
   expect(diagnostics.initialization).toBe('pending')
   expect(diagnostics.oldestRequests).toEqual([
-    { method: 'save', elapsedMs: expect.any(Number), stage: 'initializing' },
+    {
+      method: 'save',
+      elapsedMs: expect.any(Number),
+      stage: 'initializing',
+      stageElapsedMs: expect.any(Number),
+    },
   ])
   expect(JSON.stringify(diagnostics)).not.toContain('private-uri')
   expect(JSON.stringify(diagnostics)).not.toContain('notebook body')
@@ -526,6 +566,7 @@ it('blocks upgrade and mutation replay after a timeout until the original acknow
   ).rejects.toThrow('uncertain')
   await vi.advanceTimersByTimeAsync(300_000)
   await outcome
+  expect(client.needsReconnect).toBe(false)
   const { assertNoUpgradeBlockers } = await import('../releases/runtime')
   expect(assertNoUpgradeBlockers).toThrow('unconfirmed')
   await expect(client.request('save', ['retry', {}])).rejects.toThrow(
@@ -544,6 +585,26 @@ it('blocks upgrade and mutation replay after a timeout until the original acknow
   expect(sent.filter((m) => m.method === 'save')).toHaveLength(1)
 })
 
+it('allows reconnect after an editor-save timeout without requiring a stop notification', async () => {
+  vi.useFakeTimers()
+  const channel = new MessageChannel()
+  ports.push(channel.port1 as unknown as MessagePort)
+  const client = new StorageOwnerClient(
+    channel.port2 as unknown as MessagePort,
+    async () => 'token'
+  )
+  clients.push(client)
+  const outcome = expect(
+    client.request('commitEditorOperations', ['uri', 'notebook', []])
+  ).rejects.toThrow('Pending operations remain')
+  await vi.advanceTimersByTimeAsync(300_000)
+  await outcome
+  expect(client.needsReconnect).toBe(true)
+  client.close()
+  const { assertNoUpgradeBlockers } = await import('../releases/runtime')
+  expect(assertNoUpgradeBlockers).not.toThrow()
+})
+
 it('does not treat disconnect as acknowledgement of an outstanding write', async () => {
   const channel = new MessageChannel()
   ports.push(channel.port1 as unknown as MessagePort)
@@ -560,3 +621,39 @@ it('does not treat disconnect as acknowledgement of an outstanding write', async
   const { assertNoUpgradeBlockers } = await import('../releases/runtime')
   expect(assertNoUpgradeBlockers).toThrow('unconfirmed')
 })
+
+it.each([1, 2])(
+  'distinguishes authorization pass %s from store initialization',
+  async (pass) => {
+    const { store } = setup()
+    let resume!: () => void
+    let calls = 0
+    const authorize = async () => {
+      if (++calls === pass)
+        await new Promise<void>((resolve) => {
+          resume = resolve
+        })
+    }
+    const client = connect(
+      new StorageOwnerHost(
+        store as unknown as LocalNotebooks,
+        undefined,
+        authorize
+      )
+    )
+    const saving = client.request('save', [
+      'private-uri',
+      { secret: 'notebook contents' },
+    ])
+    await vi.waitFor(() => expect(calls).toBe(pass))
+    const snapshot = await client.diagnose()
+    expect(snapshot.oldestRequests[0].stage).toBe(
+      pass === 1 ? 'authorizing' : 'reauthorizing'
+    )
+    expect(store.save).not.toHaveBeenCalled()
+    expect(JSON.stringify(snapshot)).not.toContain('notebook contents')
+    resume()
+    await saving
+    expect(store.save).toHaveBeenCalledOnce()
+  }
+)

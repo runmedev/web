@@ -18,17 +18,48 @@ import {
 import { loaderController } from './loaderController'
 import { recoverUnreadableControl } from './recoverControl'
 import { withRecoveryOwner } from './recoveryOwnerLock'
+import { type ReleaseAttention, releaseAttention } from './releaseAttention'
+import { resolvePublishedRelease } from './releaseCatalog'
 import { ReleaseControlError } from './releaseDatabase'
+import { releaseDatabaseDiagnostics } from './releaseDiagnostics'
 import type { OfflineDownloadStatus, ReleaseRuntime } from './runtime'
 import { startupDiagnostics } from './startupDiagnostics'
-import { prepareStartupRecovery } from './startupRecovery'
+import {
+  downloadRecoveryRelease,
+  prepareStartupRecovery,
+} from './startupRecovery'
 
 const tabId = crypto.randomUUID()
+const recovery = location.pathname === '/recovery.html'
 const panel = document.createElement('section')
 panel.id = 'runme-release-panel'
 panel.setAttribute('aria-label', 'Runme versions')
 panel.style.cssText =
   'position:fixed;right:12px;bottom:12px;z-index:2147483647;background:white;color:#222;border:1px solid #aaa;border-radius:8px;padding:12px;max-width:480px;font:14px system-ui;max-height:80vh;overflow:auto'
+// Recovery deliberately never imports the app. Keep its explanation and exit
+// outside the dynamic controls so errors and collapsed details cannot hide them.
+const recoveryIntro = document.createElement('header')
+if (recovery) {
+  recoveryIntro.id = 'runme-recovery-intro'
+  const heading = document.createElement('h1')
+  heading.textContent = 'Runme recovery'
+  heading.style.cssText = 'font-size:20px;margin:0 0 8px'
+  const explanation = document.createElement('p')
+  explanation.textContent =
+    'This page manages app versions. Your notebooks open in Runme when you return.'
+  const returnLink = document.createElement('a')
+  const appUrl = new URL(location.href)
+  appUrl.pathname = '/'
+  // Recovery requests have already been applied; returning must not replay them.
+  appUrl.searchParams.delete('release')
+  appUrl.searchParams.delete('channel')
+  returnLink.href = appUrl.pathname + appUrl.search + appUrl.hash
+  returnLink.textContent = 'Return to Runme'
+  returnLink.style.cssText =
+    'display:inline-block;background:#1463d6;color:white;padding:10px 16px;border-radius:6px;font-weight:600;text-decoration:none'
+  recoveryIntro.append(heading, explanation, returnLink)
+  panel.append(recoveryIntro)
+}
 const status = document.createElement('p')
 status.setAttribute('role', 'status')
 panel.append(status)
@@ -43,20 +74,22 @@ panel.append(diagnostics.element)
 let progress: ReleaseProgress | undefined
 document.body.append(panel)
 let runtime: ReleaseRuntime | undefined
-let preparation: string | undefined
-let prepared = false
+let reloadAfterActivation: string | undefined
+let reloadingTab = false
+let legacyPrepared = false
 let uiKey = ''
 let renderGeneration = 0
-let preparing = false
 let ticking = false
 let owner: SharedWorker | undefined
 let ownerKey = ''
 let dismissedCandidate: string | undefined
 let appReady = false
 let versionUiUsers = 0
+let attentionUiUsers = 0
+let attention: ReleaseAttention | undefined
 let transitioning = false
-let details = location.pathname === '/recovery.html'
-const recovery = details
+let tabUpdateAvailable = false
+let details = recovery
 let startupPrepared = false
 let recoveringStartup = false
 let deferredFonts = false
@@ -101,6 +134,11 @@ function completeOffline(manifest: Manifest): Promise<void> {
 
 /** Display diagnostics as text, never executable release metadata or user content. */
 function report(value: unknown, nextProgress?: ReleaseProgress): void {
+  if (value instanceof Error)
+    attention = {
+      kind: 'error',
+      message: 'Version information needs attention',
+    }
   status.textContent = String(value instanceof Error ? value.message : value)
   progress = nextProgress
   progressBar.hidden = !progress
@@ -139,7 +177,11 @@ function freeze(): void {
  * host an older app. Hide fallback controls only after an explicit UI handoff.
  */
 function updatePanelVisibility(): void {
-  panel.hidden = appReady && versionUiUsers > 0 && !recovery && !transitioning
+  panel.hidden =
+    appReady &&
+    versionUiUsers > 0 &&
+    !recovery &&
+    (attentionUiUsers > 0 || (!transitioning && !tabUpdateAvailable))
 }
 
 /** A held tab lock is proof of liveness, including suspended tabs. No heartbeat
@@ -281,9 +323,18 @@ async function downloadSelection(selection?: Selection): Promise<void> {
 }
 
 async function begin(target: Manifest): Promise<void> {
-  await navigator.locks.request('runme-release-cache', { mode: 'shared' }, () =>
-    beginLocked(target)
-  )
+  try {
+    await navigator.locks.request(
+      'runme-release-cache',
+      { mode: 'shared' },
+      () => beginLocked(target)
+    )
+  } catch (error) {
+    // Historical apps can only flush to their original worker. A completed
+    // local flush permits restoring that tab even if activation then failed.
+    if (legacyPrepared) location.reload()
+    throw error
+  }
 }
 async function beginLocked(target: Manifest): Promise<void> {
   report('Verifying the downloaded release…')
@@ -297,6 +348,19 @@ async function beginLocked(target: Manifest): Promise<void> {
     throw new Error(
       'This release predates release-settings recovery. Choose a newer release.'
     )
+  if (
+    runtime &&
+    (!runtime.prepareReload || target.tabRecoveryFormat !== 1) &&
+    !legacyPrepared
+  ) {
+    if (!runtime.prepare)
+      throw new Error(
+        'Wait for this tab to finish loading before activating a release'
+      )
+    await runtime.prepare()
+    legacyPrepared = true
+    freeze()
+  }
   const pending = current.transition
   if (pending?.phase === 'handoff') {
     // Recovery can replace a failed candidate only while no storage owner exists.
@@ -325,6 +389,7 @@ async function beginLocked(target: Manifest): Promise<void> {
         delete s.ownerError
       })
     })
+    if (runtime) reloadAfterActivation = target.releaseId
     ownerKey = ''
     await render()
     return
@@ -347,58 +412,61 @@ async function beginLocked(target: Manifest): Promise<void> {
       from: s.active,
       target,
       epoch: Math.max(s.active?.epoch ?? 0, s.epochBase ?? 0) + 1,
-      phase: 'prepare',
-      participants: Object.fromEntries(
-        Object.entries(s.tabs).map(([id, tab]) => [id, { epoch: tab.epoch }])
-      ),
+      phase: 'handoff',
+      participants: {},
     }
   })
+  if (runtime) reloadAfterActivation = target.releaseId
   await render()
 }
 
-/** Each loop advances one durable phase under a short coordinator lock. Losing
- * this tab loses no decision: another launcher resumes the same transition.
+/** Activation changes the selected worker without consulting tab readiness.
+ * Any launcher can start the selected candidate if the initiating tab disappears.
+ * Tab records only keep live app assets from being pruned.
  */
 async function coordinate(): Promise<void> {
-  await navigator.locks.request(
-    'runme-release-transition',
-    { ifAvailable: true },
-    async (lock) => {
-      if (!lock) return
-      const state = await readControl()
-      const gone: string[] = []
-      for (const id of Object.keys(state.tabs))
-        if (await closed(id)) gone.push(id)
-      const transition = state.transition
-      const allReady =
-        transition?.phase === 'prepare' &&
-        Object.entries(transition.participants).every(
-          ([id, p]) => gone.includes(id) || (p.ready !== undefined && !p.error)
-        )
-      if (allReady)
-        await verifyCache(transition.target, undefined, startupScope())
-      await control((s) => {
-        for (const id of gone) {
-          delete s.tabs[id]
-          if (s.transition) delete s.transition.participants[id]
-        }
-        if (
-          transition &&
-          allReady &&
-          s.transition?.id === transition.id &&
-          s.transition.phase === 'prepare' &&
-          Object.values(s.transition.participants).every(
-            (p) => p.ready !== undefined && !p.error
-          )
-        )
-          s.transition.phase = 'handoff'
-      })
-    }
-  )
   const state = await readControl()
-  const pending = state.transition
-  if (pending?.phase === 'handoff')
-    startOwner({ manifest: pending.target, epoch: pending.epoch })
+  const gone: string[] = []
+  for (const id of Object.keys(state.tabs)) if (await closed(id)) gone.push(id)
+  if (gone.length)
+    await control((s) => {
+      for (const id of gone) delete s.tabs[id]
+    })
+  if (state.transition?.phase === 'handoff')
+    startOwner({
+      manifest: state.transition.target,
+      epoch: state.transition.epoch,
+    })
+}
+
+/** Only a user action or this tab's own activation can authorize its reload.
+ * Checkpoint failure leaves the mounted editor alive; no peer participates.
+ */
+async function reloadThisTab(): Promise<void> {
+  if (reloadingTab) return
+  reloadingTab = true
+  freeze()
+  try {
+    if (runtime && !legacyPrepared) {
+      const selected = (await readControl()).active
+      if (runtime.prepareReload && selected?.manifest.tabRecoveryFormat !== 1)
+        throw new Error(
+          'The selected release cannot restore this tab’s pending-save checkpoints. Keep this tab open and export edits, or select a release with tab recovery support.'
+        )
+      if (runtime.prepareReload) await runtime.prepareReload()
+      else if (runtime.prepare) await runtime.prepare()
+      else
+        throw new Error(
+          'This tab is not ready to preserve its editors; wait before reloading'
+        )
+    }
+    location.reload()
+  } catch (error) {
+    reloadingTab = false
+    const root = document.getElementById('root')
+    if (root) root.inert = false
+    throw error
+  }
 }
 
 /** Starting a worker only contends for the lifetime lock. Its verified startup
@@ -472,59 +540,15 @@ async function tick(): Promise<void> {
       uiKey = nextUiKey
       await render()
     }
-    if (prepared && !transition) {
-      location.reload()
-      return
-    }
-    if (runtime && state.active?.epoch !== runtime.active.epoch) {
-      freeze()
-      location.reload()
-      return
-    }
+    // A different tab's activation never freezes or reloads this page.
     if (
+      !transition &&
       runtime &&
-      transition?.phase === 'prepare' &&
-      transition?.participants[tabId] &&
-      preparation !== transition.id &&
-      !preparing
+      state.active?.manifest.releaseId === reloadAfterActivation
     ) {
-      freeze()
-      if (!runtime.prepare) {
-        report('Waiting for application startup before preserving edits…')
-        return
-      }
-      preparing = true
-      try {
-        const refs = await runtime.prepare()
-        prepared = true
-        await control((s) => {
-          if (
-            s.transition?.id !== transition.id ||
-            s.transition.phase !== 'prepare'
-          )
-            throw new Error('Upgrade preparation changed')
-          s.transition.participants[tabId].ready = refs
-          delete s.transition.participants[tabId].error
-        })
-        preparation = transition.id
-      } catch (error) {
-        await control((s) => {
-          if (s.transition?.id === transition.id)
-            s.transition.participants[tabId].error = String(error)
-        })
-        preparation =
-          error instanceof Error && error.name === 'UpgradeBusyError'
-            ? undefined
-            : transition.id
-        if (prepared) {
-          location.reload()
-          return
-        }
-        const root = document.getElementById('root')
-        if (root) root.inert = false
-      } finally {
-        preparing = false
-      }
+      reloadAfterActivation = undefined
+      await reloadThisTab()
+      return
     }
     await coordinate()
     const latest = await readControl()
@@ -536,11 +560,10 @@ async function tick(): Promise<void> {
     ) {
       report(latest.ownerError.message)
     } else if (latest.transition) {
-      const blocked = Object.entries(latest.transition.participants).filter(
-        ([, p]) => !p.ready || p.error
-      )
       report(
-        `Upgrade ${latest.transition.phase}: ${blocked.length ? blocked.map(([id, p]) => `${latest.tabs[id]?.label ?? id.slice(0, 8)}: ${p.error ?? 'waiting for tab'}`).join('; ') : 'waiting for exclusive storage ownership'}`
+        latest.transition.phase === 'prepare'
+          ? 'An older upgrade is pending. Cancel it before starting an independent worker upgrade.'
+          : 'Starting the selected storage worker; other tabs keep their editors open.'
       )
     }
   } catch (error) {
@@ -626,7 +649,13 @@ async function render(): Promise<void> {
   const generation = ++renderGeneration
   const s = await readControl()
   if (generation !== renderGeneration) return
+  attention = releaseAttention(s, runtime?.active.manifest.releaseId)
   transitioning = Boolean(s.transition)
+  tabUpdateAvailable = Boolean(
+    runtime &&
+      s.active &&
+      runtime.active.manifest.releaseId !== s.active.manifest.releaseId
+  )
   // Normal management belongs to Information. Startup/recovery and frozen-app
   // transitions retain independent controls, including cancel/resume.
   updatePanelVisibility()
@@ -638,13 +667,24 @@ async function render(): Promise<void> {
     s.selection,
   ])
   for (const node of [...panel.children])
-    if (node !== status && node !== progressBar && node !== diagnostics.element)
+    if (
+      node !== status &&
+      node !== progressBar &&
+      node !== diagnostics.element &&
+      node !== recoveryIntro
+    )
       node.remove()
   report(
     s.active
       ? `Runme ${s.active.manifest.webCommit.slice(0, 8)} · ${s.selection.kind === 'channel' ? s.selection.name : 'pinned'}`
       : 'Installing Runme…'
   )
+  if (tabUpdateAvailable) {
+    report(
+      'The selected application version has changed. Reload this tab when ready; other tabs stay open.'
+    )
+    button('Preserve edits and reload this tab', reloadThisTab)
+  }
   button(details ? 'Hide versions' : 'Versions', () => {
     details = !details
     return render()
@@ -654,7 +694,7 @@ async function render(): Promise<void> {
     s.candidate.releaseId !== s.active?.manifest.releaseId &&
     (details || dismissedCandidate !== s.candidate.releaseId)
   ) {
-    button('Upgrade all tabs', () => begin(s.candidate!))
+    button('Activate release and update this tab', () => begin(s.candidate!))
     button('Later', async () => {
       dismissedCandidate = s.candidate!.releaseId
       details = false
@@ -708,16 +748,18 @@ async function render(): Promise<void> {
     if (s.transition?.phase === 'prepare')
       button('Cancel upgrade', () => cancel(s.transition!.id))
     const label = document.createElement('label')
-    label.textContent = 'Exact release ID '
+    label.textContent = 'Commit SHA or release ID '
     const input = document.createElement('input')
     input.placeholder = '<commit>-<build ID>'
     label.append(input)
     panel.append(label)
-    button('Download exact release', () =>
-      check({ kind: 'pinned', releaseId: input.value.trim() })
+    button('Download exact release', async () =>
+      check({
+        kind: 'pinned',
+        releaseId: await resolvePublishedRelease(input.value),
+      })
     )
-    button('Retry preparation / resume', async () => {
-      preparation = undefined
+    button('Retry worker activation', async () => {
       ownerKey = ''
       await tick()
     })
@@ -775,8 +817,10 @@ async function main(): Promise<void> {
   report('Starting the installed release…')
   diagnostics.record('launcher', 'info', {
     path: new URL(import.meta.url).pathname,
-    source: document.documentElement.dataset.runmeLauncherSource ?? 'legacy-shell',
-    bootstrapLauncher: document.documentElement.dataset.runmeLauncher ?? 'unknown',
+    source:
+      document.documentElement.dataset.runmeLauncherSource ?? 'legacy-shell',
+    bootstrapLauncher:
+      document.documentElement.dataset.runmeLauncher ?? 'unknown',
   })
   await installLoader()
   report('Registering this tab…')
@@ -823,13 +867,7 @@ async function startRelease(applyRequest = true): Promise<void> {
     60 * 60 * 1000
   )
   window.addEventListener('pageshow', () => {
-    freeze()
-    void tick().then(() => {
-      if (!preparation) {
-        const root = document.getElementById('root')
-        if (root) root.inert = false
-      }
-    })
+    void tick()
   })
   if (s.active)
     void check().catch((error) =>
@@ -845,10 +883,16 @@ function showStartupRecovery(error: unknown): void {
   if (error instanceof ReleaseControlError)
     diagnostics.record(`release-settings-${error.stage}`, 'failed', {
       ...error.diagnosticDetails,
+      trace: JSON.stringify(error.trace ?? null),
       stage: `release-settings-${error.stage}`,
     })
   for (const node of [...panel.children])
-    if (node !== status && node !== progressBar && node !== diagnostics.element)
+    if (
+      node !== status &&
+      node !== progressBar &&
+      node !== diagnostics.element &&
+      node !== recoveryIntro
+    )
       node.remove()
   report(
     `${String(error instanceof Error ? error.message : error)} Retry loading stable, or choose another release below. Browser storage must respond before Runme can safely open notebooks.`
@@ -858,22 +902,24 @@ function showStartupRecovery(error: unknown): void {
     recoverStartup({ kind: 'channel', name: 'latest' })
   )
   const label = document.createElement('label')
-  label.textContent = 'Exact release ID '
+  label.textContent = 'Commit SHA or release ID '
   const input = document.createElement('input')
   input.placeholder = '<commit>-<build ID>'
   label.append(input)
   panel.append(label)
-  button('Try exact release', () =>
-    recoverStartup(
-      validateSelection({ kind: 'pinned', releaseId: input.value.trim() })
-    )
+  input.value = new URLSearchParams(location.search).get('release') ?? ''
+  button('Try exact release', async () =>
+    recoverStartup({
+      kind: 'pinned',
+      releaseId: await resolvePublishedRelease(input.value),
+    })
   )
   // An expanded trace must never push the recovery actions below the fold.
   panel.append(diagnostics.element)
 }
 
 /** Prefer latest stable after a settings failure. Downloads do not need the
- * settings DB; activation still uses the usual prepare/handoff and owner lock.
+ * settings DB; activation still uses worker handoff and the exclusive owner lock.
  * Existing transitions are resumed, never discarded to force a new version.
  */
 async function recoverStartup(
@@ -922,15 +968,35 @@ async function recoverStartup(
 }
 
 window.runmeVersions = {
+  reloadTab: reloadThisTab,
+  diagnostics: releaseDatabaseDiagnostics,
+  prepareRecovery: (selection) =>
+    downloadRecoveryRelease(
+      validateSelection(selection),
+      (value) => reportProgress('Preparing recovery release', value),
+      startupScope()
+    ),
+  recover: async (selection) => {
+    const candidate = await prepareStartupRecovery(
+      validateSelection(selection),
+      (value) => reportProgress('Preparing recovery release', value),
+      startupScope()
+    )
+    await begin(candidate)
+    await tick()
+  },
   uiVersion: 1,
-  registerVersionUi: () => {
+  attention: () => attention,
+  registerVersionUi: (options) => {
     versionUiUsers++
+    if (options?.attention) attentionUiUsers++
     updatePanelVisibility()
     let released = false
     return () => {
       if (released) return
       released = true
       versionUiUsers--
+      if (options?.attention) attentionUiUsers--
       updatePanelVisibility()
     }
   },
@@ -969,7 +1035,6 @@ window.runmeVersions = {
   cancel,
   prune: pruneUnusedCaches,
   retry: async () => {
-    preparation = undefined
     ownerKey = ''
     await tick()
   },
@@ -1007,6 +1072,7 @@ void diagnostics.step('bootstrap', main).catch((error) => {
   if (startupPrepared && error instanceof ReleaseControlError) {
     diagnostics.record(`release-settings-${error.stage}`, 'failed', {
       ...error.diagnosticDetails,
+      trace: JSON.stringify(error.trace ?? null),
       stage: `release-settings-${error.stage}`,
     })
     void recoverStartup()

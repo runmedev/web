@@ -1,11 +1,13 @@
 // @vitest-environment jsdom
 import { act, fireEvent, render, screen, waitFor } from '@testing-library/react'
-import { beforeEach, describe, expect, it, vi } from 'vitest'
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import type { ServiceAccountCredentialStatus } from '../../auth/googleServiceAccountImpersonation'
 
 const { showToastMock } = vi.hoisted(() => ({
   showToastMock: vi.fn(),
 }))
+
+afterEach(() => { delete window.runmeVersions })
 
 type PanelKey =
   | 'explorer'
@@ -527,6 +529,27 @@ describe('SidePanelToolbar drive status button', () => {
       title: 'Version Information',
     })
     expect(setCurrentDocMock).toHaveBeenCalledWith('app://version')
+  })
+
+  it('marks version attention on the information icon and clears it without reading storage', async () => {
+    let attention: import('../../releases/releaseAttention').ReleaseAttention | undefined = {
+      kind: 'update', message: 'An update is ready to activate',
+    }
+    const get = vi.fn()
+    window.runmeVersions = { get, attention: () => attention } as unknown as NonNullable<typeof window.runmeVersions>
+    render(<SidePanelToolbar />)
+    const button = screen.getByRole('button', { name: 'Open Version Information' })
+    await waitFor(() => expect(button.getAttribute('aria-description')).toBe('An update is ready to activate'))
+    expect(screen.getByTestId('version-attention-badge').getAttribute('data-kind')).toBe('update')
+    fireEvent.click(button)
+    expect(showDocumentMock).toHaveBeenCalledWith('app://version', { title: 'Version Information' })
+    attention = {kind: 'reload', message: 'This tab is out of date'}
+    fireEvent(window, new Event('runme-release-change'))
+    await waitFor(() => expect(button.getAttribute('aria-description')).toBe('This tab is out of date'))
+    attention = undefined
+    fireEvent(window, new Event('runme-release-change'))
+    await waitFor(() => expect(screen.queryByTestId('version-attention-badge')).toBeNull())
+    expect(get).not.toHaveBeenCalled()
   })
 
   it('opens the runner status document from the toolbar', () => {

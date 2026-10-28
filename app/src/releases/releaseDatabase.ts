@@ -1,5 +1,9 @@
 import { appLogger } from '../lib/logging/runtime'
 import { readControlValue, writeControlValue } from './controlChunks'
+import {
+  type ReleaseDatabaseTrace,
+  createReleaseTrace,
+} from './releaseDiagnostics'
 
 const DEADLINE_MS = 5000
 
@@ -38,7 +42,8 @@ export class ReleaseControlError extends Error {
     readonly stage: 'open' | 'read' | 'commit',
     readonly reason: 'blocked' | 'timeout' | 'failed',
     readonly operation: Operation = stage === 'read' ? 'get' : stage,
-    readonly cause?: unknown
+    readonly cause?: unknown,
+    readonly trace?: ReleaseDatabaseTrace
   ) {
     super(
       `Release settings ${stage} ${reason} (${operation}${browserErrorName(cause) ? ': ' + browserErrorName(cause) : ''}). Stored notebook data has not been removed.`
@@ -55,6 +60,7 @@ export class ReleaseControlError extends Error {
       stage: this.stage,
       reason: this.reason,
       operation: this.operation,
+      ...(this.trace ? { trace: this.trace } : {}),
       ...(browserErrorName(this.cause)
         ? { browserError: browserErrorName(this.cause) }
         : {}),
@@ -65,7 +71,10 @@ export class ReleaseControlError extends Error {
 /** An open request cannot be cancelled. Close late connections, and abort late
  * upgrades so timed-out attempts never create a store or retain a connection.
  */
-function openDatabase(name: string): Promise<IDBDatabase> {
+function openDatabase(
+  name: string,
+  trace?: ReturnType<typeof createReleaseTrace>
+): Promise<IDBDatabase> {
   return new Promise((resolve, reject) => {
     let settled = false
     let request: IDBOpenDBRequest
@@ -82,7 +91,15 @@ function openDatabase(name: string): Promise<IDBDatabase> {
       } catch {
         /* A completed upgrade has no live transaction. */
       }
-      reject(new ReleaseControlError('open', reason, operation, cause))
+      reject(
+        new ReleaseControlError(
+          'open',
+          reason,
+          operation,
+          cause,
+          trace?.snapshot()
+        )
+      )
     }
     const timer = setTimeout(() => fail('timeout'), DEADLINE_MS)
     try {
@@ -90,6 +107,7 @@ function openDatabase(name: string): Promise<IDBDatabase> {
       request.onblocked = () => fail('blocked')
       request.onerror = () => fail('failed', request.error)
       request.onupgradeneeded = () => {
+        trace?.mark('schema-upgrade')
         if (settled) {
           request.transaction?.abort()
           return
@@ -109,6 +127,8 @@ function openDatabase(name: string): Promise<IDBDatabase> {
         settled = true
         clearTimeout(timer)
         db.onversionchange = () => db.close()
+        trace?.details({ databaseVersion: db.version })
+        trace?.mark('open-succeeded')
         resolve(db)
       }
     } catch (error) {
@@ -126,14 +146,30 @@ export async function releaseTransaction<T>(
   write: boolean,
   mutate: (value: unknown) => { state: unknown; result: T }
 ): Promise<T> {
-  const db = await openDatabase(name)
+  const trace = createReleaseTrace(write)
+  let db: IDBDatabase | undefined
+  let complete = false
   try {
+    db = await openDatabase(name, trace)
     return await new Promise<T>((resolve, reject) => {
       let settled = false
       let tx: IDBTransaction | undefined
       let stage: 'read' | 'commit' = 'read'
       let operation: Operation = 'transaction'
       let result: T
+      const storageError = (
+        stage: 'read' | 'commit',
+        reason: 'timeout' | 'failed',
+        operation: Operation,
+        cause?: unknown
+      ) =>
+        new ReleaseControlError(
+          stage,
+          reason,
+          operation,
+          cause,
+          trace.snapshot()
+        )
       const fail = (error: unknown) => {
         if (settled) return
         settled = true
@@ -146,62 +182,75 @@ export async function releaseTransaction<T>(
         reject(error)
       }
       const timer = setTimeout(
-        () => fail(new ReleaseControlError(stage, 'timeout', operation)),
+        () => fail(storageError(stage, 'timeout', operation)),
         DEADLINE_MS
       )
       try {
-        tx = db.transaction('state', write ? 'readwrite' : 'readonly')
+        trace.mark('transaction-requested')
+        tx = db!.transaction('state', write ? 'readwrite' : 'readonly')
         tx.onabort = tx.onerror = () => {
           if (!settled)
-            fail(new ReleaseControlError(stage, 'failed', operation, tx?.error))
+            fail(storageError(stage, 'failed', operation, tx?.error))
         }
         tx.oncomplete = () => {
           if (settled) return
           settled = true
           clearTimeout(timer)
+          complete = true
+          trace.mark('transaction-complete')
           resolve(result)
         }
         const table = tx.objectStore('state')
         operation = 'get'
+        trace.mark('get-requested')
         const request = table.get('control')
         request.onerror = () =>
-          fail(new ReleaseControlError('read', 'failed', 'get', request.error))
+          fail(storageError('read', 'failed', 'get', request.error))
         const accept = (value: unknown) => {
           if (settled) return
           try {
+            trace.mark('value-decoded')
             const next = mutate(value)
             result = next.result
             stage = 'commit'
             if (write) {
               operation = 'put'
               try {
-                writeControlValue(table, next.state, db.version > 1, (error) =>
-                  fail(
-                    new ReleaseControlError('commit', 'failed', 'put', error)
-                  )
+                writeControlValue(table, next.state, db!.version > 1, (error) =>
+                  fail(storageError('commit', 'failed', 'put', error))
                 )
               } catch (error) {
-                fail(new ReleaseControlError('commit', 'failed', 'put', error))
+                fail(storageError('commit', 'failed', 'put', error))
                 return
               }
             }
             operation = 'commit'
+            trace.mark('waiting-for-commit')
           } catch (error) {
             fail(error)
           }
         }
         request.onsuccess = () => {
-          if (!settled)
-            readControlValue(table, request.result, accept, (error) =>
-              fail(new ReleaseControlError('read', 'failed', 'get', error))
-            )
+          if (settled) return
+          trace.mark('get-succeeded')
+          readControlValue(
+            table,
+            request.result,
+            accept,
+            (error) => fail(storageError('read', 'failed', 'get', error)),
+            (chunksRead, chunksTotal) => {
+              if (chunksRead === 0) trace.mark('reading-chunks')
+              trace.details({ chunksRead, chunksTotal })
+            }
+          )
         }
       } catch (error) {
-        fail(new ReleaseControlError(stage, 'failed', operation, error))
+        fail(storageError(stage, 'failed', operation, error))
       }
     })
   } finally {
-    db.close()
+    trace.finish(complete ? 'complete' : 'failed')
+    db?.close()
   }
 }
 

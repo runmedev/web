@@ -425,8 +425,10 @@ export class AppConsoleData {
   }
 
   /** Flush the latest draft after earlier writes; failure is an upgrade blocker. */
-  async flushForRelease(): Promise<void> {
+  async flushForRelease(signal?: AbortSignal): Promise<void> {
     if (this.hydratePromise) await this.hydratePromise;
+    // A timed-out reload must not freeze the console when hydration resolves late.
+    signal?.throwIfAborted();
     if (!this.snapshotCache.hydrated) return;
     if (!this.persistenceEnabled) throw new Error('App Console drafts cannot be saved');
     if (this.snapshotCache.cells.some(cell => cell.status === 'running')) throw new Error('App Console is running');

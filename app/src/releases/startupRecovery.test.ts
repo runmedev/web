@@ -81,3 +81,16 @@ it('accepts an explicit alternative to stable and never retries coordination err
   expect(discover).toHaveBeenCalledWith(selection)
   expect(control).toHaveBeenCalledOnce()
 })
+
+it('can download a recovery build while settings are completely unavailable', async () => {
+  const candidate = setup()
+  vi.mocked(control).mockRejectedValue(
+    new ReleaseControlError('read', 'timeout')
+  )
+  const { downloadRecoveryRelease } = await import('./startupRecovery')
+  expect(
+    await downloadRecoveryRelease({ kind: 'channel', name: 'latest' })
+  ).toBe(candidate)
+  expect(stage).toHaveBeenCalledOnce()
+  expect(control).not.toHaveBeenCalled()
+})

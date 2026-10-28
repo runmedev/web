@@ -20,6 +20,7 @@ export const STORAGE_METHODS = [
   'listFileSyncStatusPage',
   'getMetadata',
   'save',
+  'commitEditorOperations',
   'isOperationLogNotebook',
   'listOperationLogComments',
   'addOperationLogComment',

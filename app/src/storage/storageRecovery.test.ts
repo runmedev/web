@@ -53,6 +53,7 @@ function connect(host: StorageOwnerHost, prepare = vi.fn(async () => vi.fn())) {
     reload,
     prepare
   )
+  pagePort.postMessage(recoveryMessage('register', 'editor-client'))
   clients.push(client)
   return { client, reload, prepare, pagePort }
 }
@@ -145,6 +146,16 @@ describe('coordinated storage restart', () => {
       channel.port2 as unknown as MessagePort
     )
     host.attach(channel.port1 as unknown as MessagePort)
+    channel.port2.postMessage({
+      type: 'request',
+      id: 'legacy-hello',
+      method: 'hello',
+      version: 0,
+      args: [],
+    })
+    await vi.waitFor(async () =>
+      expect((await first.client.diagnose()).connectedTabs).toBe(2)
+    )
     vi.useFakeTimers()
     first.client.recovery!.restart()
     await vi.waitFor(() => expect(first.prepare).toHaveBeenCalled())
@@ -418,4 +429,67 @@ it('releases preserved editors if sending the ready acknowledgement throws', asy
   await client.receive(recoveryMessage('prepare', 'round'))
   expect(release).toHaveBeenCalledOnce()
   expect(storageRecovery.getSnapshot().phase).toBe('blocked')
+})
+
+it('offers recovery for a release-settings failure before the RPC deadline', async () => {
+  const { requiresStorageReload } = await import('./storageRecovery')
+  expect(
+    requiresStorageReload(
+      new Error(
+        'Release settings read timeout (get). Stored notebook data has not been removed.'
+      )
+    )
+  ).toBe(true)
+  expect(
+    requiresStorageReload(
+      new Error(
+        'Stale or frozen release: storage request rejected before effects'
+      )
+    )
+  ).toBe(false)
+})
+
+it('does not count the launcher control connection as an editor tab', async () => {
+  const { host, shutdown } = setup()
+  const editor = connect(host)
+  const launcher = new MessageChannel()
+  ports.push(
+    launcher.port1 as unknown as MessagePort,
+    launcher.port2 as unknown as MessagePort
+  )
+  host.attach(launcher.port1 as unknown as MessagePort)
+  const messages: unknown[] = []
+  launcher.port2.on('message', (message) => messages.push(message))
+  await vi.waitFor(async () =>
+    expect((await editor.client.diagnose()).connectedTabs).toBe(1)
+  )
+  expect((await editor.client.diagnose()).connectedPorts).toBe(2)
+  editor.client.recovery!.restart()
+  await vi.waitFor(() => expect(editor.reload).toHaveBeenCalledOnce())
+  expect(shutdown).toHaveBeenCalledOnce()
+  expect(messages).toEqual([])
+})
+
+it('backs up and restarts an admitted owner without consulting release settings', async () => {
+  const { store, shutdown } = setup()
+  const module = await import('../releases/control')
+  const control = vi
+    .spyOn(module, 'control')
+    .mockImplementation(() => new Promise(() => {}))
+  try {
+    const host = new StorageOwnerHost(
+      store as unknown as LocalNotebooks,
+      shutdown,
+      undefined,
+      { releaseId: 'test', epoch: 1, capabilities: [] }
+    )
+    const editor = connect(host)
+    editor.client.recovery!.restart()
+    await vi.waitFor(() => expect(editor.reload).toHaveBeenCalledOnce())
+    expect(editor.prepare).toHaveBeenCalledOnce()
+    expect(control).not.toHaveBeenCalled()
+    expect(shutdown).toHaveBeenCalledOnce()
+  } finally {
+    control.mockRestore()
+  }
 })

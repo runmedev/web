@@ -99,6 +99,16 @@ func main() {
 		mu.Unlock()
 		w.WriteHeader(204)
 	})
+	// Release browsing exercises the same immutable IDs as the real publisher.
+	mux.HandleFunc("/releases/catalog.json", func(w http.ResponseWriter, r *http.Request) {
+		entries := make([]map[string]string, 0, len(releases))
+		for _, rel := range releases {
+			parts := strings.SplitN(rel.id, "-", 2)
+			entries = append(entries, map[string]string{"releaseId": rel.id, "webCommit": parts[0], "buildId": parts[1]})
+		}
+		w.Header().Set("Content-Type", "application/json")
+		json.NewEncoder(w).Encode(map[string]any{"format": 1, "releases": entries})
+	})
 	mux.HandleFunc("/test/releases", func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "application/json")
 		json.NewEncoder(w).Encode(map[string]string{"a": first.id, "b": second.id})

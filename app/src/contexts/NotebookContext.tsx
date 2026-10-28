@@ -20,6 +20,7 @@ import { appLogger } from "../lib/logging/runtime";
 import { appState } from "../lib/runtime/AppState";
 import { isNotebookDocumentUri } from "../lib/workspaceDocuments/workspaceDocumentTypes";
 import { prepareRelease } from '../releases/prepare';
+import { prepareTabReload } from '../releases/prepareTabReload';
 import { adoptLegacyVersionUi } from '../releases/runtime';
 import { useCurrentDoc } from "./CurrentDocContext";
 import { useNotebookStore } from "./NotebookStoreContext";
@@ -74,6 +75,7 @@ export function NotebookProvider({ children }: { children: ReactNode }) {
       const entries = controller.getOpenNotebooks();
       if (entries.some(entry => entry.state === 'loading' || entry.state === 'resolving')) return;
       runtime.prepare = prepareRelease;
+      runtime.prepareReload = prepareTabReload;
       if (entries.every(entry => entry.state === 'loaded' || entry.state === 'blocked')) {
         runtime.ready?.();
         releaseLegacyUi ??= adoptLegacyVersionUi();
@@ -87,7 +89,7 @@ export function NotebookProvider({ children }: { children: ReactNode }) {
     }).catch(error => appLogger.warn('Release startup did not become healthy', {
       attrs: { scope: 'release.startup', error: String(error) },
     }));
-    return () => { disposed = true; unsubscribe?.(); releaseLegacyUi?.(); delete runtime.prepare; };
+    return () => { disposed = true; unsubscribe?.(); releaseLegacyUi?.(); delete runtime.prepare; delete runtime.prepareReload; };
   }, [controller, store]);
 
   const getNotebookData = useCallback(

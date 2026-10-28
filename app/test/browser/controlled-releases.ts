@@ -628,6 +628,36 @@ async function main() {
     console.log('PASS: deploy B; refresh and new tabs retain A')
     await openVersions(one)
     await one.screenshot({ path: output + '/00-version-information.png' })
+    const pinFlow = one.getByRole('button', {
+      name: 'Pin Release',
+      exact: true,
+    })
+    const hasPinFlow = (await pinFlow.count()) > 0
+    if (hasPinFlow) {
+      await pinFlow.click()
+      await one.getByRole('tab', { name: 'Pin Release', exact: true }).waitFor()
+      await one.screenshot({ path: output + '/00-pin-release-choices.png' })
+      await one.getByRole('button', { name: /Choose another release/ }).click()
+      await one
+        .getByRole('button', { name: 'Load published releases', exact: true })
+        .click()
+      await one
+        .getByRole('button', {
+          name: new RegExp(`Commit ${expected.b.slice(0, 8)}`),
+        })
+        .click()
+      await one.screenshot({ path: output + '/00-pin-release-review.png' })
+      assert.equal(
+        (await one.evaluate(() => (window as any).runmeVersions.get()))
+          .selection.kind,
+        'channel'
+      )
+      await one.getByRole('button', { name: 'Back', exact: true }).click()
+      await one.getByRole('button', { name: 'Back', exact: true }).click()
+      await one
+        .getByRole('button', { name: /Keep the installed release/ })
+        .click()
+    }
     await one
       .getByRole('button', { name: 'Pin installed release', exact: true })
       .click()
@@ -638,6 +668,13 @@ async function main() {
         s.selection.releaseId === a &&
         !s.candidate
     )
+    if (hasPinFlow)
+      await one
+        .getByRole('button', {
+          name: 'Back to version information',
+          exact: true,
+        })
+        .click()
     await one
       .getByRole('button', { name: 'Check for updates', exact: true })
       .click()
@@ -660,6 +697,17 @@ async function main() {
         s.selection.name === 'stable' && s.candidate?.releaseId === expected.b
     )
     assert.equal(await active(one), a)
+    if (!process.env.RUNME_RELEASE_BASELINE) {
+      await one.getByTestId('version-attention-badge').waitFor()
+      assert.equal(
+        await one
+          .getByTestId('version-attention-badge')
+          .getAttribute('data-kind'),
+        'update'
+      )
+      await one.locator('#runme-release-panel').waitFor({ state: 'hidden' })
+      await one.screenshot({ path: output + '/00-version-attention.png' })
+    }
     console.log(
       'PASS: Information view owns controls; exact pin and channel selection never activate implicitly'
     )
@@ -669,119 +717,176 @@ async function main() {
       `const d=await notebooks.createLocal('upgrade-one.runme'); await notebooks.appendCell({target:{uri:d.handle.uri},kind:'markup',value:'Before upgrade: durable edit'}); await notebooks.show(d.handle.uri); console.log(d.handle.uri);`
     )
     const uri = created.match(/local:\/\/file\/[^\s]+/)![0]
-    await execute(
+    const secondCreated = await execute(
       two,
-      `const d=await notebooks.createLocal('upgrade-two.runme');await notebooks.appendCell({target:{uri:d.handle.uri},kind:'markup',value:'Second tab survives'});await notebooks.show(d.handle.uri);`
+      `const d=await notebooks.createLocal('upgrade-two.runme');await notebooks.appendCell({target:{uri:d.handle.uri},kind:'markup',value:'Second tab survives'});await notebooks.show(d.handle.uri);console.log(d.handle.uri);`
     )
+    const secondUri = secondCreated.match(/local:\/\/file\/[^\s]+/)![0]
     await one.screenshot({ path: output + '/01-two-tabs-a.png' })
-    // A failed preparation must block all tabs, even though the other tabs save.
-    await two.evaluate(() => {
-      const runtime = (window as any).runmeRelease
-      ;(window as any).__realPrepare = runtime.prepare
-      runtime.prepare = async () => {
-        throw new Error('Injected durable-save failure')
-      }
-    })
+    const historicalApp = Boolean(process.env.RUNME_RELEASE_BASELINE)
+    let incompatible: Page | undefined
+    if (!historicalApp) {
+      incompatible = await context.newPage()
+      pages.push(incompatible)
+      await incompatible.goto(base + '/?session=incompatible-peer')
+      await ready(incompatible)
+      await execute(
+        incompatible,
+        `const d=await notebooks.createLocal('incompatible.runme');await notebooks.appendCell({target:{uri:d.handle.uri},kind:'markup',value:'Preserved during compatibility recovery'});await notebooks.show(d.handle.uri);`
+      )
+      await incompatible.evaluate(() => {
+        // Inject only the stable capability reply, leaving the actual worker,
+        // lock, checkpoint, navigation and persistence paths unchanged.
+        const NativeWorker = SharedWorker
+        ;(window as any).SharedWorker = class extends NativeWorker {
+          constructor(...args: ConstructorParameters<typeof SharedWorker>) {
+            super(...args)
+            const send = this.port.postMessage.bind(this.port)
+            this.port.postMessage = (message: any) => {
+              if (
+                message.type === 'request' &&
+                !['handshake', 'disconnect'].includes(message.method)
+              )
+                sessionStorage.setItem('incompatible-data-rpc', message.method)
+              send(message)
+            }
+            const descriptor = Object.getOwnPropertyDescriptor(
+              MessagePort.prototype,
+              'onmessage'
+            )!
+            Object.defineProperty(this.port, 'onmessage', {
+              set(handler) {
+                descriptor.set!.call(this, (event: MessageEvent) => {
+                  if (event.data?.value?.protocol === 1)
+                    event.data.value.rpcVersion = -1
+                  handler?.(event)
+                })
+              },
+            })
+          }
+        }
+      })
+    }
+    const peerId = await two.evaluate(() => (window as any).runmeRelease.tabId)
+    let suspended: Awaited<ReturnType<typeof context.newCDPSession>> | undefined
+    if (historicalApp) {
+      // Historical launchers implement their own all-tab reload policy. Preserve
+      // and close those already-durable peers before testing the migration floor.
+      await Promise.all([two, three].map((page) => page.close()))
+    } else {
+      await two.evaluate(() => {
+        const runtime = (window as any).runmeRelease
+        runtime.prepare = runtime.prepareReload = async () => {
+          throw new Error('Peer must never be asked to prepare')
+        }
+      })
+      suspended = await context.newCDPSession(two)
+      await suspended.send('Page.setWebLifecycleState', { state: 'frozen' })
+    }
     await openVersions(one)
     await one
-      .getByRole('button', { name: 'Upgrade all tabs', exact: true })
-      .click()
-    await one
-      .locator('#runme-release-panel')
-      .getByRole('status')
-      .filter({ hasText: 'Injected durable-save failure' })
-      .waitFor({ timeout: 30000 })
-    assert.equal(await active(one), a)
-    assert.equal(await active(two), a)
-    await one.screenshot({ path: output + '/02-blocked-save.png' })
-    console.log('PASS: unconfirmed durable save blocks activation')
-    await two.evaluate(() => {
-      ;(window as any).runmeRelease.prepare = (window as any).__realPrepare
-    })
-    const oldTabId = await one.evaluate(
-      () => (window as any).runmeRelease.tabId
-    )
-    await one
-      .locator('#runme-release-panel')
-      .getByRole('button', { name: 'Cancel upgrade', exact: true })
+      .getByRole('button', {
+        name: /^(Activate release and update this tab|Upgrade all tabs)$/,
+        exact: true,
+      })
       .click()
     await one.waitForFunction(
-      (id) =>
-        (window as any).runmeRelease?.tabId &&
-        (window as any).runmeRelease.tabId !== id,
-      oldTabId
+      (id) => (window as any).runmeRelease?.active.manifest.releaseId === id,
+      expected.b,
+      { timeout: 60000 }
     )
     await ready(one)
-    assert.match(
-      await execute(
-        one,
-        `console.log((await notebooks.get({uri:${JSON.stringify(uri)}})).notebook.cells.map(c=>c.value).join('\\n'))`
-      ),
-      /Before upgrade/
-    )
-    console.log('PASS: cancellation reloads prepared tabs from durable state')
-    // Hold readiness as well as requesting browser freeze: Chromium may wake a
-    // frozen page when another tab opens. Neither missing readiness nor loss of
-    // the initiating tab permits the coordinator to discard this participant.
-    await ready(two)
-    await ready(three)
-    await waitControl(three, (s) => !s.transition)
-    await two.evaluate(() => {
-      const real = (window as any).runmeRelease.prepare
-      ;(window as any).runmeRelease.prepare = () =>
-        new Promise((resolve, reject) => {
-          ;(window as any).__resumeReleasePreparation = () =>
-            real().then(resolve, reject)
-        })
-    })
-    const suspended = await context.newCDPSession(two)
-    await suspended.send('Page.setWebLifecycleState', { state: 'frozen' })
-    await openVersions(one)
-    await one
-      .getByRole('button', { name: 'Upgrade all tabs', exact: true })
-      .click()
-    await waitControl(
-      three,
-      (s) =>
-        s.transition?.phase === 'prepare' &&
-        Object.values(s.transition.participants).some((p: any) => p.ready)
-    )
-    assert.equal(
-      await three.evaluate(
-        async () =>
-          (await (window as any).runmeVersions.get()).active.manifest.releaseId
-      ),
-      a
-    )
-    await one.close()
-    one = await context.newPage()
-    pages[0] = one
-    await one.goto(base + '/?session=release-one')
-    await one
-      .getByRole('status')
-      .filter({ hasText: 'waiting for tab' })
-      .waitFor({ timeout: 30000 })
-    assert.equal(await active(one), undefined)
-    await one.screenshot({ path: output + '/02-frozen-tab-new-tab-waits.png' })
-    await suspended.send('Page.setWebLifecycleState', { state: 'active' })
-    await two.waitForFunction(
-      () => typeof (window as any).__resumeReleasePreparation === 'function'
-    )
-    await two.evaluate(() => (window as any).__resumeReleasePreparation())
-    await suspended.detach()
-    console.log(
-      'PASS: frozen tab blocks; new tab waits; another coordinator resumes after initiator closes'
-    )
-    for (const page of pages) {
-      await page.waitForFunction(
-        (id) => (window as any).runmeRelease?.active.manifest.releaseId === id,
-        expected.b,
-        { timeout: 60000 }
-      )
-      await ready(page)
-    }
     const b = await active(one)
     assert.notEqual(a, b)
+    if (!historicalApp) {
+      await suspended!.send('Page.setWebLifecycleState', { state: 'active' })
+      await suspended!.detach()
+      assert.equal(await active(two), a)
+      assert.equal(await active(three), a)
+      assert.equal(
+        await two.evaluate(() => (window as any).runmeRelease.tabId),
+        peerId
+      )
+      assert.equal(
+        await two.evaluate(() => document.getElementById('root')?.inert),
+        false
+      )
+      await execute(
+        two,
+        `await notebooks.appendCell({target:{uri:${JSON.stringify(secondUri)}},kind:'markup',value:'Old UI saves through new worker'});`
+      )
+      await waitControl(
+        two,
+        (s) => !s.transition && s.active?.manifest.releaseId === b
+      )
+      assert.equal(await active(two), a, 'Saving must not reload the older UI')
+      await two.waitForFunction(
+        () =>
+          document
+            .querySelector('[data-testid="version-attention-badge"]')
+            ?.getAttribute('data-kind') === 'reload'
+      )
+      await two.locator('#runme-release-panel').waitFor({ state: 'hidden' })
+      await two
+        .getByRole('button', { name: 'Open Version Information', exact: true })
+        .click()
+      await two
+        .getByRole('button', {
+          name: 'Preserve edits and reload this tab',
+          exact: true,
+        })
+        .waitFor()
+      await two.screenshot({
+        path: output + '/02-outdated-tab-information.png',
+      })
+      // A local backup failure must not reload this page or roll back the worker.
+      const thirdId = await three.evaluate(
+        () => (window as any).runmeRelease.tabId
+      )
+      const failedBackup = await three.evaluate(async () => {
+        const set = Storage.prototype.setItem
+        Storage.prototype.setItem = function (key, value) {
+          if (key === 'runme/tab-editor-recovery/v1')
+            throw new DOMException(
+              'Injected recovery quota',
+              'QuotaExceededError'
+            )
+          return set.call(this, key, value)
+        }
+        try {
+          await (window as any).runmeVersions.reloadTab()
+          return 'unexpected reload'
+        } catch (error) {
+          return String(error)
+        } finally {
+          Storage.prototype.setItem = set
+        }
+      })
+      assert.match(failedBackup, /Injected recovery quota/)
+      assert.equal(
+        await three.evaluate(() => (window as any).runmeRelease.tabId),
+        thirdId
+      )
+      assert.equal(await active(three), a)
+      assert.equal(
+        await three.evaluate(() => document.getElementById('root')?.inert),
+        false
+      )
+      await three.evaluate(() => (window as any).runmeVersions.reloadTab())
+      await three.waitForFunction(
+        (id) => (window as any).runmeRelease?.active.manifest.releaseId === id,
+        b
+      )
+      await ready(three)
+      assert.equal(
+        await active(two),
+        a,
+        'Independent reload must leave its peer alone'
+      )
+      console.log(
+        'PASS: frozen peer cannot block activation; old UI saves to new worker; quota failure preserves its tab; independent reload leaves peer alive'
+      )
+    }
     assert.match(
       await execute(
         one,
@@ -789,8 +894,34 @@ async function main() {
       ),
       /Before upgrade/
     )
-    await one.screenshot({ path: output + '/03-upgraded-b.png' })
-    console.log('PASS: all tabs upgraded and notebook edits retained')
+    if (incompatible) {
+      await incompatible.waitForFunction(
+        (id) => (window as any).runmeRelease?.active.manifest.releaseId === id,
+        b,
+        { timeout: 60000 }
+      )
+      await ready(incompatible)
+      assert.equal(
+        await incompatible.evaluate(() =>
+          sessionStorage.getItem('incompatible-data-rpc')
+        ),
+        null,
+        'Incompatible connection cannot send data RPCs before recovery'
+      )
+      await incompatible
+        .getByText('Preserved during compatibility recovery', { exact: true })
+        .first()
+        .waitFor()
+      await incompatible.screenshot({
+        path: output + '/03-incompatible-tab-recovered.png',
+      })
+      await incompatible.close()
+      console.log(
+        'PASS: confirmed capability mismatch recovers only that tab before any data RPC'
+      )
+    }
+    await one.screenshot({ path: output + '/03-independent-upgrade-b.png' })
+    console.log('PASS: initiating tab upgrades and restores notebook edits')
     await one.waitForFunction(
       () => {
         const id = (window as any).runmeRelease?.active.manifest.releaseId
@@ -801,8 +932,39 @@ async function main() {
       undefined,
       { timeout: 60000 }
     )
+    let rollbackPeer: Page | undefined
+    let rollbackPeerId: string | undefined
+    if (historicalApp) {
+      rollbackPeer = await context.newPage()
+      pages.push(rollbackPeer)
+      // The frozen service worker still serves its historical root loader.
+      // Explicitly enter the current launcher to test the new peer contract.
+      await rollbackPeer.goto(
+        `${base}/version/${expected.b}/launcher.html?session=historical-rollback-peer`
+      )
+      await ready(rollbackPeer)
+      assert.equal(
+        await rollbackPeer.evaluate(
+          () => typeof (window as any).runmeVersions.reloadTab
+        ),
+        'function'
+      )
+      rollbackPeerId = await rollbackPeer.evaluate(
+        () => (window as any).runmeRelease.tabId
+      )
+      await execute(
+        rollbackPeer,
+        `const d=await notebooks.createLocal('rollback-peer.runme');await notebooks.appendCell({target:{uri:d.handle.uri},kind:'markup',value:'Keep this editor alive during historical rollback'});await notebooks.show(d.handle.uri);`
+      )
+    }
     await context.setOffline(true)
-    await one.reload()
+    if (historicalApp) {
+      // Its historical service worker caches the old root launcher. Restart
+      // through the cached migration entry so this tab uses the current contract.
+      await one.goto(
+        `${base}/version/${expected.b}/launcher.html?session=release-one`
+      )
+    } else await one.reload()
     await ready(one)
     assert.equal(await active(one), b)
     await one.screenshot({ path: output + '/04-offline-restart.png' })
@@ -819,13 +981,15 @@ async function main() {
         exact: true,
       })
       .click()
-    for (const page of pages) {
-      await page.waitForFunction(
-        (id) => (window as any).runmeRelease?.active.manifest.releaseId === id,
-        a,
-        { timeout: 60000 }
-      )
-      await ready(page)
+    await one.waitForFunction(
+      (id) => (window as any).runmeRelease?.active.manifest.releaseId === id,
+      a,
+      { timeout: 60000 }
+    )
+    await ready(one)
+    if (!historicalApp) {
+      assert.equal(await active(two), a)
+      assert.equal(await active(three), b, 'Rollback must not reload a peer')
     }
     assert.match(
       await execute(
@@ -834,26 +998,95 @@ async function main() {
       ),
       /Edited on B/
     )
+    if (rollbackPeer) {
+      await waitControl(
+        rollbackPeer,
+        (s) => !s.transition && s.active?.manifest.releaseId === a
+      )
+      const reloadError = await rollbackPeer.evaluate(async () => {
+        try {
+          await (window as any).runmeVersions.reloadTab()
+          return 'unexpected reload'
+        } catch (error) {
+          return String(error)
+        }
+      })
+      assert.match(reloadError, /cannot restore this tab/)
+      assert.equal(
+        await rollbackPeer.evaluate(() => (window as any).runmeRelease.tabId),
+        rollbackPeerId
+      )
+      assert.equal(await active(rollbackPeer), b)
+      await rollbackPeer
+        .getByText('Keep this editor alive during historical rollback', {
+          exact: true,
+        })
+        .first()
+        .waitFor()
+      await rollbackPeer.screenshot({
+        path: output + '/05-historical-rollback-peer-retained.png',
+      })
+      await rollbackPeer.close()
+      console.log(
+        'PASS: historical rollback flushes the initiator and refuses to discard a peer into an unsupported checkpoint reader'
+      )
+    }
     await one.screenshot({ path: output + '/05-offline-rollback.png' })
     console.log('PASS: compatible offline rollback keeps edits made on B')
     const recovery = await context.newPage()
     pages.push(recovery)
-    await recovery.goto(base + '/recovery.html')
+    await recovery.goto(
+      base + '/recovery.html?session=recovery-return#notebooks'
+    )
     await recovery
       .getByRole('button', { name: 'Check for updates', exact: true })
       .waitFor({ timeout: 30000 })
     assert.equal(await recovery.locator('#root').textContent(), '')
     await recovery.screenshot({ path: output + '/06-independent-recovery.png' })
-    console.log(
-      'PASS: recovery selector works without importing the application'
-    )
+    // The frozen pre-bootstrap service worker still serves its old root
+    // recovery page offline. Only the current launcher contains this new UI.
+    if (!historicalApp) {
+      // Return explicitly enters the notebook app, preserving this tab's session.
+      // Leave the independent selector open afterward for broken-release recovery.
+      const returnLink = recovery.getByRole('link', {
+        name: 'Return to Runme',
+        exact: true,
+      })
+      assert.equal(
+        await returnLink.getAttribute('href'),
+        '/?session=recovery-return#notebooks'
+      )
+      await returnLink.click()
+      await ready(recovery)
+      assert.equal(new URL(recovery.url()).pathname, '/')
+      assert.equal(
+        new URL(recovery.url()).searchParams.get('session'),
+        'recovery-return'
+      )
+      assert.equal(new URL(recovery.url()).hash, '#notebooks')
+      await recovery.screenshot({ path: output + '/06-return-to-runme.png' })
+      await recovery.goto(base + '/recovery.html')
+      await recovery
+        .getByRole('link', { name: 'Return to Runme', exact: true })
+        .waitFor()
+      console.log(
+        'PASS: recovery stays independent and explicitly returns to the app with the same session'
+      )
+    } else {
+      console.log(
+        'PASS: frozen historical recovery remains independent of app imports'
+      )
+    }
     if (process.env.RUNME_TEST_BROKEN) {
       await context.setOffline(false)
       await fetch(base + '/test/promote?release=broken', { method: 'POST' })
       await one.evaluate(() => (window as any).runmeVersions.check())
       await openVersions(one)
       await one
-        .getByRole('button', { name: 'Upgrade all tabs', exact: true })
+        .getByRole('button', {
+          name: /^(Activate release and update this tab|Upgrade all tabs)$/,
+          exact: true,
+        })
         .click()
       await one.waitForFunction(
         () =>
@@ -883,6 +1116,21 @@ async function main() {
           exact: true,
         })
         .click()
+      // Clicking starts asynchronous cache verification and handoff. Opening a
+      // new app immediately can admit it to the still-active broken release and
+      // make it a participant before recovery intent has been committed. Observe
+      // completed activation, as shown by recovery status, before opening it.
+      const recoveredDeadline = Date.now() + 60000
+      let recovered = false
+      while (Date.now() < recoveredDeadline) {
+        recovered = await recovery.evaluate(async (id) => {
+          const state = await (window as any).runmeVersions.get()
+          return !state.transition && state.active?.manifest.releaseId === id
+        }, a)
+        if (recovered) break
+        await new Promise((resolve) => setTimeout(resolve, 100))
+      }
+      assert.ok(recovered, 'Recovery must activate A before opening a new app')
       const restored = await context.newPage()
       pages.splice(0, 3, restored)
       await restored.goto(base + '/?session=release-one')
@@ -904,7 +1152,10 @@ async function main() {
       await restored.evaluate(() => (window as any).runmeVersions.check())
       await openVersions(restored)
       await restored
-        .getByRole('button', { name: 'Upgrade all tabs', exact: true })
+        .getByRole('button', {
+          name: /^(Activate release and update this tab|Upgrade all tabs)$/,
+          exact: true,
+        })
         .click()
       await waitControl(
         recovery,

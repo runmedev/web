@@ -25,6 +25,7 @@ export type Manifest = {
   buildInputsDigest: string
   publishedAt: string
   recoveredControlFormat?: 1
+  tabRecoveryFormat?: 1
   requiredCapabilities: string[]
   testedRollbackTargets: string[]
   launcherProtocol: { min: number; max: number }

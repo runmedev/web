@@ -2,6 +2,7 @@ import { create } from '@bufbuild/protobuf'
 
 import { parser_pb } from '../contexts/CellContext'
 import type { LocalNotebooks } from '../storage/local'
+import { tabCheckpointUris } from '../storage/tabRecoveryCheckpoint'
 import {
   type NotebookAnalyticsSource,
   classifyNotebookAnalyticsSource,
@@ -153,6 +154,21 @@ export class NotebookDataController {
     }
     if (this.localNotebooks) {
       void this.loadOpenNotebooks()
+        .then(async () => {
+          // A save from an editor closed before reload can still be pending. Its
+          // checkpoint must be reopened/replayed, not orphaned by the tab list.
+          for (const uri of tabCheckpointUris()) {
+            if (!this.notebooks.get(uri)?.loaded) await this.openNotebook(uri)
+          }
+        })
+        .catch((error) =>
+          appLogger.error(
+            'Tab recovery could not restore all editors; checkpoints retained',
+            {
+              attrs: { scope: 'notebook-session', error: String(error) },
+            }
+          )
+        )
     }
   }
 
@@ -971,15 +987,18 @@ export class NotebookDataController {
       return
     }
     const restored = [...this.openNotebooks]
-    for (const item of restored) {
-      if (this.notebooks.get(item.uri)?.loaded) {
-        continue
-      }
-      void this.openNotebook(item.requestedUri || item.uri, {
-        name: item.name,
-        loadReadOnly: false,
+    // Load notebooks independently, but do not report restoration complete until
+    // every load has settled. The checkpoint scan runs next; returning early can
+    // reopen a still-loading editor and create two save sessions for one URI.
+    await Promise.all(
+      restored.map(async (item) => {
+        if (this.notebooks.get(item.uri)?.loaded) return
+        await this.openNotebook(item.requestedUri || item.uri, {
+          name: item.name,
+          loadReadOnly: false,
+        })
       })
-    }
+    )
   }
 
   private ensureRestored(): void {

@@ -72,7 +72,10 @@ jobs:
       - name: Test storage restart and editor recovery
         run: >-
           pnpm -C app exec vitest run
-          src/storage/storageRecovery.test.ts src/lib/storageRecoveryDrafts.test.ts
+          src/storage/storageRecovery.test.ts src/storage/editorSaveSession.test.ts
+          src/storage/tabRecoveryCheckpoint.test.ts src/storage/storageOwner.test.ts
+          src/releases/prepareTabReload.test.ts
+          src/storage/storageWorkerControl.test.ts src/lib/storageRecoveryDrafts.test.ts
           src/components/StorageRecoveryBanner.test.tsx
           --maxWorkers=2 --minWorkers=1
       - name: Test explorer folder refresh
@@ -118,12 +121,26 @@ jobs:
       - name: Test release controls and manifest discovery
         run: >-
           pnpm -C app exec vitest run
-          src/releases/control.test.ts src/releases/runtime.test.ts
+          src/releases/control.test.ts src/releases/runtime.test.ts src/releases/releaseAttention.test.ts
+          src/components/SidePanel/SidePanel.test.tsx
           src/releases/bootstrap.test.ts src/releases/launcherSelection.test.ts src/releases/loaderController.test.ts
           src/releases/releaseDatabase.test.ts src/releases/startupRecovery.test.ts src/releases/recoverControl.test.ts src/releases/controlChunks.test.ts src/releases/recoveryOwnerLock.test.ts src/storage/releaseOwnerFailure.test.ts
           src/releases/startupDiagnostics.test.ts
           src/pwa/loader-worker.test.ts src/components/ReleaseControls.test.tsx
+          src/components/ReleaseRecoveryControls.test.tsx src/components/StorageWorkerControls.test.tsx src/releases/releaseCatalog.test.ts
+      - name: Use the primary Ubuntu package mirror
+        shell: bash
+        run: |
+          set -euo pipefail
+          # Match app-tests: the Azure mirror can stall browser dependencies for
+          # several minutes before apt falls back to the primary archive.
+          if [[ -f /etc/apt/apt-mirrors.txt ]]; then
+            sudo sed -i 's|http://azure.archive.ubuntu.com/ubuntu|https://archive.ubuntu.com/ubuntu|g' /etc/apt/apt-mirrors.txt
+          fi
       - run: pnpm -C app exec playwright-core install --with-deps chromium
+      - name: Test independent storage reconnect
+        if: matrix.baseline == 'current'
+        run: pnpm -C app run cuj:storage
       - run: pnpm -C app run cuj:releases
         env:
           RUNME_RELEASE_BASELINE_COMMIT: ${{ matrix.baseline != 'current' && matrix.baseline || '' }}
@@ -131,4 +148,7 @@ jobs:
         if: always()
         with:
           name: controlled-release-evidence-${{ matrix.baseline }}
-          path: app/test/browser/test-output/controlled-releases/
+          path: |
+            app/test/browser/test-output/controlled-releases/
+            app/test/browser/test-output/storage-worker-startup/
+            app/test/browser/test-output/storage-worker-reconnect/

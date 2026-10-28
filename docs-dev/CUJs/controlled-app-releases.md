@@ -21,7 +21,10 @@ Acceptance:
 - The floating launcher disappears after startup only when the loaded app
   explicitly registers its version controls. Older clients retain the fallback
   controls. With a current app, the left Information icon opens version controls
-  inside the Version Information document.
+  inside the Version Information document. A badge and descriptive tooltip on the
+  Information icon signal a downloaded update, an outdated tab, or a version
+  problem. Apps supporting this affordance keep the overlay hidden during
+  updates and handoffs; actions and status remain in Version Information.
 - Startup diagnostics expose timestamped stage, duration, and waiting/failure
   events before the app starts. The trace is bounded, stays in memory, and does
   not include notebook data, credentials, or URL query parameters.
@@ -53,15 +56,19 @@ Acceptance:
   through the real service worker. It must answer before importing the launcher,
   then open the selected app when discovery resumes. Slow discovery must never
   misclassify a controlled bootstrap as an incompatible legacy window.
-- Channel changes and exact pins only stage; activation requires Upgrade all tabs.
-- Pending notebook edits in multiple tabs persist before upgrade readiness.
-- A failed preparation blocks activation and leaves that tab editable.
-- Cancel before handoff: prepared tabs reopen their durable A state.
-- Freeze a tab and explicitly withhold its readiness acknowledgement: it retains membership. A new tab waits outside the app.
-- Close the initiating tab: another launcher resumes the persisted transition.
-- All admitted tabs move to B under a new storage-owner epoch.
-- After full offline readiness, offline restart uses B; offline rollback to A preserves edits made on B.
-- The recovery selector works independently of React/application imports.
+- Channel changes and exact pins only stage; activation requires an explicit action.
+- Activating B replaces the worker under its lifetime lock and reloads only the initiating tab.
+- A frozen peer with a failing preparation hook cannot block activation and is never asked to prepare.
+- The old peer keeps its tab identity and mounted editor, then saves through worker B on retry.
+- Reloading another tab is an independent action. A session-storage quota error leaves that tab editable and does not roll back the selected worker.
+- A successful local reload checkpoints and restores editor state without involving a peer.
+- A confirmed capability mismatch triggers local checkpoint/reload recovery before any data RPC. Timeouts alone never do.
+- Historical rollback requires a durable flush of the initiating tab. Current peers refuse checkpoint reload into an app without `tabRecoveryFormat: 1`, retaining their mounted editors.
+- Historical launchers retain their original behavior. The frozen-baseline migration closes durable legacy peers before activation; the initiating historical app flushes locally before worker replacement.
+- After full offline readiness, offline restart uses B; offline rollback to A preserves edits made on B and leaves other tabs on their loaded UI versions.
+- The current recovery selector works independently of React/application imports, explains
+  that notebooks open in the app, and keeps **Return to Runme** visible. Returning
+  opens the app in the same tab with its session and hash preserved.
 - A checksum-valid but throwing app entry can be recovered through the selector
   after failed app tabs close, retaining current notebook content.
 
@@ -85,3 +92,42 @@ Launcher selection tests cover bounded network/cache waits, incompatible
 descriptors, offline fallback, corrupted modules, interrupted publication, and
 reuse of verified modules on refresh. Releaser tests verify that the launcher
 advances even when the stable application channel is pinned.
+
+## Recovery while the app is already open
+
+- Inject a rejected or never-settling `runmeVersions.get()` after opening Version
+  Information. The **Pin Release** button must remain available and open a
+  separate workspace tab. Users choose the installed release or select another
+  build by browsing or entering a commit. Reviewing a selection has no side
+  effects; pinning and activation are separate actions. Recovery navigation and
+  memory-only diagnostics remain reachable under **Troubleshooting**, even
+  while settings or a download are stalled. Also cover an
+  older launcher without the new recovery API: the selected release is carried
+  to the independent recovery page without navigating the editor tab away.
+- Preparing a build downloads and verifies it without accessing release settings.
+  It must not activate the build. Explicit activation still uses the existing
+  tab preparation, compatibility checks and exclusive storage-owner handoff.
+- A commit prefix with several published builds must require selecting a full
+  release ID rather than guessing a build. An unpublished commit is not runnable.
+- Diagnostic traces distinguish missing initial get callbacks, incomplete chunk
+  reads and pending transaction completion. Include elapsed time, realm and mode;
+  exclude record values, notebook contents, credentials and arbitrary keys.
+- These failure-injection checks are automated in `ReleaseRecoveryControls.test.tsx`,
+  `releaseCatalog.test.ts`, `releaseDatabase.test.ts` and `startupRecovery.test.ts`.
+
+## Unresponsive storage owner
+
+- The recovery banner's **Check storage worker** action works while restart or
+  normal RPC admission is waiting. A diagnostic reply must not replay a mutation.
+- Report authorization before initialization, initialization, authorization after
+  initialization, and execution separately. Restart diagnostics identify release
+  settings, waiting for tab backups, waiting for active requests and draining.
+- Keep diagnostic snapshots bounded and memory-only, including release database
+  traces from the worker realm. A diagnostic reply proves message-loop liveness,
+  not persistence health; absence of a reply does not prove the worker is dead.
+- Never steal the ownership lock or launch a competing writer after a timeout.
+  Explain that users must download current editor copies in every tab before
+  closing tabs or restarting the browser; session copies alone are insufficient.
+- Automated coverage: `storageOwner.test.ts`, `storageRecovery.test.ts`, and
+  `StorageRecoveryBanner.test.tsx`. Existing browser restart and upgrade journeys
+  remain in `storage-owner-recovery.ts` and `controlled-releases.ts`.

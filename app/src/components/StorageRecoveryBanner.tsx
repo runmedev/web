@@ -1,3 +1,4 @@
+import { appLogger } from '../lib/logging/runtime'
 import { useEffect, useState, useSyncExternalStore } from 'react'
 import { storageRecovery } from '../storage/storageRecovery'
 import {
@@ -33,6 +34,8 @@ export default function StorageRecoveryBanner({
   const [drafts, setDrafts] = useState<RecoveryDraft[]>([])
   const [currentDrafts, setCurrentDrafts] = useState<RecoveryDraft[]>([])
   const [captureMessage, setCaptureMessage] = useState('')
+  const [diagnostics, setDiagnostics] = useState('')
+  const [diagnosing, setDiagnosing] = useState(false)
   useEffect(() => {
     try {
       setDrafts(readRecoveryDrafts())
@@ -53,10 +56,10 @@ export default function StorageRecoveryBanner({
           <p className="font-semibold">Runme storage needs to reconnect</p>
           <p>{state.message}</p>
           <p>
-            Restart first backs up this tab’s editors in session storage.
-            Connected tabs reload only after all tabs preserve edits and pending
-            writes finish. Session copies do not survive closing a tab and are
-            not persistent autosave.
+            Storage restart keeps this page and its editors open. Pending editor
+            saves remain in this tab and retry after reconnecting. Keep this tab
+            open until saves finish, or download recovery copies before closing
+            it.
           </p>
           <button
             type="button"
@@ -85,9 +88,82 @@ export default function StorageRecoveryBanner({
             disabled={busy}
             onClick={() => storageRecovery.restart()}
           >
-            {busy ? 'Preparing restart…' : 'Restart Runme'}
+            {busy ? 'Restarting storage…' : 'Restart storage'}
           </button>
+          <button
+            type="button"
+            className="ml-2 mt-2 rounded border px-3 py-1"
+            onClick={() => {
+              void window.runmeVersions
+                ?.reloadTab?.()
+                .catch((error) =>
+                  setCaptureMessage(
+                    `This tab was not reloaded: ${String(error)}`
+                  )
+                )
+            }}
+            disabled={!window.runmeVersions?.reloadTab}
+          >
+            Preserve edits and reload this tab
+          </button>
+          <button
+            type="button"
+            className="ml-2 mt-2 rounded border px-3 py-1"
+            onClick={() => storageRecovery.restart(true)}
+          >
+            Force restart storage
+          </button>
+          <p>
+            Force restart skips draining pending work. Editor saves can retry;
+            other operations may have an uncertain outcome.
+          </p>
         </>
+      )}
+      {state.phase !== 'healthy' && (
+        <div id={`storage-diagnostics-${location}`}>
+          <button
+            type="button"
+            disabled={diagnosing}
+            className="mt-2 underline"
+            onClick={async () => {
+              setDiagnosing(true)
+              try {
+                const snapshot = await storageRecovery.diagnose()
+                setDiagnostics(JSON.stringify(snapshot, null, 2))
+                appLogger.info('Storage worker diagnostic snapshot', {
+                  attrs: { scope: 'storage.owner', diagnostics: snapshot },
+                })
+              } catch (error) {
+                setDiagnostics(String(error))
+              } finally {
+                setDiagnosing(false)
+              }
+            }}
+          >
+            {diagnosing ? 'Checking worker…' : 'Check storage worker'}
+          </button>
+          {diagnostics && (
+            <pre
+              className="max-h-64 overflow-auto whitespace-pre-wrap"
+              aria-label="Storage worker diagnostics"
+            >
+              {diagnostics}
+            </pre>
+          )}
+          <p>
+            Diagnostics do not save or retry notebook operations. A reply
+            confirms the worker can process diagnostic messages, not that
+            storage writes are working.
+          </p>
+          {state.phase === 'blocked' && (
+            <p>
+              If restart cannot finish, download current editor copies in every
+              Runme tab first. Then close all Runme tabs for this site and
+              reopen Runme. If the worker remains stuck, restart the browser
+              after saving the downloads. Do not clear site data.
+            </p>
+          )}
+        </div>
       )}
       {captureMessage && <p>{captureMessage}</p>}
       {currentDrafts.map((draft, index) => (
