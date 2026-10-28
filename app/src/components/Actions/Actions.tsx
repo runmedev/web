@@ -29,6 +29,7 @@ import { Button, ScrollArea, Tabs, Text, Tooltip } from '@radix-ui/themes'
 
 import { NotebookPropertiesDialog } from '../NotebookPropertiesDialog'
 import {
+  AUTO_IPYNB_KEY,
   DERIVED_NOTEBOOK_KEY,
   parseDerivedSource,
 } from '../../lib/derivedNotebook'
@@ -66,6 +67,7 @@ import {
 } from '../../lib/notebookActiveCellState'
 import {
   copyGoogleColabNotebookUrl,
+  copyGoogleColabNotebookMarkdownLink,
   copyNotebookCellMarkdownLink,
   copyNotebookCellShareUrl,
   copyNotebookMarkdownLink,
@@ -4609,6 +4611,8 @@ export default function Actions() {
     shareableUri: string
     googleDriveUri: string | null
     isIpynb: boolean
+    autoIpynb: boolean
+    colabCopyUri: string | null
     ownerSessionId: string | null
     canOpenUpstreamDiff: boolean
     canReviewSuggestions: boolean
@@ -4925,6 +4929,7 @@ export default function Actions() {
       5 +
       (tabContextMenu.googleDriveUri ? 1 : 0) +
       (tabContextMenu.googleDriveUri && tabContextMenu.isIpynb ? 1 : 0) +
+      (tabContextMenu.autoIpynb ? 1 : 0) +
       (tabContextMenu.ownerSessionId ? 1 : 0) +
       (tabContextMenu.canOpenUpstreamDiff ? 1 : 0) +
       (tabContextMenu.canReviewSuggestions ? 1 : 0)
@@ -4953,11 +4958,15 @@ export default function Actions() {
         document?.title?.trim() ||
         getNotebookDisplayName(docUri, document?.title ?? docUri)
       const format = detectNotebookFileFormat(title)
+      const autoIpynb =
+        getNotebookData(docUri)?.getSnapshot?.().notebook?.metadata[
+          AUTO_IPYNB_KEY
+        ] === 'true'
       const suggestionReviewReady =
         format === 'runme-operation-log' &&
         document?.state === 'loaded' &&
         getNotebookData(docUri)?.getSnapshot().loaded === true
-      setTabContextMenu({
+      setTabContextMenu((current) => ({
         x: event.clientX,
         y: event.clientY,
         docUri,
@@ -4967,12 +4976,14 @@ export default function Actions() {
           ? docUri
           : requestedDriveUri,
         isIpynb: format === 'ipynb',
+        autoIpynb,
+        colabCopyUri: current?.docUri === docUri ? current.colabCopyUri : null,
         ownerSessionId: getNotebookOwnerSessionId(document?.owner),
         canOpenUpstreamDiff:
           docUri.startsWith('local://') && Boolean(requestedDriveUri),
         canReviewSuggestions: Boolean(store) && suggestionReviewReady,
         readOnly: document?.readOnly,
-      })
+      }))
 
       if (!store || !docUri.startsWith('local://')) {
         return
@@ -4988,6 +4999,7 @@ export default function Actions() {
             }
             return {
               ...current,
+              title: metadata?.name ?? current.title,
               shareableUri: remoteUri ?? docUri,
               googleDriveUri: isGoogleDriveFileUri(remoteUri)
                 ? remoteUri
@@ -5018,6 +5030,49 @@ export default function Actions() {
     },
     [getNotebookData, store, workspaceDocuments]
   )
+
+  // A generated copy can finish saving while the menu is open. Subscribe to
+  // its export status, and discard late responses after closing/switching tabs.
+  const colabSourceUri = tabContextMenu?.autoIpynb
+    ? tabContextMenu.docUri
+    : null
+  useEffect(() => {
+    if (!store || !colabSourceUri?.startsWith('local://')) return
+    let active = true
+    const refresh = async () => {
+      try {
+        const status = await store.getIpynbExportState(colabSourceUri)
+        if (!active) return
+        setTabContextMenu((current) =>
+          current?.docUri === colabSourceUri
+            ? {
+                ...current,
+                colabCopyUri: isGoogleDriveFileUri(status.uri)
+                  ? (status.uri ?? null)
+                  : null,
+              }
+            : current
+        )
+      } catch (error) {
+        appLogger.error('Failed to resolve Colab copy for context menu', {
+          attrs: {
+            scope: 'storage.share',
+            code: 'TAB_COLAB_COPY_LOOKUP_FAILED',
+            docUri: colabSourceUri,
+            error: String(error),
+          },
+        })
+      }
+    }
+    void refresh()
+    const unsubscribe = store.subscribeSync(colabSourceUri, () => {
+      void refresh()
+    })
+    return () => {
+      active = false
+      unsubscribe()
+    }
+  }, [store, colabSourceUri])
 
   const handleRenameTab = useCallback(async () => {
     if (!tabContextMenu) {
@@ -5226,6 +5281,27 @@ export default function Actions() {
           },
         }
       )
+    } finally {
+      setTabContextMenu(null)
+    }
+  }, [tabContextMenu])
+
+  // The source tab advertises a Markdown link to its confirmed generated copy.
+  const handleCopyTabColabCopyLink = useCallback(async () => {
+    if (!tabContextMenu?.colabCopyUri) return
+    try {
+      const { id } = parseDriveItem(tabContextMenu.colabCopyUri)
+      const name = `${tabContextMenu.title.replace(/\.runme$/i, '')}.ipynb`
+      await copyGoogleColabNotebookMarkdownLink(name, id)
+    } catch (error) {
+      appLogger.error('Failed to copy generated Colab notebook link', {
+        attrs: {
+          scope: 'storage.share',
+          code: 'TAB_COPY_COLAB_COPY_LINK_FAILED',
+          uri: tabContextMenu.docUri,
+          error: String(error),
+        },
+      })
     } finally {
       setTabContextMenu(null)
     }
@@ -5536,6 +5612,24 @@ export default function Actions() {
                     Copy Google Colab Link
                   </button>
                 )}
+              {adjustedTabContextMenu.autoIpynb && (
+                <button
+                  type="button"
+                  className="ctx-menu-item"
+                  disabled={!adjustedTabContextMenu.colabCopyUri}
+                  title={
+                    adjustedTabContextMenu.colabCopyUri
+                      ? undefined
+                      : 'Available after the Colab copy is saved to Google Drive'
+                  }
+                  onClick={(event) => {
+                    event.stopPropagation()
+                    void handleCopyTabColabCopyLink()
+                  }}
+                >
+                  Copy Colab link
+                </button>
+              )}
               {adjustedTabContextMenu.canOpenUpstreamDiff && (
                 <button
                   type="button"

@@ -235,6 +235,7 @@ function createTestStore(
       )
     }
     drive.waitForCreateOperation ??= drive.findByCreateOperation
+    drive.waitForDerivedCopy ??= drive.waitForCreateOperation
     drive.canUsePreGeneratedFileId ??= vi.fn(async () => false)
     drive.createContent ??= drive.create
     const claims = new Map<string, string>()

@@ -29,11 +29,8 @@ function remote(reserved: boolean) {
         return true
       }
     ),
-    waitForCreateOperation: vi.fn(
-      async (
-        _parent: string | null,
-        _operation: string
-      ): Promise<NotebookStoreItem | null> => null
+    waitForDerivedCopy: vi.fn(
+      async (_sourceUri: string): Promise<NotebookStoreItem | null> => null
     ), // Deliberately stale index.
     getDerivedCopyTarget: vi.fn(async (uri: string) => files.get(uri) ?? null),
     canUsePreGeneratedFileId: vi.fn(async () => reserved),
@@ -116,7 +113,7 @@ describe('source-coordinated derived copies', () => {
       )
     ).rejects.toBeInstanceOf(UnconfirmedDerivedCopyError)
     const original = [...server.files.values()][0]
-    client.waitForCreateOperation.mockResolvedValue(original)
+    client.waitForDerivedCopy.mockResolvedValue(original)
     const recovered = await ensureDerivedCopy(
       client as unknown as DriveNotebookStore,
       source,
@@ -125,10 +122,7 @@ describe('source-coordinated derived copies', () => {
       async () => '{}'
     )
     expect(recovered?.uri).toBe(original.uri)
-    expect(client.waitForCreateOperation).toHaveBeenLastCalledWith(
-      null,
-      expect.stringMatching(/^runme-ipynb-/)
-    )
+    expect(client.waitForDerivedCopy).toHaveBeenLastCalledWith(source)
     expect(server.state.creates).toBe(1)
   })
 

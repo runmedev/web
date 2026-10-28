@@ -320,14 +320,14 @@ func (s *driveStore) get(id string) (*driveFile, bool) {
 	return cloneFile(file), true
 }
 
-func (s *driveStore) list(parentID, propertyKey, propertyValue string) []*driveFile {
+func (s *driveStore) list(query string) []*driveFile {
+	parentID := extractParentID(query)
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
 	files := make([]*driveFile, 0)
 	for _, file := range s.files {
-		if containsString(file.Parents, parentID) &&
-			(propertyKey == "" || file.AppProperties[propertyKey] == propertyValue) {
+		if (parentID == "" || containsString(file.Parents, parentID)) && matchesPropertyQuery(file, query) {
 			files = append(files, cloneFile(file))
 		}
 	}
@@ -537,9 +537,7 @@ func newDriveHandler(store *driveStore) http.Handler {
 		switch r.Method {
 		case http.MethodGet:
 			q := r.URL.Query().Get("q")
-			parentID := extractParentID(q)
-			propertyKey, propertyValue := extractAppProperty(q)
-			files := store.list(parentID, propertyKey, propertyValue)
+			files := store.list(q)
 			writeJSON(w, map[string]any{
 				"files": files,
 			})
@@ -712,8 +710,8 @@ func writeJSON(w http.ResponseWriter, value any) {
 }
 
 var parentQueryPattern = regexp.MustCompile(`'([^']+)' in parents`)
-var appPropertyQueryPattern = regexp.MustCompile(
-	`appProperties has \{ key='([^']+)' and value='([^']*)' \}`,
+var propertyQueryPattern = regexp.MustCompile(
+	`(appProperties|properties) has \{ key='([^']+)' and value='([^']*)' \}`,
 )
 
 func extractParentID(query string) string {
@@ -724,12 +722,28 @@ func extractParentID(query string) string {
 	return ""
 }
 
-func extractAppProperty(query string) (string, string) {
-	matches := appPropertyQueryPattern.FindStringSubmatch(query)
-	if len(matches) == 3 {
-		return matches[1], matches[2]
+// Support the property conjunctions and legacy/public alternatives used by Runme.
+// This is a bounded fake for those queries, not a general Drive query parser.
+func matchesPropertyQuery(file *driveFile, query string) bool {
+	matches := propertyQueryPattern.FindAllStringSubmatch(query, -1)
+	if len(matches) == 0 {
+		return true
 	}
-	return "", ""
+	anyMatch, allMatch := false, true
+	for _, match := range matches {
+		properties := file.Properties
+		if match[1] == "appProperties" {
+			properties = file.AppProperties
+		}
+		value, exists := properties[match[2]]
+		matched := exists && value == match[3]
+		anyMatch = anyMatch || matched
+		allMatch = allMatch && matched
+	}
+	if strings.Contains(query, " or ") {
+		return anyMatch
+	}
+	return allMatch
 }
 
 func envOrDefault(key, fallback string) string {

@@ -1,5 +1,7 @@
 import { create, fromJsonString, toJsonString } from '@bufbuild/protobuf'
+import md5 from 'md5'
 
+import { parseDerivedSource } from '../lib/derivedNotebook'
 import { getGoogleDriveBaseUrl } from '../lib/googleDriveRuntime'
 import { type DecodedIpynb, IPYNB_MIME_TYPE } from '../lib/ipynb'
 import { LinkedResourceError } from '../lib/linkedResource'
@@ -29,6 +31,8 @@ const NOTEBOOK_JSON_WRITE_OPTIONS = {
 const DRIVE_FOLDER_MIME_TYPE = 'application/vnd.google-apps.folder'
 export const DRIVE_CREATE_OPERATION_PROPERTY = 'runmeCreateOperationId'
 const DERIVED_COPY_PROPERTY = 'runmeIpynbCopy'
+/** Shared across OAuth clients, including workload identity and end-user sign-in. */
+export const DERIVED_COPY_SOURCE_PROPERTY = 'runmeDerivedFrom'
 export const DRIVE_CREATE_EXPECTED_CHECKSUM_PROPERTY =
   'runmeCreateExpectedChecksum'
 export const DRIVE_CREATE_EXPECTED_REQUEST_PROPERTY =
@@ -159,6 +163,7 @@ export type DriveDoc = {
   content?: string
   trashed?: boolean
   appProperties?: Record<string, string>
+  properties?: Record<string, string>
 }
 
 export type DriveSearchFile = DriveDoc &
@@ -732,6 +737,9 @@ export class FetchDriveFilesClient implements DriveFilesClient {
     }
     if (doc.appProperties) {
       resource.appProperties = doc.appProperties
+    }
+    if (doc.properties) {
+      resource.properties = doc.properties
     }
     return resource
   }
@@ -1429,6 +1437,8 @@ function extractBody(response: { body?: string; result?: unknown }): string {
 }
 
 export interface DriveCreateOptions {
+  /** Source Drive file ID for an automatically generated Colab copy. */
+  derivedFromSourceId?: string
   createOperationId?: string
   expectedContentChecksum?: string
   expectedRequestFingerprint?: string
@@ -1857,22 +1867,92 @@ export class DriveNotebookStore {
     return (await this.getDerivedCopyClaim(uri)) === (next ?? undefined)
   }
 
-  /** A source property alone never authorizes overwriting an unrelated file. */
+  /**
+   * Verify the copy's source using ordinary Drive properties, which are visible
+   * to every authorized app. A source-side pointer or matching filename alone
+   * never authorizes overwriting a file. Legacy exports are promoted only after
+   * their old app marker or embedded provenance proves the same source.
+   */
   async getDerivedCopyTarget(
     uri: string,
-    operationId: string
+    sourceUri: string
   ): Promise<NotebookStoreItem | null> {
     const target = await this.getMetadataIfExists(uri)
     if (!target) return null
+    const sourceId = parseDriveItem(sourceUri).id
     const version = await this.getVersionMetadata(uri)
-    if (
-      version?.appProperties?.[DRIVE_CREATE_OPERATION_PROPERTY] !== operationId
-    ) {
-      throw new Error(
+    const owner = version?.properties?.[DERIVED_COPY_SOURCE_PROPERTY]
+    if (owner === sourceId) return target
+    const mismatch = () =>
+      new Error(
         'The Colab copy does not belong to this source notebook; refusing to overwrite it.'
       )
+    if (owner !== undefined || !version) throw mismatch()
+
+    const legacyOperation = `runme-ipynb-${md5(driveFileUrl(sourceId))}`
+    const legacyOwner = version.appProperties?.[DRIVE_CREATE_OPERATION_PROPERTY]
+    if (legacyOwner !== undefined && legacyOwner !== legacyOperation)
+      throw mismatch()
+    if (legacyOwner === undefined) {
+      // Private appProperties can be invisible after switching OAuth clients.
+      // Existing exports also carry a portable source reference in their JSON.
+      const content = await this.loadContent(uri)
+      let source
+      try {
+        const notebook = JSON.parse(content)
+        if (notebook.nbformat === 4 && Array.isArray(notebook.cells))
+          source = parseDerivedSource(notebook.metadata?.runme?.derivedFrom)
+      } catch {
+        // Unmarked, malformed files are never adopted as generated copies.
+      }
+      if (!source || parseDriveItem(source.uri).id !== sourceId)
+        throw mismatch()
     }
+    const { id, resourceKey } = parseDriveItem(uri)
+    await (
+      await this.getFilesClient()
+    ).setPublicProperty(id, DERIVED_COPY_SOURCE_PROPERTY, sourceId, resourceKey)
+    if (
+      (await this.getVersionMetadata(uri))?.properties?.[
+        DERIVED_COPY_SOURCE_PROPERTY
+      ] !== sourceId
+    )
+      throw new Error(
+        'Could not verify the Colab source marker after migration; retry Drive sync.'
+      )
     return target
+  }
+
+  /** Recover a copy across authentication clients, including an unconfirmed create. */
+  async waitForDerivedCopy(
+    sourceUri: string
+  ): Promise<NotebookStoreItem | null> {
+    const sourceId = parseDriveItem(sourceUri).id
+    const legacyOperation = `runme-ipynb-${md5(driveFileUrl(sourceId))}`
+    for (const delayMs of [0, 250, 500, 1_000, 2_000]) {
+      if (delayMs) await new Promise((resolve) => setTimeout(resolve, delayMs))
+      const result = await this.search({
+        q: `trashed = false and (properties has { key='${DERIVED_COPY_SOURCE_PROPERTY}' and value='${escapeDriveQueryValue(sourceId)}' } or appProperties has { key='${DRIVE_CREATE_OPERATION_PROPERTY}' and value='${legacyOperation}' })`,
+        includeItemsFromAllDrives: true,
+        supportsAllDrives: true,
+        pageSize: 2,
+        fields: 'nextPageToken,incompleteSearch,files(id,name,mimeType)',
+      })
+      if (
+        result.incompleteSearch ||
+        result.nextPageToken ||
+        result.files.length > 1
+      )
+        throw new Error(
+          'Could not identify a unique Colab copy for this source notebook.'
+        )
+      if (result.files[0]?.id)
+        return this.getDerivedCopyTarget(
+          driveFileUrl(result.files[0].id),
+          sourceUri
+        )
+    }
+    return null
   }
 
   /** Reserve a Drive file id so retries can target one stable identity. */
@@ -1995,6 +2075,13 @@ export class DriveNotebookStore {
           mimeType,
           parents: [parent.id],
           content,
+          ...(options.derivedFromSourceId
+            ? {
+                properties: {
+                  [DERIVED_COPY_SOURCE_PROPERTY]: options.derivedFromSourceId,
+                },
+              }
+            : {}),
           ...(options.createOperationId
             ? {
                 appProperties: {
@@ -2027,6 +2114,14 @@ export class DriveNotebookStore {
         throw new DriveCreateNotCommittedError(serviceAccountMessage, error)
       }
       if (options.fileId && driveErrorStatus(error) === 409) {
+        // A reserved ID may already exist. Verify before moving or adopting it.
+        if (options.derivedFromSourceId) {
+          const target = await this.getDerivedCopyTarget(
+            driveFileUrl(options.fileId),
+            driveFileUrl(options.derivedFromSourceId)
+          )
+          if (!target) throw error
+        }
         const response = await client.get({
           fileId: options.fileId,
           supportsAllDrives: true,

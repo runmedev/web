@@ -33,7 +33,6 @@ export async function ensureDerivedCopy(
   content: () => Promise<string | null>
 ): Promise<NotebookStoreItem | null> {
   const sourceHash = md5(driveFileUrl(parseDriveItem(sourceUri).id))
-  const operationId = `runme-ipynb-${sourceHash}`
   let ownedPending: string | undefined
   for (let attempt = 0; attempt < 8; attempt += 1) {
     const claim = await drive.getDerivedCopyClaim(sourceUri)
@@ -52,14 +51,12 @@ export async function ensureDerivedCopy(
     if (claim?.startsWith('r:') || claim?.startsWith('f:')) {
       target = await drive.getDerivedCopyTarget(
         driveFileUrl(claim.split(':')[2]),
-        operationId
+        sourceUri
       )
     } else {
       // A source can move while its create is unconfirmed. Search by its
       // source-scoped identity across folders, then move the recovered target.
-      const found = await drive.waitForCreateOperation(null, operationId)
-      if (found)
-        target = await drive.getDerivedCopyTarget(found.uri, operationId)
+      target = await drive.waitForDerivedCopy(sourceUri)
     }
     if (target) {
       const confirmed = `f:${sourceHash}:${parseDriveItem(target.uri).id}`
@@ -104,7 +101,7 @@ export async function ensureDerivedCopy(
         bytes,
         IPYNB_MIME_TYPE,
         {
-          createOperationId: operationId,
+          derivedFromSourceId: parseDriveItem(sourceUri).id,
           ...(claim.startsWith('r:') ? { fileId: claim.split(':')[2] } : {}),
         }
       )

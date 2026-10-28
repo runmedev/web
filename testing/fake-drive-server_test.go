@@ -260,3 +260,36 @@ func TestFileAvailabilityFault(t *testing.T) {
 		}
 	}
 }
+
+// Recovery can discover an export by shared metadata without private app markers.
+func TestDerivedCopySearchAcrossFolders(t *testing.T) {
+	store := newDriveStore()
+	for _, resource := range []map[string]any{
+		{"id": "public-copy", "parents": []any{"old-parent"}, "properties": map[string]any{"runmeDerivedFrom": "source"}},
+		{"id": "legacy-copy", "parents": []any{seedFolderID}, "appProperties": map[string]any{"runmeCreateOperationId": "legacy"}},
+		{"id": "unrelated", "parents": []any{seedFolderID}, "properties": map[string]any{"runmeDerivedFrom": "other"}},
+	} {
+		store.create(resource)
+	}
+	query := "trashed = false and (properties has { key='runmeDerivedFrom' and value='source' } or appProperties has { key='runmeCreateOperationId' and value='legacy' })"
+	server := httptest.NewServer(newDriveHandler(store))
+	defer server.Close()
+	response, err := http.Get(server.URL + "/drive/v3/files?q=" + url.QueryEscape(query))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer response.Body.Close()
+	var listed struct {
+		Files []driveFile `json:"files"`
+	}
+	if err := json.NewDecoder(response.Body).Decode(&listed); err != nil {
+		t.Fatal(err)
+	}
+	ids := map[string]bool{}
+	for _, file := range listed.Files {
+		ids[file.ID] = true
+	}
+	if len(ids) != 2 || !ids["public-copy"] || !ids["legacy-copy"] {
+		t.Fatalf("unexpected matches: %v", ids)
+	}
+}
