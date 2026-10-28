@@ -260,6 +260,11 @@ async function main() {
         }) as typeof indexedDB.open
       })
       await settings.goto(base + '/?session=settings-transient-failure')
+      if (!process.env.RUNME_RELEASE_BASELINE) {
+        await settings
+          .getByRole('button', { name: 'Retry installed release', exact: true })
+          .click()
+      }
       await ready(settings)
       assert.equal(await active(settings), a)
       await waitControl(
@@ -270,15 +275,182 @@ async function main() {
         .locator('#runme-startup-diagnostics-log')
         .textContent()
       assert.ok(trace?.includes('release-settings-open'))
-      assert.ok(trace?.includes('startup-fallback'))
+      assert.equal(
+        trace?.includes('startup-fallback'),
+        Boolean(process.env.RUNME_RELEASE_BASELINE)
+      )
       await settings.screenshot({
         path: output + '/settings-transient-recovered.png',
       })
       console.log(
-        'PASS: stalled settings open automatically recovers through stable and normal admission'
+        'PASS: stalled settings open exposes retry without automatically changing release'
       )
     } finally {
       await settings.close()
+    }
+    if (!process.env.RUNME_RELEASE_BASELINE) {
+      const pendingContext = await browser.newContext()
+      await pendingContext.addInitScript(installTools)
+      try {
+        const source = await pendingContext.newPage()
+        await source.goto(base + '/?session=pending-source')
+        await ready(source)
+        const epoch = await source.evaluate(async () => {
+          // Simulate an initiator disappearing after committing handoff but
+          // before starting its candidate. No launcher's action runs here.
+          return await new Promise<number>((resolve, reject) => {
+            const open = indexedDB.open('runme-release-control')
+            open.onerror = () => reject(open.error)
+            open.onsuccess = () => {
+              const db = open.result
+              const tx = db.transaction('state', 'readwrite')
+              let epoch = 0
+              const store = tx.objectStore('state')
+              const get = store.get('control')
+              get.onsuccess = () => {
+                const state = get.result
+                epoch = state.active.epoch + 1
+                state.transition = {
+                  id: crypto.randomUUID(),
+                  from: state.active,
+                  target: state.active.manifest,
+                  epoch,
+                  phase: 'handoff',
+                  participants: {},
+                }
+                store.put(state, 'control')
+              }
+              tx.oncomplete = () => {
+                db.close()
+                resolve(epoch)
+              }
+              tx.onabort = () => {
+                db.close()
+                reject(tx.error)
+              }
+            }
+          })
+        })
+        const newcomer = await pendingContext.newPage()
+        await newcomer.addInitScript(() => {
+          const Worker = SharedWorker
+          ;(window as any).__candidateStarts = 0
+          window.SharedWorker = new Proxy(Worker, {
+            construct(target, args) {
+              if (String(args[1]?.name).startsWith('runme-storage-owner-'))
+                (window as any).__candidateStarts++
+              return Reflect.construct(target, args)
+            },
+          })
+        })
+        await newcomer.goto(base + '/?session=pending-newcomer')
+        await newcomer
+          .getByRole('button', { name: 'Retry worker activation', exact: true })
+          .waitFor()
+        await newcomer.waitForTimeout(2200)
+        await newcomer
+          .getByRole('status')
+          .filter({ hasText: 'An upgrade is pending' })
+          .waitFor()
+        assert.equal(
+          await newcomer.evaluate(() => (window as any).__candidateStarts),
+          0
+        )
+        assert.equal(await active(newcomer), undefined)
+        assert.equal(
+          (await newcomer.evaluate(() => (window as any).runmeVersions.get()))
+            .transition.epoch,
+          epoch
+        )
+        await newcomer.screenshot({
+          path: output + '/pending-activation-explicit-retry.png',
+        })
+        await newcomer
+          .getByRole('button', { name: 'Retry worker activation', exact: true })
+          .click()
+        await ready(newcomer)
+        assert.equal(
+          await newcomer.evaluate(
+            () => (window as any).runmeRelease.active.epoch
+          ),
+          epoch
+        )
+        assert.equal(
+          await source.evaluate(
+            () => (window as any).runmeRelease.active.epoch
+          ),
+          epoch - 1
+        )
+        console.log(
+          'PASS: opening a tab does not resume abandoned activation; explicit retry starts worker without reloading its peer'
+        )
+      } finally {
+        await pendingContext.close()
+      }
+      // Reproduce a later read stall, after initial settings/render succeeded.
+      // Keep a real transaction alive while suppressing its control-get callback.
+      const late = await context.newPage()
+      try {
+        await late.addInitScript(() => {
+          const get = IDBObjectStore.prototype.get
+          let injected = false
+          IDBObjectStore.prototype.get = function (key) {
+            if (
+              this.transaction.db.name === 'runme-release-control' &&
+              this.transaction.mode === 'readwrite' &&
+              key === 'control' &&
+              !injected
+            ) {
+              injected = true
+              const keepAlive = () => {
+                try {
+                  get.call(this, '__keepalive').onsuccess = keepAlive
+                } catch {
+                  /* aborted by deadline */
+                }
+              }
+              keepAlive()
+              return {} as IDBRequest
+            }
+            return get.call(this, key)
+          }
+        })
+        await late.goto(base + '/?session=late-settings-timeout')
+        await late
+          .getByRole('button', { name: 'Retry installed release', exact: true })
+          .waitFor({ timeout: 20000 })
+        assert.equal(await active(late), undefined)
+        const trace = JSON.parse(
+          (await late
+            .locator('#runme-startup-diagnostics-log')
+            .textContent()) || '[]'
+        )
+        assert.ok(
+          trace.some(
+            (e: any) =>
+              e.attrs.stage === 'tab-admission' && e.attrs.state === 'failed'
+          )
+        )
+        assert.ok(
+          !trace.some(
+            (e: any) =>
+              e.attrs.stage === 'bootstrap' && e.attrs.state === 'completed'
+          )
+        )
+        await late.screenshot({
+          path: output + '/late-settings-timeout-recovery.png',
+        })
+        await late
+          .getByRole('button', { name: 'Retry installed release', exact: true })
+          .click()
+        await ready(late)
+        assert.equal(await active(late), a)
+        console.log(
+          'PASS: admission get timeout exposes recovery and retries installed release without automatic activation'
+        )
+      } finally {
+        await late.close()
+      }
     }
     const unavailable = await context.newPage()
     try {

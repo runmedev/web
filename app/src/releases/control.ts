@@ -3,6 +3,7 @@ import {
   LAUNCHER_POINTER,
   launcherDescriptor,
 } from './launcherSelection'
+import { notifyReleaseChange, releaseChangeKey } from './releaseChanges'
 import { releaseTransaction } from './releaseDatabase'
 
 /** Loader protocol 1 is independent of notebook schemas and application builds. */
@@ -84,7 +85,8 @@ export async function control<T>(
   mutate: (state: Control) => T,
   write = true
 ): Promise<T> {
-  return releaseTransaction(CONTROL_DB, write, (value) => {
+  let changed = false
+  const result = await releaseTransaction(CONTROL_DB, write, (value) => {
     const state: Control = (value as Control | undefined) ?? {
       format: 1,
       selection: { kind: 'channel', name: 'stable' },
@@ -92,9 +94,13 @@ export async function control<T>(
     }
     if (state.format !== 1)
       throw new Error('Unsupported release-control format')
+    const before = write ? releaseChangeKey(state) : undefined
     const result = mutate(state)
+    changed = write && before !== releaseChangeKey(state)
     return { state, result }
   })
+  if (changed) notifyReleaseChange()
+  return result
 }
 
 export const readControl = () => control((state) => state, false)
@@ -357,6 +363,23 @@ export async function discover(selection: Selection): Promise<Manifest> {
  */
 export async function pruneUnusedCaches(): Promise<number> {
   return navigator.locks.request('runme-release-cache', async () => {
+    // Tab bookkeeping is maintenance requested by the user, never startup work.
+    const snapshot = await readControl()
+    const closed: string[] = []
+    for (const id of Object.keys(snapshot.tabs)) {
+      if (
+        await navigator.locks.request(
+          `runme-release-tab-${id}`,
+          { ifAvailable: true },
+          (lock) => Boolean(lock)
+        )
+      )
+        closed.push(id)
+    }
+    if (closed.length)
+      await control((state) => {
+        for (const id of closed) delete state.tabs[id]
+      })
     const state = await readControl()
     const keep = new Set([
       state.active?.manifest.releaseId,

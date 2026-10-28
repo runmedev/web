@@ -1,5 +1,6 @@
 import {
   type Active,
+  type Control,
   type Manifest,
   type ReleaseProgress,
   type Selection,
@@ -20,6 +21,7 @@ import { recoverUnreadableControl } from './recoverControl'
 import { withRecoveryOwner } from './recoveryOwnerLock'
 import { type ReleaseAttention, releaseAttention } from './releaseAttention'
 import { resolvePublishedRelease } from './releaseCatalog'
+import { subscribeReleaseChanges } from './releaseChanges'
 import { ReleaseControlError } from './releaseDatabase'
 import { releaseDatabaseDiagnostics } from './releaseDiagnostics'
 import type { OfflineDownloadStatus, ReleaseRuntime } from './runtime'
@@ -74,12 +76,15 @@ panel.append(diagnostics.element)
 let progress: ReleaseProgress | undefined
 document.body.append(panel)
 let runtime: ReleaseRuntime | undefined
-let reloadAfterActivation: string | undefined
 let reloadingTab = false
 let legacyPrepared = false
-let uiKey = ''
 let renderGeneration = 0
-let ticking = false
+let observing = false
+let observationPending = false
+let activating = false
+let booting = false
+let startupComplete = false
+let backgroundStarted = false
 let owner: SharedWorker | undefined
 let ownerKey = ''
 let dismissedCandidate: string | undefined
@@ -197,14 +202,6 @@ async function holdTab(): Promise<void> {
       .catch(reject)
   })
 }
-async function closed(id: string): Promise<boolean> {
-  return navigator.locks.request(
-    `runme-release-tab-${id}`,
-    { ifAvailable: true },
-    (lock) => Boolean(lock)
-  )
-}
-
 /** The old service worker must finish its normal lifecycle before the new loader
  * can open storage. The root worker becomes a non-writing retirement sentinel.
  * An existing pre-contract owner answers no sentinel handshake, so fail closed.
@@ -389,9 +386,8 @@ async function beginLocked(target: Manifest): Promise<void> {
         delete s.ownerError
       })
     })
-    if (runtime) reloadAfterActivation = target.releaseId
     ownerKey = ''
-    await render()
+    await activateSelectedRelease()
     return
   }
   await control((s) => {
@@ -416,27 +412,61 @@ async function beginLocked(target: Manifest): Promise<void> {
       participants: {},
     }
   })
-  if (runtime) reloadAfterActivation = target.releaseId
-  await render()
+  await activateSelectedRelease()
 }
 
-/** Activation changes the selected worker without consulting tab readiness.
- * Any launcher can start the selected candidate if the initiating tab disappears.
- * Tab records only keep live app assets from being pruned.
+/** Only an explicit activate/retry (or first installation) starts a candidate.
+ * Poll only for this bounded operation; peers never drive an abandoned handoff.
+ * The worker retains the lifetime lock until its writes have drained.
  */
-async function coordinate(): Promise<void> {
-  const state = await readControl()
-  const gone: string[] = []
-  for (const id of Object.keys(state.tabs)) if (await closed(id)) gone.push(id)
-  if (gone.length)
-    await control((s) => {
-      for (const id of gone) delete s.tabs[id]
-    })
-  if (state.transition?.phase === 'handoff')
-    startOwner({
-      manifest: state.transition.target,
-      epoch: state.transition.epoch,
-    })
+async function activateSelectedRelease(): Promise<void> {
+  if (activating) throw new Error('Activation is already running in this tab')
+  activating = true
+  try {
+    const selected = await readControl()
+    const pending = selected.transition
+    if (pending?.phase === 'prepare')
+      throw new Error(
+        'Cancel the older pending upgrade before activating a release'
+      )
+    if (pending) {
+      await verifyCache(pending.target, undefined, startupScope())
+      report('Activating the selected release; other tabs stay open…')
+      startOwner({ manifest: pending.target, epoch: pending.epoch })
+      const deadline = Date.now() + 30000
+      while (true) {
+        const state = await readControl()
+        if (state.ownerError?.transitionId === pending.id)
+          throw new Error(state.ownerError.message)
+        if (!state.transition) {
+          if (state.active?.epoch !== pending.epoch)
+            throw new Error('Activation changed; review the selected release')
+          break
+        }
+        if (state.transition.id !== pending.id)
+          throw new Error(
+            'Activation was superseded; review the selected release'
+          )
+        if (Date.now() >= deadline)
+          throw new Error(
+            'Activation is still pending. Retry activation from Versions; other tabs remain open.'
+          )
+        await new Promise((resolve) => setTimeout(resolve, 250))
+      }
+    }
+    if (
+      runtime &&
+      (pending ||
+        selected.active?.manifest.releaseId !==
+          runtime.active.manifest.releaseId)
+    )
+      await reloadThisTab()
+    else await loadInstalledRelease()
+    await render()
+  } finally {
+    activating = false
+    if (observationPending) void observeRelease()
+  }
 }
 
 /** Only a user action or this tab's own activation can authorize its reload.
@@ -523,53 +553,50 @@ async function cancel(expectedId?: string): Promise<void> {
   await render()
 }
 
-async function tick(): Promise<void> {
-  if (ticking) return
-  ticking = true
+/** Notifications refresh the badge; they never activate a worker or reload.
+ * There is no periodic tab reconciliation or tab-record cleanup on startup.
+ */
+async function observeRelease(): Promise<void> {
+  if (!startupComplete) return
+  if (observing || activating || booting) {
+    observationPending = true
+    return
+  }
+  observationPending = false
+  observing = true
   try {
     const state = await readControl()
-    const transition = state.transition
-    const nextUiKey = JSON.stringify([
-      state.active?.epoch,
-      state.candidate?.releaseId,
-      transition?.id,
-      transition?.phase,
-      state.selection,
-    ])
-    if (uiKey !== nextUiKey) {
-      uiKey = nextUiKey
-      await render()
-    }
-    // A different tab's activation never freezes or reloads this page.
-    if (
-      !transition &&
-      runtime &&
-      state.active?.manifest.releaseId === reloadAfterActivation
-    ) {
-      reloadAfterActivation = undefined
-      await reloadThisTab()
+    await render(state)
+    if (!runtime && !recovery && !state.transition)
+      await loadInstalledRelease(state)
+  } catch (error) {
+    if (!runtime) showStartupRecovery(error)
+    else report(error)
+  } finally {
+    observing = false
+    if (observationPending) void observeRelease()
+  }
+}
+
+/** Admission is the only settings write required to load an installed app.
+ * A pending handoff requires an explicit retry; startup never starts its target.
+ */
+async function loadInstalledRelease(state?: Control): Promise<void> {
+  if (runtime || recovery || booting) return
+  booting = true
+  try {
+    const selected =
+      state ?? (await diagnostics.step('installed-release-read', readControl))
+    if (selected.transition) {
+      details = true
+      await render(selected)
+      report('An upgrade is pending. Resume it from Versions when ready.')
       return
     }
-    await coordinate()
-    const latest = await readControl()
-    if (!runtime && !recovery && latest.active && !latest.transition)
-      await boot(latest.active)
-    if (
-      latest.ownerError &&
-      latest.ownerError.transitionId === latest.transition?.id
-    ) {
-      report(latest.ownerError.message)
-    } else if (latest.transition) {
-      report(
-        latest.transition.phase === 'prepare'
-          ? 'An older upgrade is pending. Cancel it before starting an independent worker upgrade.'
-          : 'Starting the selected storage worker; other tabs keep their editors open.'
-      )
-    }
-  } catch (error) {
-    report(error)
+    if (selected.active) await boot(selected.active)
   } finally {
-    ticking = false
+    booting = false
+    if (observationPending) void observeRelease()
   }
 }
 
@@ -645,9 +672,9 @@ async function boot(active: Active): Promise<void> {
   await render()
 }
 
-async function render(): Promise<void> {
+async function render(state?: Control): Promise<void> {
   const generation = ++renderGeneration
-  const s = await readControl()
+  const s = state ?? (await readControl())
   if (generation !== renderGeneration) return
   attention = releaseAttention(s, runtime?.active.manifest.releaseId)
   transitioning = Boolean(s.transition)
@@ -659,13 +686,6 @@ async function render(): Promise<void> {
   // Normal management belongs to Information. Startup/recovery and frozen-app
   // transitions retain independent controls, including cancel/resume.
   updatePanelVisibility()
-  uiKey = JSON.stringify([
-    s.active?.epoch,
-    s.candidate?.releaseId,
-    s.transition?.id,
-    s.transition?.phase,
-    s.selection,
-  ])
   for (const node of [...panel.children])
     if (
       node !== status &&
@@ -679,6 +699,13 @@ async function render(): Promise<void> {
       ? `Runme ${s.active.manifest.webCommit.slice(0, 8)} · ${s.selection.kind === 'channel' ? s.selection.name : 'pinned'}`
       : 'Installing Runme…'
   )
+  if (s.ownerError) report(s.ownerError.message)
+  else if (s.transition)
+    report(
+      activating
+        ? 'Activating the selected release; other tabs stay open…'
+        : 'An upgrade is pending. Choose Retry worker activation to resume it; other tabs stay open.'
+    )
   if (tabUpdateAvailable) {
     report(
       'The selected application version has changed. Reload this tab when ready; other tabs stay open.'
@@ -761,7 +788,7 @@ async function render(): Promise<void> {
     )
     button('Retry worker activation', async () => {
       ownerKey = ''
-      await tick()
+      await activateSelectedRelease()
     })
     for (const name of await caches.keys()) {
       if (!name.startsWith('runme-release-v1-')) continue
@@ -852,27 +879,21 @@ async function startRelease(applyRequest = true): Promise<void> {
     }
   }
   const s = await readControl()
-  if (!s.active && !s.transition) {
+  if (!s.active && !s.transition && !recovery) {
     await check()
     const candidate = (await readControl()).candidate
     if (candidate) await begin(candidate)
   }
-  await diagnostics.step('initial-coordination', tick)
-  setInterval(() => void tick(), 1000)
-  setInterval(
-    () =>
-      void check().catch((error) =>
-        report(`Installed release retained: ${String(error)}`)
-      ),
-    60 * 60 * 1000
-  )
-  window.addEventListener('pageshow', () => {
-    void tick()
-  })
-  if (s.active)
-    void check().catch((error) =>
-      report(`Installed release available. Update check: ${String(error)}`)
-    )
+  await loadInstalledRelease()
+  startupComplete = true
+  if (!backgroundStarted) {
+    backgroundStarted = true
+    subscribeReleaseChanges(() => void observeRelease())
+    window.addEventListener('pageshow', () => void observeRelease())
+    // Discovery can download a channel release, but cannot activate it.
+    setInterval(() => void check().catch(report), 60 * 60 * 1000)
+  }
+  if (s.active) void check().catch(report)
 }
 /** Recovery controls must not depend on a successful settings read. A missing
  * settings service cannot be allowed to hide the only way to retry or choose a
@@ -895,8 +916,15 @@ function showStartupRecovery(error: unknown): void {
     )
       node.remove()
   report(
-    `${String(error instanceof Error ? error.message : error)} Retry loading stable, or choose another release below. Browser storage must respond before Runme can safely open notebooks.`
+    `${String(error instanceof Error ? error.message : error)} Retry the installed release, or explicitly choose another release below. Browser storage must respond before Runme can safely open notebooks.`
   )
+  button('Retry installed release', async () => {
+    try {
+      await startRelease(false)
+    } catch (error) {
+      showStartupRecovery(error)
+    }
+  })
   button('Retry latest stable', () => recoverStartup())
   button('Try latest channel', () =>
     recoverStartup({ kind: 'channel', name: 'latest' })
@@ -918,7 +946,7 @@ function showStartupRecovery(error: unknown): void {
   panel.append(diagnostics.element)
 }
 
-/** Prefer latest stable after a settings failure. Downloads do not need the
+/** Explicit recovery may select latest stable after a settings failure. Downloads do not need the
  * settings DB; activation still uses worker handoff and the exclusive owner lock.
  * Existing transitions are resumed, never discarded to force a new version.
  */
@@ -983,7 +1011,6 @@ window.runmeVersions = {
       startupScope()
     )
     await begin(candidate)
-    await tick()
   },
   uiVersion: 1,
   attention: () => attention,
@@ -1036,7 +1063,7 @@ window.runmeVersions = {
   prune: pruneUnusedCaches,
   retry: async () => {
     ownerKey = ''
-    await tick()
+    await activateSelectedRelease()
   },
 }
 
@@ -1070,11 +1097,6 @@ navigator.serviceWorker?.addEventListener('message', (event) => {
 })
 void diagnostics.step('bootstrap', main).catch((error) => {
   if (startupPrepared && error instanceof ReleaseControlError) {
-    diagnostics.record(`release-settings-${error.stage}`, 'failed', {
-      ...error.diagnosticDetails,
-      trace: JSON.stringify(error.trace ?? null),
-      stage: `release-settings-${error.stage}`,
-    })
-    void recoverStartup()
+    showStartupRecovery(error)
   } else report(error)
 })
