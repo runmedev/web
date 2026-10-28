@@ -9,7 +9,7 @@ import type {
 import { OIDC_STORAGE_KEY, oidcConfigManager } from '../auth/oidcConfig'
 import { configureGoogleWorkloadIdentity } from '../auth/workloadIdentity'
 import { agentEndpointManager } from './agentEndpointManager'
-import { getOidcCallbackUrl, resolveAppUrl } from './appBase'
+import { getOidcCallbackUrl } from './appBase'
 import {
   type ExternalServices,
   configureExternalServices,
@@ -41,7 +41,7 @@ const LEGACY_RUNNERS_STORAGE_KEY = 'aisre/runners'
 const DEFAULT_RUNNER_NAME_STORAGE_KEY = 'runme/defaultRunner'
 const LEGACY_DEFAULT_RUNNER_NAME_STORAGE_KEY = 'aisre/defaultRunner'
 const DEFAULT_RUNNER_NAME = 'default'
-export const APP_CONFIG_PATH_DEFAULT = 'configs/app-configs.yaml'
+export const APP_CONFIG_PATH_DEFAULT = '/configs/app-configs.yaml'
 export const APP_CONFIG_PREFER_LOCAL_STORAGE_KEY =
   'runme/app-config/prefer-local'
 
@@ -527,13 +527,12 @@ export class RuntimeAppConfigSchema {
   }
 }
 
+/** Deployment settings belong to the origin, outside immutable release assets. */
 export function getDefaultAppConfigUrl(): string {
   if (typeof window === 'undefined') {
     return APP_CONFIG_PATH_DEFAULT
   }
-  if (import.meta.env.VITE_RUNME_RELEASE_ID)
-    return new URL(`${import.meta.env.BASE_URL}${APP_CONFIG_PATH_DEFAULT}`, window.location.origin).toString()
-  return resolveAppUrl(APP_CONFIG_PATH_DEFAULT).toString()
+  return new URL(APP_CONFIG_PATH_DEFAULT, window.location.origin).toString()
 }
 
 export function applyAppConfig(

@@ -353,6 +353,12 @@ the service-account identity, token expiry, and renewal mode.
 
 ## App config helpers
 
+On startup, Runme fetches `/configs/app-configs.yaml` from the current origin,
+including for versioned releases and apps hosted under a subpath. Serve deployment
+settings at that root URL. They are independent of the selected release's bundled
+config and immutable asset cache. Explicit `app.setConfig(url)` calls can still
+load a different URL; saved local-setting precedence is unchanged.
+
 ```js
 app.getDefaultConfigUrl()
 app.setConfig(url)

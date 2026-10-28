@@ -9,6 +9,35 @@ import { digest, startupMarker } from '../releases/control'
  * reserialized completion marker. Discovery must receive the published bytes.
  */
 describe('loader manifest discovery', () => {
+  it('leaves deployment config requests to the network, outside release caches', () => {
+    const listeners = new Map<string, (event: unknown) => void>()
+    const openCache = vi.fn()
+    const source = readFileSync(
+      new URL('./loader-worker.js', import.meta.url),
+      'utf8'
+    )
+      .replace('__RUNME_LOADER_SHELL__', '"shell"')
+      .replace('__RUNME_LOADER_BOOTSTRAP__', '[]')
+    runInNewContext(source, {
+      self: {
+        location: { origin: 'https://runme.test' },
+        addEventListener: (name: string, handler: (event: unknown) => void) =>
+          listeners.set(name, handler),
+      },
+      caches: { open: openCache },
+      URL,
+    })
+    const respondWith = vi.fn()
+    listeners.get('fetch')!({
+      request: new Request('https://runme.test/configs/app-configs.yaml', {
+        cache: 'no-store',
+      }),
+      respondWith,
+    })
+    expect(respondWith).not.toHaveBeenCalled()
+    expect(openCache).not.toHaveBeenCalled()
+  })
+
   it('verifies on-demand fonts using startup metadata before the full offline marker exists', async () => {
     const id = `${'a'.repeat(40)}-${'b'.repeat(64)}`
     const sha256 = await digest(new TextEncoder().encode('verified').buffer)
