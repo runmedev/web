@@ -8,6 +8,7 @@ export const DRIVE_LINK_STATUS_DOCUMENT_URI = 'status://drive-link'
 export const DRIVE_SYNC_STATUS_DOCUMENT_URI = 'status://drive-sync'
 export const OIDC_STATUS_DOCUMENT_URI = 'status://oidc'
 export const VERSION_INFO_DOCUMENT_URI = 'app://version'
+export const PIN_RELEASE_DOCUMENT_URI = 'app://pin-release'
 export const RUNNER_STATUS_DOCUMENT_URI = 'status://runners'
 const RUNNER_KERNELS_DOCUMENT_PREFIX = `${RUNNER_STATUS_DOCUMENT_URI}/`
 const RUNNER_KERNELS_DOCUMENT_SUFFIX = '/kernels'
@@ -187,6 +188,7 @@ export function deriveWorkspaceDocumentTitle(uri: string): string {
     return 'Google Drive Sync Status'
   }
   if (isOidcStatusUri(documentUri)) return 'Runme authentication'
+  if (documentUri === PIN_RELEASE_DOCUMENT_URI) return 'Pin Release'
   if (isVersionInfoUri(documentUri)) {
     return 'Version Information'
   }

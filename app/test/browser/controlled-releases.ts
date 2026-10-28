@@ -628,6 +628,21 @@ async function main() {
     console.log('PASS: deploy B; refresh and new tabs retain A')
     await openVersions(one)
     await one.screenshot({ path: output + '/00-version-information.png' })
+    const pinFlow = one.getByRole('button', { name: 'Pin Release', exact: true })
+    const hasPinFlow = await pinFlow.count() > 0
+    if (hasPinFlow) {
+      await pinFlow.click()
+      await one.getByRole('tab', { name: 'Pin Release', exact: true }).waitFor()
+      await one.screenshot({ path: output + '/00-pin-release-choices.png' })
+      await one.getByRole('button', { name: /Choose another release/ }).click()
+      await one.getByRole('button', { name: 'Load published releases', exact: true }).click()
+      await one.getByRole('button', { name: new RegExp(`Commit ${expected.b.slice(0, 8)}`) }).click()
+      await one.screenshot({ path: output + '/00-pin-release-review.png' })
+      assert.equal((await one.evaluate(() => (window as any).runmeVersions.get())).selection.kind, 'channel')
+      await one.getByRole('button', { name: 'Back', exact: true }).click()
+      await one.getByRole('button', { name: 'Back', exact: true }).click()
+      await one.getByRole('button', { name: /Keep the installed release/ }).click()
+    }
     await one
       .getByRole('button', { name: 'Pin installed release', exact: true })
       .click()
@@ -638,6 +653,7 @@ async function main() {
         s.selection.releaseId === a &&
         !s.candidate
     )
+    if (hasPinFlow) await one.getByRole('button', { name: 'Back to version information', exact: true }).click()
     await one
       .getByRole('button', { name: 'Check for updates', exact: true })
       .click()

@@ -91,8 +91,12 @@ advances even when the stable application channel is pinned.
 ## Recovery while the app is already open
 
 - Inject a rejected or never-settling `runmeVersions.get()` after opening Version
-  Information. Recovery navigation, commit/release selection, published-release
-  discovery, and memory-only diagnostics must remain available. Also cover an
+  Information. The **Pin Release** button must remain available and open a
+  separate workspace tab. Users choose the installed release or select another
+  build by browsing or entering a commit. Reviewing a selection has no side
+  effects; pinning and activation are separate actions. Recovery navigation and
+  memory-only diagnostics remain reachable under **Troubleshooting**, even
+  while settings or a download are stalled. Also cover an
   older launcher without the new recovery API: the selected release is carried
   to the independent recovery page without navigating the editor tab away.
 - Preparing a build downloads and verifies it without accessing release settings.

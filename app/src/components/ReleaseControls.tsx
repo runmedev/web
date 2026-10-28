@@ -1,5 +1,6 @@
 import { StorageWorkerControls } from './StorageWorkerControls'
-import { ReleaseRecoveryControls } from './ReleaseRecoveryControls'
+import { showWorkspaceDocument } from '../lib/workspaceDocuments/workspaceDocumentController'
+import { PIN_RELEASE_DOCUMENT_URI } from '../lib/workspaceDocuments/workspaceDocumentTypes'
 import { Button } from '@radix-ui/themes'
 import { useCallback, useEffect, useState } from 'react'
 
@@ -20,9 +21,24 @@ import type { OfflineDownloadStatus } from '../releases/runtime'
 export function ReleaseControls() {
   return (
     <>
-      <ReleaseRecoveryControls />
+      <section
+        aria-label="Application versions"
+        className="space-y-4 rounded-lg border border-nb-border bg-white p-4"
+      >
+        <div
+          id="release-controls-heading"
+          className="flex items-center justify-between gap-4"
+        >
+          <h2 className="text-base font-semibold">Application versions</h2>
+          <Button
+            onClick={() => showWorkspaceDocument(PIN_RELEASE_DOCUMENT_URI)}
+          >
+            Pin Release
+          </Button>
+        </div>
+        <InstalledReleaseControls />
+      </section>
       <StorageWorkerControls />
-      <InstalledReleaseControls />
     </>
   )
 }
@@ -131,11 +147,7 @@ function InstalledReleaseControls() {
     state.selection.kind === 'channel' ? state.selection.name : 'Pinned release'
 
   return (
-    <section
-      aria-label="Application versions"
-      className="space-y-4 rounded-lg border border-nb-border bg-white p-4"
-    >
-      <h2 className="text-base font-semibold">Application versions</h2>
+    <div id="installed-release-controls" className="space-y-4">
       <dl className="grid grid-cols-[120px_1fr] gap-2">
         <dt>Current channel</dt>
         <dd>{selection}</dd>
@@ -206,20 +218,6 @@ function InstalledReleaseControls() {
         >
           Check for updates
         </Button>
-        {active && (
-          <Button
-            disabled={busy || !!state.transition}
-            onClick={() =>
-              void run(() =>
-                api.pin
-                  ? api.pin()
-                  : api.check({ kind: 'pinned', releaseId: active.releaseId })
-              )
-            }
-          >
-            Pin installed release
-          </Button>
-        )}
       </div>
       {hasUpdate && (
         <Button
@@ -232,8 +230,9 @@ function InstalledReleaseControls() {
       {state.transition && (
         <div id="release-transition-actions" className="space-y-2">
           <p>
-            Upgrade {state.transition.phase}. Each tab must preserve its edits
-            before the upgrade can finish.
+            {state.transition.phase === 'prepare'
+              ? 'An older upgrade is pending. Cancel it to start a new upgrade.'
+              : 'Starting the selected storage worker. Other tabs stay open.'}
           </p>
           {state.transition.phase === 'prepare' && (
             <Button
@@ -325,6 +324,6 @@ function InstalledReleaseControls() {
           </Button>
         </div>
       </details>
-    </section>
+    </div>
   )
 }

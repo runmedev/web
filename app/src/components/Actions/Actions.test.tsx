@@ -2767,6 +2767,15 @@ describe('Actions tabs', () => {
     })
   })
 
+  it('renders the Pin Release flow as its own workspace tab', () => {
+    contextMocks.currentDoc = 'app://pin-release'
+    contextMocks.workspaceDocuments = [{ uri: 'app://pin-release', title: 'Pin Release' }]
+    render(<Actions />)
+    expect(screen.getByRole('tab', { name: 'Pin Release' })).toBeTruthy()
+    expect(screen.getByRole('button', { name: /Choose another release/ })).toBeTruthy()
+    expect(screen.queryByText('Recovery and rollback')).toBeNull()
+  })
+
   it('renders the version information workspace document as a tab', () => {
     contextMocks.currentDoc = VERSION_INFO_DOCUMENT_URI
     contextMocks.workspaceDocuments = [

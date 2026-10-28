@@ -45,9 +45,8 @@ it('keeps targeted worker controls available when settings fail and a worker is 
       await screen.findByText(/Release settings read timeout/)
     ).toBeTruthy()
     expect(
-      screen.getByRole('button', { name: 'Browse published releases' })
+      screen.getByRole('button', { name: 'Pin Release' })
     ).toBeTruthy()
-    expect(screen.getByLabelText('Commit SHA or release ID')).toBeTruthy()
     const row = screen.getByText('Instance: worker-two').closest('div')!
     const force = within(row).getByRole('button', { name: 'Force stop worker' })
     expect(force.hasAttribute('disabled')).toBe(false)
