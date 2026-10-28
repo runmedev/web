@@ -35,7 +35,7 @@ function browserErrorName(cause: unknown): string | undefined {
 }
 
 /** Distinguish a browser storage failure from a rejected coordination decision.
- * Only the former triggers automatic stable recovery. Never log stored values.
+ * Storage failures expose independent recovery controls. Never log stored values.
  */
 export class ReleaseControlError extends Error {
   constructor(

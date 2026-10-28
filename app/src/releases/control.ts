@@ -3,6 +3,7 @@ import {
   LAUNCHER_POINTER,
   launcherDescriptor,
 } from './launcherSelection'
+import { notifyReleaseChange } from './releaseChanges'
 import { releaseTransaction } from './releaseDatabase'
 
 /** Loader protocol 1 is independent of notebook schemas and application builds. */
@@ -84,7 +85,7 @@ export async function control<T>(
   mutate: (state: Control) => T,
   write = true
 ): Promise<T> {
-  return releaseTransaction(CONTROL_DB, write, (value) => {
+  const result = await releaseTransaction(CONTROL_DB, write, (value) => {
     const state: Control = (value as Control | undefined) ?? {
       format: 1,
       selection: { kind: 'channel', name: 'stable' },
@@ -95,6 +96,8 @@ export async function control<T>(
     const result = mutate(state)
     return { state, result }
   })
+  if (write) notifyReleaseChange()
+  return result
 }
 
 export const readControl = () => control((state) => state, false)
@@ -357,6 +360,23 @@ export async function discover(selection: Selection): Promise<Manifest> {
  */
 export async function pruneUnusedCaches(): Promise<number> {
   return navigator.locks.request('runme-release-cache', async () => {
+    // Tab bookkeeping is maintenance requested by the user, never startup work.
+    const snapshot = await readControl()
+    const closed: string[] = []
+    for (const id of Object.keys(snapshot.tabs)) {
+      if (
+        await navigator.locks.request(
+          `runme-release-tab-${id}`,
+          { ifAvailable: true },
+          (lock) => Boolean(lock)
+        )
+      )
+        closed.push(id)
+    }
+    if (closed.length)
+      await control((state) => {
+        for (const id of closed) delete state.tabs[id]
+      })
     const state = await readControl()
     const keep = new Set([
       state.active?.manifest.releaseId,

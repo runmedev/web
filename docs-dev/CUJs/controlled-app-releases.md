@@ -28,12 +28,14 @@ Acceptance:
 - Startup diagnostics expose timestamped stage, duration, and waiting/failure
   events before the app starts. The trace is bounded, stays in memory, and does
   not include notebook data, credentials, or URL query parameters.
-- A stalled release-settings open times out and automatically tries latest stable
-  through verified downloads and normal admission. Persistent settings failures
-  expose retry, channel and exact-release controls without accessing IndexedDB.
-  Retrying after the browser recovers opens the app without resetting stored state.
-  Unit tests cover missing records, blocked/failed/late opens, read failures,
-  stalled commits, abort cleanup, and preserving existing epochs/transitions.
+- A stalled release-settings open shows independent recovery controls without
+  changing selection or activating stable automatically. Explicit retry opens
+  the installed release. A later admission `get` timeout records failed startup
+  and exposes the same controls; retry retains the installed release.
+- Normal startup neither scans peer tab locks nor resumes pending upgrades.
+  Release-change hints update badges without a periodic tab reconciliation loop.
+  Only explicit activation/retry starts a pending worker (except first install).
+  Abandoned activation remains visible for an explicit retry.
 - An irrecoverable settings value (`NotReadableError`) is quarantined only when
   no storage owner or other tab remains. The old object store is preserved, a
   version bump fences older readers, and the recovered state uses bounded chunks.
