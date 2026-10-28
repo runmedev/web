@@ -253,7 +253,7 @@ describe("DriveNotebookStore", () => {
       appProperties: { runmeCreateOperationId: "different-source" },
     });
     await expect(
-      store.getDerivedCopyTarget(driveFileUrl("unrelated"), "intended-source")
+      store.getDerivedCopyTarget(driveFileUrl("unrelated"), driveFileUrl("intended-source"))
     ).rejects.toThrow("refusing to overwrite");
   });
 

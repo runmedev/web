@@ -40,3 +40,23 @@ Out-of-order profile tests verify content and placement together. Both transport
 are checked for multipart updates after a client-side version preflight without
 ETags or If-Match. A write between the final preflight and upload can still
 race; these tests do not assert a server-side lock.
+
+## Workload identity to end-user export
+
+1. Create and export a source notebook using workload identity. Verify the
+   generated file has `properties.runmeDerivedFrom` equal to the source Drive ID.
+2. Open and save the same source using an end user's OAuth identity. Verify the
+   existing Colab file ID receives the new content, even with no visible
+   `appProperties`. No duplicate copy should be created.
+3. Repeat with a legacy export whose private marker is invisible to the end user.
+   Verify its embedded source provenance is checked and the ordinary Drive
+   property is added before the same copy is updated.
+4. Point the source claim at an ordinary `.ipynb` or one with a different source
+   marker. Verify export fails and neither that file's content nor its metadata
+   changes. A matching filename is not ownership evidence.
+5. Lose the response to a Shared Drive create, then retry with the other identity.
+   Verify discovery uses the shared source property and recovers the same file.
+
+`storage/derivedCopyOwnership.test.ts` exercises the REST client with separate
+workload and end-user tokens, shared properties and no private markers. It also
+covers legacy migration, unrelated-file refusal and ambiguous recovery.
