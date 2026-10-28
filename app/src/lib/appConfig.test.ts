@@ -12,6 +12,58 @@ async function loadModules() {
   }
 }
 
+describe('deployment config URL', () => {
+  afterEach(() => {
+    vi.unstubAllEnvs()
+    vi.unstubAllGlobals()
+    window.history.replaceState(null, '', '/')
+    window.localStorage.clear()
+  })
+
+  it.each([
+    { release: '', base: '/', path: '/' },
+    {
+      release: '',
+      base: '/runme-dev-assets/',
+      path: '/runme-dev-assets/index.html',
+    },
+    {
+      release: 'test-release',
+      base: '/version/test-release/',
+      path: '/?session=calm-pebble',
+    },
+    {
+      release: 'test-release',
+      base: '/version/test-release/',
+      path: '/version/test-release/index.html',
+    },
+  ])(
+    'preloads origin config for $path with base $base',
+    async ({ release, base, path }) => {
+      window.localStorage.clear()
+      window.history.replaceState(null, '', path)
+      vi.stubEnv('VITE_RUNME_RELEASE_ID', release)
+      vi.stubEnv('BASE_URL', base)
+      const fetchConfig = vi.fn(
+        async () =>
+          new Response('googleDrive:\n  clientID: deployment-client\n')
+      )
+      vi.stubGlobal('fetch', fetchConfig)
+      const { maybeSetAppConfig } = await loadModules()
+
+      const applied = await maybeSetAppConfig()
+
+      const expectedUrl = `${window.location.origin}/configs/app-configs.yaml`
+      expect(fetchConfig).toHaveBeenCalledWith(expectedUrl, {
+        cache: 'no-store',
+        signal: expect.any(AbortSignal),
+      })
+      expect(applied?.url).toBe(expectedUrl)
+      expect(applied?.googleOAuth?.clientId).toBe('deployment-client')
+    }
+  )
+})
+
 describe('appConfig OIDC Google shorthand', () => {
   afterEach(() => vi.unstubAllGlobals())
   beforeEach(() => {
