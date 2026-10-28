@@ -18,6 +18,7 @@ import {
 import { loaderController } from './loaderController'
 import { recoverUnreadableControl } from './recoverControl'
 import { withRecoveryOwner } from './recoveryOwnerLock'
+import { type ReleaseAttention, releaseAttention } from './releaseAttention'
 import { resolvePublishedRelease } from './releaseCatalog'
 import { ReleaseControlError } from './releaseDatabase'
 import { releaseDatabaseDiagnostics } from './releaseDiagnostics'
@@ -84,6 +85,8 @@ let ownerKey = ''
 let dismissedCandidate: string | undefined
 let appReady = false
 let versionUiUsers = 0
+let attentionUiUsers = 0
+let attention: ReleaseAttention | undefined
 let transitioning = false
 let tabUpdateAvailable = false
 let details = recovery
@@ -131,6 +134,11 @@ function completeOffline(manifest: Manifest): Promise<void> {
 
 /** Display diagnostics as text, never executable release metadata or user content. */
 function report(value: unknown, nextProgress?: ReleaseProgress): void {
+  if (value instanceof Error)
+    attention = {
+      kind: 'error',
+      message: 'Version information needs attention',
+    }
   status.textContent = String(value instanceof Error ? value.message : value)
   progress = nextProgress
   progressBar.hidden = !progress
@@ -173,8 +181,7 @@ function updatePanelVisibility(): void {
     appReady &&
     versionUiUsers > 0 &&
     !recovery &&
-    !transitioning &&
-    !tabUpdateAvailable
+    (attentionUiUsers > 0 || (!transitioning && !tabUpdateAvailable))
 }
 
 /** A held tab lock is proof of liveness, including suspended tabs. No heartbeat
@@ -642,6 +649,7 @@ async function render(): Promise<void> {
   const generation = ++renderGeneration
   const s = await readControl()
   if (generation !== renderGeneration) return
+  attention = releaseAttention(s, runtime?.active.manifest.releaseId)
   transitioning = Boolean(s.transition)
   tabUpdateAvailable = Boolean(
     runtime &&
@@ -978,14 +986,17 @@ window.runmeVersions = {
     await tick()
   },
   uiVersion: 1,
-  registerVersionUi: () => {
+  attention: () => attention,
+  registerVersionUi: (options) => {
     versionUiUsers++
+    if (options?.attention) attentionUiUsers++
     updatePanelVisibility()
     let released = false
     return () => {
       if (released) return
       released = true
       versionUiUsers--
+      if (options?.attention) attentionUiUsers--
       updatePanelVisibility()
     }
   },

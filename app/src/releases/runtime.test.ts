@@ -15,7 +15,7 @@ it('explicitly hands version controls to the app and releases them on cleanup', 
     registerVersionUi,
   } as unknown as NonNullable<typeof window.runmeVersions>
   const cleanup = adoptLegacyVersionUi()
-  expect(registerVersionUi).toHaveBeenCalledOnce()
+  expect(registerVersionUi).toHaveBeenCalledWith({ attention: true })
   cleanup()
   expect(release).toHaveBeenCalledOnce()
 })

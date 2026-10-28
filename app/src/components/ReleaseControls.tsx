@@ -1,3 +1,4 @@
+import { useReleaseAttention } from '../releases/useReleaseAttention'
 import { StorageWorkerControls } from './StorageWorkerControls'
 import { showWorkspaceDocument } from '../lib/workspaceDocuments/workspaceDocumentController'
 import { PIN_RELEASE_DOCUMENT_URI } from '../lib/workspaceDocuments/workspaceDocumentTypes'
@@ -19,6 +20,7 @@ import type { OfflineDownloadStatus } from '../releases/runtime'
  * the common commands and can use the independent recovery page for rollback.
  */
 export function ReleaseControls() {
+  const attention = useReleaseAttention()
   return (
     <>
       <section
@@ -36,6 +38,15 @@ export function ReleaseControls() {
             Pin Release
           </Button>
         </div>
+        {attention && (
+          <p
+            id="release-attention"
+            role="status"
+            className="rounded-md border border-blue-200 bg-blue-50 px-3 py-2 font-medium text-blue-900"
+          >
+            {attention.message}. Manage this tab’s version below.
+          </p>
+        )}
         <InstalledReleaseControls />
       </section>
       <StorageWorkerControls />

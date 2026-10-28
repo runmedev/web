@@ -121,7 +121,8 @@ jobs:
       - name: Test release controls and manifest discovery
         run: >-
           pnpm -C app exec vitest run
-          src/releases/control.test.ts src/releases/runtime.test.ts
+          src/releases/control.test.ts src/releases/runtime.test.ts src/releases/releaseAttention.test.ts
+          src/components/SidePanel/SidePanel.test.tsx
           src/releases/bootstrap.test.ts src/releases/launcherSelection.test.ts src/releases/loaderController.test.ts
           src/releases/releaseDatabase.test.ts src/releases/startupRecovery.test.ts src/releases/recoverControl.test.ts src/releases/controlChunks.test.ts src/releases/recoveryOwnerLock.test.ts src/storage/releaseOwnerFailure.test.ts
           src/releases/startupDiagnostics.test.ts

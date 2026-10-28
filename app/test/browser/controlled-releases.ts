@@ -697,6 +697,17 @@ async function main() {
         s.selection.name === 'stable' && s.candidate?.releaseId === expected.b
     )
     assert.equal(await active(one), a)
+    if (!process.env.RUNME_RELEASE_BASELINE) {
+      await one.getByTestId('version-attention-badge').waitFor()
+      assert.equal(
+        await one
+          .getByTestId('version-attention-badge')
+          .getAttribute('data-kind'),
+        'update'
+      )
+      await one.locator('#runme-release-panel').waitFor({ state: 'hidden' })
+      await one.screenshot({ path: output + '/00-version-attention.png' })
+    }
     console.log(
       'PASS: Information view owns controls; exact pin and channel selection never activate implicitly'
     )
@@ -809,6 +820,25 @@ async function main() {
         (s) => !s.transition && s.active?.manifest.releaseId === b
       )
       assert.equal(await active(two), a, 'Saving must not reload the older UI')
+      await two.waitForFunction(
+        () =>
+          document
+            .querySelector('[data-testid="version-attention-badge"]')
+            ?.getAttribute('data-kind') === 'reload'
+      )
+      await two.locator('#runme-release-panel').waitFor({ state: 'hidden' })
+      await two
+        .getByRole('button', { name: 'Open Version Information', exact: true })
+        .click()
+      await two
+        .getByRole('button', {
+          name: 'Preserve edits and reload this tab',
+          exact: true,
+        })
+        .waitFor()
+      await two.screenshot({
+        path: output + '/02-outdated-tab-information.png',
+      })
       // A local backup failure must not reload this page or roll back the worker.
       const thirdId = await three.evaluate(
         () => (window as any).runmeRelease.tabId
@@ -1013,32 +1043,40 @@ async function main() {
       .waitFor({ timeout: 30000 })
     assert.equal(await recovery.locator('#root').textContent(), '')
     await recovery.screenshot({ path: output + '/06-independent-recovery.png' })
-    // Return explicitly enters the notebook app, preserving this tab's session.
-    // Leave the independent selector open afterward for broken-release recovery.
-    const returnLink = recovery.getByRole('link', {
-      name: 'Return to Runme',
-      exact: true,
-    })
-    assert.equal(
-      await returnLink.getAttribute('href'),
-      '/?session=recovery-return#notebooks'
-    )
-    await returnLink.click()
-    await ready(recovery)
-    assert.equal(new URL(recovery.url()).pathname, '/')
-    assert.equal(
-      new URL(recovery.url()).searchParams.get('session'),
-      'recovery-return'
-    )
-    assert.equal(new URL(recovery.url()).hash, '#notebooks')
-    await recovery.screenshot({ path: output + '/06-return-to-runme.png' })
-    await recovery.goto(base + '/recovery.html')
-    await recovery
-      .getByRole('link', { name: 'Return to Runme', exact: true })
-      .waitFor()
-    console.log(
-      'PASS: recovery stays independent and explicitly returns to the app with the same session'
-    )
+    // The frozen pre-bootstrap service worker still serves its old root
+    // recovery page offline. Only the current launcher contains this new UI.
+    if (!historicalApp) {
+      // Return explicitly enters the notebook app, preserving this tab's session.
+      // Leave the independent selector open afterward for broken-release recovery.
+      const returnLink = recovery.getByRole('link', {
+        name: 'Return to Runme',
+        exact: true,
+      })
+      assert.equal(
+        await returnLink.getAttribute('href'),
+        '/?session=recovery-return#notebooks'
+      )
+      await returnLink.click()
+      await ready(recovery)
+      assert.equal(new URL(recovery.url()).pathname, '/')
+      assert.equal(
+        new URL(recovery.url()).searchParams.get('session'),
+        'recovery-return'
+      )
+      assert.equal(new URL(recovery.url()).hash, '#notebooks')
+      await recovery.screenshot({ path: output + '/06-return-to-runme.png' })
+      await recovery.goto(base + '/recovery.html')
+      await recovery
+        .getByRole('link', { name: 'Return to Runme', exact: true })
+        .waitFor()
+      console.log(
+        'PASS: recovery stays independent and explicitly returns to the app with the same session'
+      )
+    } else {
+      console.log(
+        'PASS: frozen historical recovery remains independent of app imports'
+      )
+    }
     if (process.env.RUNME_TEST_BROKEN) {
       await context.setOffline(false)
       await fetch(base + '/test/promote?release=broken', { method: 'POST' })

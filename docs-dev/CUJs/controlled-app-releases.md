@@ -21,7 +21,10 @@ Acceptance:
 - The floating launcher disappears after startup only when the loaded app
   explicitly registers its version controls. Older clients retain the fallback
   controls. With a current app, the left Information icon opens version controls
-  inside the Version Information document.
+  inside the Version Information document. A badge and descriptive tooltip on the
+  Information icon signal a downloaded update, an outdated tab, or a version
+  problem. Apps supporting this affordance keep the overlay hidden during
+  updates and handoffs; actions and status remain in Version Information.
 - Startup diagnostics expose timestamped stage, duration, and waiting/failure
   events before the app starts. The trace is bounded, stays in memory, and does
   not include notebook data, credentials, or URL query parameters.
@@ -63,7 +66,7 @@ Acceptance:
 - Historical rollback requires a durable flush of the initiating tab. Current peers refuse checkpoint reload into an app without `tabRecoveryFormat: 1`, retaining their mounted editors.
 - Historical launchers retain their original behavior. The frozen-baseline migration closes durable legacy peers before activation; the initiating historical app flushes locally before worker replacement.
 - After full offline readiness, offline restart uses B; offline rollback to A preserves edits made on B and leaves other tabs on their loaded UI versions.
-- The recovery selector works independently of React/application imports, explains
+- The current recovery selector works independently of React/application imports, explains
   that notebooks open in the app, and keeps **Return to Runme** visible. Returning
   opens the app in the same tab with its session and hash preserved.
 - A checksum-valid but throwing app entry can be recovered through the selector

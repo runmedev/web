@@ -6,6 +6,7 @@ import type {
   ReleaseProgress,
   Selection,
 } from './control'
+import type { ReleaseAttention } from './releaseAttention'
 import type { releaseDatabaseDiagnostics } from './releaseDiagnostics'
 
 /** The independent launcher owns worker activation; React registers this tab’s
@@ -39,7 +40,8 @@ declare global {
       prepareRecovery?: (selection: Selection) => Promise<Manifest>
       recover?: (selection: Selection) => Promise<void>
       uiVersion?: number
-      registerVersionUi?: () => () => void
+      registerVersionUi?: (options?: { attention?: boolean }) => () => void
+      attention?: () => ReleaseAttention | undefined
       status?: () => string
       progress?: () => ReleaseProgress | undefined
       offline?: (releaseId: string) => OfflineDownloadStatus | undefined
@@ -57,7 +59,7 @@ declare global {
  */
 export function adoptLegacyVersionUi(): () => void {
   if (window.runmeVersions?.registerVersionUi)
-    return window.runmeVersions.registerVersionUi()
+    return window.runmeVersions.registerVersionUi({ attention: true })
   if (window.runmeVersions?.uiVersion) return () => {}
   const panel = document.getElementById('runme-release-panel')
   const root = document.getElementById('root')

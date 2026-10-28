@@ -67,6 +67,8 @@ import AuthenticationSettingsPanel from '../AuthenticationSettings/Authenticatio
 import { SuggestionGraderSettings } from '../SuggestionGraderSettings/SuggestionGraderSettings'
 import { showToast } from '../../lib/toast'
 
+import { useReleaseAttention } from '../../releases/useReleaseAttention'
+
 const sideButtonBase = 'group side-btn'
 
 const sideButtonInactive = 'side-btn-inactive'
@@ -238,6 +240,7 @@ function OpenDocumentsPanel() {
 }
 
 export function SidePanelToolbar() {
+  const versionAttention = useReleaseAttention()
   // Keep the indicator current even while the vault panel is closed.
   const vaultSnapshot = useSyncExternalStore(keyVault.subscribe, keyVault.getSnapshot)
   const vaultUnlocked = vaultSnapshot.status === 'unlocked'
@@ -718,10 +721,25 @@ export function SidePanelToolbar() {
           }`}
           aria-pressed={versionInfoSelected}
           aria-label="Open Version Information"
+          aria-description={versionAttention?.message}
           onClick={handleVersionInfoClick}
         >
-          <InformationCircleIcon className="h-5 w-5" />
-          <span className={tooltipBase}>Version Information</span>
+          <span className="relative inline-flex">
+            <InformationCircleIcon className="h-5 w-5" />
+            {versionAttention && (
+              <span
+                data-testid="version-attention-badge"
+                data-kind={versionAttention.kind}
+                aria-hidden="true"
+                className={`absolute -right-1 -top-1 flex h-3 w-3 items-center justify-center rounded-full border border-white text-[9px] font-bold text-white ${versionAttention.kind === 'error' || versionAttention.kind === 'reload' ? 'bg-amber-600' : 'bg-blue-600'}`}
+              >
+                !
+              </span>
+            )}
+          </span>
+          <span className={tooltipBase}>
+            {versionAttention ? `Version Information — ${versionAttention.message}` : 'Version Information'}
+          </span>
         </button>
       </div>
     </div>
