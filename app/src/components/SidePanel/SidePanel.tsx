@@ -12,6 +12,7 @@ import {
   UserCircleIcon,
   Cog6ToothIcon,
   SparklesIcon,
+  TableCellsIcon,
 } from '@heroicons/react/24/outline'
 import { XMarkIcon } from '@heroicons/react/20/solid'
 import { CloudIcon as CloudSolidIcon, KeyIcon } from '@heroicons/react/24/solid'
@@ -66,6 +67,7 @@ import { keyVault } from '../../lib/keyvault/store'
 import AuthenticationSettingsPanel from '../AuthenticationSettings/AuthenticationSettingsPanel'
 import { SuggestionGraderSettings } from '../SuggestionGraderSettings/SuggestionGraderSettings'
 import { showToast } from '../../lib/toast'
+import EnvironmentPanel from '../Environment/EnvironmentPanel'
 
 import { useReleaseAttention } from '../../releases/useReleaseAttention'
 
@@ -539,6 +541,19 @@ export function SidePanelToolbar() {
         </button>
         <button
           type="button"
+          data-tour-id="left-nav.environment"
+          className={`${sideButtonBase} ${
+            activePanel === 'environment' ? sideButtonActive : sideButtonInactive
+          }`}
+          aria-pressed={activePanel === 'environment'}
+          aria-label="Toggle Environment panel"
+          onClick={() => togglePanel('environment')}
+        >
+          <TableCellsIcon className="h-5 w-5" />
+          <span className={tooltipBase}>Environment</span>
+        </button>
+        <button
+          type="button"
           data-tour-id="left-nav.logs"
           className={`${sideButtonBase} ${
             logsSelected ? sideButtonActive : sideButtonInactive
@@ -751,6 +766,7 @@ export function SidePanelContent() {
 
   return (
     <div className="relative h-full min-h-0 w-full">
+      {activePanel === 'environment' && <EnvironmentPanel />}
       {activePanel === 'keyvault' && <KeyVaultPanel />}
       {activePanel === 'grader' && <SuggestionGraderSettings />}
       <div

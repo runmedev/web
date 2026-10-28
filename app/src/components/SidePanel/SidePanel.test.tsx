@@ -13,6 +13,7 @@ type PanelKey =
   | 'explorer'
   | 'documentation'
   | 'authentication'
+  | 'environment'
   | 'grader'
   | 'open-documents'
   | 'outline'
@@ -154,6 +155,11 @@ vi.mock('../../lib/toast', () => ({
 import { SidePanelContent, SidePanelToolbar } from './SidePanel'
 
 describe('SidePanelToolbar drive status button', () => {
+  it('opens Environment from the left navigation', () => {
+    render(<SidePanelToolbar />)
+    fireEvent.click(screen.getByRole('button', { name: 'Toggle Environment panel' }))
+    expect(togglePanelMock).toHaveBeenCalledWith('environment')
+  })
   beforeEach(() => {
     authData = null
     isDriveSyncing = false
@@ -599,6 +605,11 @@ describe('SidePanelToolbar drive status button', () => {
 })
 
 describe('SidePanelContent', () => {
+  it('renders the Environment table when selected', () => {
+    activePanelState = 'environment'
+    render(<SidePanelContent />)
+    expect(screen.getByRole('table', { name: 'Saved environment variables' })).toBeTruthy()
+  })
   beforeEach(() => {
     activePanelState = 'explorer'
     currentDocUri = null
