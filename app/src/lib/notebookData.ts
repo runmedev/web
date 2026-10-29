@@ -900,6 +900,19 @@ export class NotebookData {
     )
   }
 
+  /**
+   * Reports whether this tab currently owns a live execution for the cell on
+   * any backend (runner stream, Jupyter socket or pending launch, AppKernel).
+   */
+  hasActiveExecution(refId: string): boolean {
+    return (
+      this.activeStreams.has(refId) ||
+      this.activeJupyterSockets.has(refId) ||
+      this.pendingJupyterExecutions.has(refId) ||
+      this.activeAppKernelExecutions.has(refId)
+    )
+  }
+
   async cancelActiveExecutions(
     message = 'Execution cancelled because another session requested write access.\n'
   ): Promise<void> {
@@ -2275,6 +2288,22 @@ export class CellData {
     const snap = this.snapshot
     const id = snap?.metadata?.[RunmeMetadataKey.LastRunID]
     return typeof id === 'string' ? id : ''
+  }
+
+  /**
+   * Whether the cell is executing in this tab. Only runner streams report a
+   * PID, so views use this to show progress for Jupyter and AppKernel runs too.
+   * The running state is persisted, so it is only trusted while this tab still
+   * owns the execution; a stale state restored from storage is ignored.
+   */
+  isExecuting(): boolean {
+    const metadata = this.snapshot?.metadata ?? {}
+    return (
+      metadata[RunmeMetadataKey.ExecutionState] ===
+        RunmeExecutionState.Running &&
+      typeof metadata[RunmeMetadataKey.ExitCode] !== 'string' &&
+      this.notebook.hasActiveExecution(this.refId)
+    )
   }
 
   setRunner(name: string): void {

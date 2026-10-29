@@ -29,7 +29,11 @@ import { MemoryConflictDocStorage } from '../../storage/conflictDocs'
 import { MemoryRevisionDocStorage } from '../../storage/revisionDocs'
 import { MemoryIpynbShadowStorage } from '../../storage/ipynbShadows'
 
-import { parser_pb, RunmeMetadataKey } from '../../runme/client'
+import {
+  parser_pb,
+  RunmeExecutionState,
+  RunmeMetadataKey,
+} from '../../runme/client'
 import type { CellData } from '../../lib/notebookData'
 import type { NotebookOwnershipRecord } from '../../lib/tabCoordination/notebookOwnership'
 import { computeNotebookDiff } from '../../lib/notebookDiff/diff'
@@ -388,6 +392,8 @@ class StubCellData {
   })
   setJupyterKernel = () => {}
   clearJupyterKernel = () => {}
+  executing = false
+  isExecuting = () => this.executing
   update = vi.fn((nextCell: parser_pb.Cell) => {
     this.snapshot = clone(parser_pb.CellSchema, nextCell)
     this.listeners.forEach((listener) => listener())
@@ -3314,6 +3320,40 @@ describe('Action component', () => {
     expect(stub.addBefore).not.toHaveBeenCalled()
     expect(stub.addAfter).not.toHaveBeenCalled()
     expect(languageSelect?.disabled ?? true).toBe(true)
+  })
+
+  it('shows the run spinner for executions that do not report a pid', async () => {
+    const cell = create(parser_pb.CellSchema, {
+      refId: 'cell-jupyter-running',
+      kind: parser_pb.CellKind.CODE,
+      languageId: 'jupyter',
+      outputs: [],
+      metadata: {
+        [RunmeMetadataKey.LastRunID]: 'run-jupyter',
+        [RunmeMetadataKey.ExecutionState]: RunmeExecutionState.Running,
+      },
+      value: 'import time; time.sleep(5)',
+    })
+    const stub = new StubCellData(cell)
+    stub.executing = true
+
+    render(<Action cellData={stub as unknown as CellData} isFirst={false} />)
+
+    expect(screen.getByLabelText('Running...')).toBeTruthy()
+    expect(screen.queryByLabelText('Run code')).toBeNull()
+
+    await act(async () => {
+      const next = clone(parser_pb.CellSchema, stub.snapshot)
+      next.metadata[RunmeMetadataKey.ExitCode] = '0'
+      next.metadata[RunmeMetadataKey.ExecutionState] =
+        RunmeExecutionState.Completed
+      stub.executing = false
+      stub.update(next)
+      await Promise.resolve()
+    })
+
+    expect(screen.getByLabelText('Run code')).toBeTruthy()
+    expect(screen.queryByLabelText('Running...')).toBeNull()
   })
 
   it('updates CellConsole key when runID changes', async () => {
