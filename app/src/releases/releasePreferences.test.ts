@@ -204,3 +204,43 @@ it('leaves legacy owner settings readable when changing selection before migrati
     name: 'latest',
   })
 })
+
+it('ignores abandoned historical coordination without rewriting the original record', async () => {
+  const active = {
+    manifest: { ...manifest, storageControlFormat: undefined },
+    epoch: 3,
+  }
+  stored = {
+    format: 1,
+    selection: { kind: 'channel', name: 'stable' },
+    active,
+    tabs: { departed: { epoch: 3, releaseId: id } },
+    transition: {
+      id: 'abandoned',
+      target: manifest,
+      epoch: 4,
+      phase: 'handoff',
+      participants: {},
+    },
+    candidate: manifest,
+    ownerStartup: { releaseId: id, epoch: 4, phase: 'initializing' },
+    ownerError: { message: 'old worker failed' },
+  }
+  const original = structuredClone(stored)
+  const { readControl, control } = await import('./control')
+  expect(await readControl()).toEqual({
+    format: 1,
+    selection: { kind: 'channel', name: 'stable' },
+    active,
+    previous: undefined,
+    tabs: {},
+  })
+  // Recovery discovery is allowed, even when it retains the same channel.
+  await control((state) => {
+    state.candidate = manifest
+  })
+  expect((await readControl()).candidate).toEqual(manifest)
+  expect((await readControl()).transition).toBeUndefined()
+  expect(writes()).toHaveLength(0)
+  expect(stored).toEqual(original)
+})

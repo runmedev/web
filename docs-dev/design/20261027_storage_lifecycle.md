@@ -201,3 +201,5 @@ loader contract before `skipWaiting` and does not reload any editor. Ordinary
 refreshes still use their existing controller immediately. Channel/pin changes
 while an older release is installed stay in the cached preference copy until
 migration completes, leaving the old worker's format-1 record readable.
+
+Historical format-1 records are projected into saved selection, active and previous releases on read. Old tab registrations, handoffs, candidates and worker errors are ignored by the new launcher, without rewriting the historical record. This prevents abandoned coordination from blocking explicit migration while old workers still retain their original settings.

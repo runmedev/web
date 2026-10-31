@@ -124,13 +124,24 @@ export async function readControl(): Promise<Control> {
       state = await expandPreferences(cached)
     } else {
       // Read historical records without rewriting them on startup.
-      state = (value as Control | undefined) ?? {
+      const legacy = (value as Control | undefined) ?? {
         format: 1,
         selection: { kind: 'channel', name: 'stable' },
         tabs: {},
       }
-      if (state.format !== 1) throw new Error('Unsupported release preferences')
-      validateSelection(state.selection)
+      if (legacy.format !== 1)
+        throw new Error('Unsupported release preferences')
+      validateSelection(legacy.selection)
+      // Old handoffs, tab registrations and worker errors are not live state.
+      // Keep the original record untouched for historical workers, but never
+      // let an abandoned transition block explicit migration in this launcher.
+      state = {
+        format: 1,
+        selection: legacy.selection,
+        active: legacy.active,
+        previous: legacy.previous,
+        tabs: {},
+      }
     }
   } catch (error) {
     if (!cached) throw error
