@@ -309,32 +309,52 @@ it('tries the newest published inventory first, skipping unusable candidates wit
   expect(releaseTransaction).not.toHaveBeenCalled()
 })
 
-it('retains an explicit recovery choice when the unknown primary revision later becomes readable', async () => {
-  stored = {
-    format: 2,
-    revision: 100,
-    selection: { kind: 'channel', name: 'stable' },
-    active: { releaseId: id, epoch: 1 },
+it.each([undefined, '11111111-1111-4111-8111-111111111111'])(
+  'retains recovery choices over an unknown primary, including an earlier recovery (%s)',
+  async (recoveryId) => {
+    stored = {
+      format: 2,
+      revision: 100,
+      recoveryId,
+      selection: { kind: 'channel', name: 'stable' },
+      active: { releaseId: id, epoch: 1 },
+    }
+    const { enableCacheOnlyPreferences, control } = await import('./control')
+    enableCacheOnlyPreferences()
+    await control((state) => {
+      state.selection = { kind: 'channel', name: 'latest' }
+      state.active = { manifest, epoch: 10 }
+    })
+    expect(releaseTransaction).not.toHaveBeenCalled()
+    vi.resetModules()
+    const nextPage = await import('./control')
+    expect((await nextPage.readControl()).selection).toEqual({
+      kind: 'channel',
+      name: 'latest',
+    })
+    expect((await nextPage.readControl()).active?.epoch).toBe(10)
+    await nextPage.control((state) => {
+      state.selection = { kind: 'pinned', releaseId: id }
+    })
+    const mirrored = stored as {
+      recoveryId: string
+      revision: number
+      selection: unknown
+    }
+    expect(mirrored.recoveryId).toEqual(expect.any(String))
+    expect(mirrored.recoveryId).not.toBe(recoveryId)
+    // Once the generation is mirrored, ordinary revision ordering resumes.
+    stored = {
+      ...mirrored,
+      revision: mirrored.revision + 1,
+      selection: { kind: 'channel', name: 'stable' },
+    }
+    expect((await nextPage.readControl()).selection).toEqual({
+      kind: 'channel',
+      name: 'stable',
+    })
   }
-  const { enableCacheOnlyPreferences, control } = await import('./control')
-  enableCacheOnlyPreferences()
-  await control((state) => {
-    state.selection = { kind: 'channel', name: 'latest' }
-    state.active = { manifest, epoch: 10 }
-  })
-  expect(releaseTransaction).not.toHaveBeenCalled()
-  vi.resetModules()
-  const nextPage = await import('./control')
-  expect((await nextPage.readControl()).selection).toEqual({
-    kind: 'channel',
-    name: 'latest',
-  })
-  expect((await nextPage.readControl()).active?.epoch).toBe(10)
-  await nextPage.control((state) => {
-    state.selection = { kind: 'pinned', releaseId: id }
-  })
-  expect((stored as { recovered?: boolean }).recovered).toBe(true)
-})
+)
 
 it('retains a successful historical snapshot when explicit recovery switches to cache-only mode', async () => {
   const active = {

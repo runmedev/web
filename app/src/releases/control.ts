@@ -94,7 +94,7 @@ let volatile: Pick<Control, 'candidate' | 'transition' | 'ownerError'> = {}
 let revision = 0
 let preferCached = false
 let cacheOnly = false
-let recoveredPreferences = false
+let recoveryId: string | undefined
 let lastReadState: Control | undefined
 /** Recovery must not depend on the database that prevented startup. This mode
  * is page-local; explicit choices persist in Cache Storage, never repair IDB. */
@@ -122,7 +122,7 @@ export async function readControl(): Promise<Control> {
   const cached = await readSavedPreferences().catch(() => undefined)
   if (cacheOnly) {
     usingCached = true
-    recoveredPreferences = true
+    recoveryId = cached?.recoveryId
     revision = cached?.revision ?? revision
     try {
       state = cached ? await expandPreferences(cached) : undefined
@@ -149,17 +149,17 @@ export async function readControl(): Promise<Control> {
         const selected =
           cached &&
           (cached.revision > stored.revision ||
-            (cached.recovered && !stored.recovered))
+            (cached.recoveryId && cached.recoveryId !== stored.recoveryId))
             ? cached
             : stored
         usingCached = selected === cached
         revision = selected.revision
-        recoveredPreferences = Boolean(selected.recovered)
+        recoveryId = selected.recoveryId
         state = await expandPreferences(selected)
       } else if (cached) {
         usingCached = true
         revision = cached.revision
-        recoveredPreferences = Boolean(cached.recovered)
+        recoveryId = cached.recoveryId
         state = await expandPreferences(cached)
       } else {
         // Read historical records without rewriting them on startup.
@@ -188,7 +188,7 @@ export async function readControl(): Promise<Control> {
       preferCached = true
       usingCached = true
       revision = cached.revision
-      recoveredPreferences = Boolean(cached.recovered)
+      recoveryId = cached.recoveryId
       state = await expandPreferences(cached)
     }
   lastReadState = state
@@ -220,7 +220,10 @@ export async function control<T>(
     const changed = before !== JSON.stringify(preferences(state, 0))
     if (changed) {
       const record = preferences(state, revision + 1)
-      if (cacheOnly || recoveredPreferences) record.recovered = true
+      // Every cache-only commit starts a generation distinct from an unknown
+      // primary, even if that primary was itself written during an older recovery.
+      if (cacheOnly) record.recoveryId = crypto.randomUUID()
+      else if (recoveryId) record.recoveryId = recoveryId
       // Commit the independent copy first. If IDB fails or its outcome is
       // uncertain, the higher revision still preserves the explicit user choice.
       await savePreferences(record)

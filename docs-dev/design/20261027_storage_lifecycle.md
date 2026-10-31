@@ -214,9 +214,10 @@ for activation, boot, or subsequent version UI reads. Explicit startup recovery
 buttons download and verify their requested release, then use this same mode.
 They no longer retry the unavailable database before recording a choice.
 
-Recovered preference records carry a marker so an older primary record with an
-unknown, higher revision cannot undo recovery when IndexedDB becomes readable.
-Once a later explicit preference change copies that marker into IndexedDB,
+Each cache-only preference commit carries a new recovery generation ID so an
+older primary record with an unknown, higher revision cannot undo recovery when
+IndexedDB becomes readable, even after repeated recoveries. Once a later explicit
+preference change copies that generation ID into IndexedDB,
 normal revision comparison applies between the two copies again. Startup does
 not repair or overwrite IndexedDB. “Retry installed release” explicitly permits
 a fresh IndexedDB probe.
