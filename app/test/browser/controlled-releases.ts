@@ -391,6 +391,20 @@ async function main() {
       // writes forbidden. Keep real readonly IDB, cache, worker and notebook RPCs.
       const late = await context.newPage()
       try {
+        // A stalled global cache-maintenance operation must not gate startup.
+        await one.evaluate(
+          () =>
+            new Promise<void>((resolve) => {
+              void navigator.locks.request(
+                'runme-release-cache',
+                () =>
+                  new Promise<void>((release) => {
+                    ;(window as any).__releaseCacheMaintenance = release
+                    resolve()
+                  })
+              )
+            })
+        )
         await late.addInitScript(() => {
           const transaction = IDBDatabase.prototype.transaction
           ;(window as any).__releaseWrites = 0
@@ -407,6 +421,7 @@ async function main() {
         await late.goto(base + '/?session=readonly-settings-startup')
         await ready(late)
         assert.equal(await active(late), a)
+        await one.evaluate(() => (window as any).__releaseCacheMaintenance())
         await late.evaluate(() => {
           for (let i = 0; i < 5; i++) (window as any).runmeRelease.ready()
         })
@@ -444,6 +459,7 @@ async function main() {
           'PASS: installed app and notebook RPCs work without tab registration or readiness writes'
         )
       } finally {
+        await one.evaluate(() => (window as any).__releaseCacheMaintenance?.())
         await late.close()
       }
     }

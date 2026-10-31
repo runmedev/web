@@ -33,7 +33,8 @@ Acceptance:
   the installed release. Opening an installed current release and repeated app
   readiness callbacks perform no per-tab settings writes. The browser journey
   rejects every release `readwrite` transaction in the new tab and verifies app
-  rendering plus a real notebook creation through the worker.
+  rendering plus a real notebook creation through the worker. Holding the global
+  cache-maintenance lock in another tab must not block this cached startup.
 - Normal startup neither scans peer tab locks nor resumes pending upgrades.
   Release-change hints update badges without a periodic tab reconciliation loop.
   Only explicit activation/retry starts a pending worker (except first install).

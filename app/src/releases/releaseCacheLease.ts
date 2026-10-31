@@ -1,6 +1,6 @@
 /** A shared lifetime lease protects the app's lazy assets without persisting a
  * per-tab record. The browser releases it even when a document crashes. Callers
- * acquire it under runme-release-cache before verifying/importing app assets.
+ * acquire it before verifying/importing app assets, independently of downloads.
  */
 export function holdReleaseCache(releaseId: string): Promise<() => void> {
   return new Promise((resolve, reject) => {

@@ -118,8 +118,8 @@ racing the startup snapshot is rejected by the worker rather than authorized by 
 persistent admission record.
 
 A shared lifetime Web Lock named for the app release protects lazy-loaded assets.
-Startup acquires it under the shared cache-operation lock before verification;
-cleanup probes its exclusive counterpart without waiting. Failed verification or
+Startup acquires it before verification without waiting on global downloads or
+cleanup; cleanup probes its exclusive counterpart without waiting. Failed verification or
 selection rechecks release the lease; document destruction releases retained leases. Existing
 legacy tab records remain roots for cleanup until those tabs close. Old launchers
 that do not understand asset leases cannot provide this new cleanup guarantee.

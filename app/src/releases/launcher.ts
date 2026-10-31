@@ -670,38 +670,35 @@ async function boot(active: Active): Promise<void> {
   diagnostics.record('selected-release', 'info', {
     releaseId: active.manifest.releaseId,
   })
-  const admitted = await navigator.locks.request(
-    'runme-release-cache',
-    { mode: 'shared' },
-    async () => {
-      const releaseCache = await holdReleaseCache(active.manifest.releaseId)
-      try {
-        await diagnostics.step('cached-file-verification', () =>
-          verifyCache(
-            active.manifest,
-            (value) => reportProgress('Checking installed release', value),
-            startupScope()
-          )
-        )
-        const current = await diagnostics.step(
-          'selected-release-recheck',
-          readControl
-        )
-        if (
-          !current.transition &&
-          current.active?.epoch === active.epoch &&
-          current.active.manifest.releaseId === active.manifest.releaseId
-        )
-          return true
-        releaseCache()
-        return false
-      } catch (error) {
-        releaseCache()
-        throw error
-      }
-    }
+  // The per-release lease alone serializes with deletion. Joining the global
+  // cache lock would let unrelated downloads or cleanup delay cached startup.
+  const releaseCache = await diagnostics.step('release-cache-lease', () =>
+    holdReleaseCache(active.manifest.releaseId)
   )
-  if (!admitted) return
+  try {
+    await diagnostics.step('cached-file-verification', () =>
+      verifyCache(
+        active.manifest,
+        (value) => reportProgress('Checking installed release', value),
+        startupScope()
+      )
+    )
+    const current = await diagnostics.step(
+      'selected-release-recheck',
+      readControl
+    )
+    if (
+      current.transition ||
+      current.active?.epoch !== active.epoch ||
+      current.active.manifest.releaseId !== active.manifest.releaseId
+    ) {
+      releaseCache()
+      return
+    }
+  } catch (error) {
+    releaseCache()
+    throw error
+  }
   const finishAppStartup = diagnostics.begin('application-ready')
   runtime = window.runmeRelease = {
     active,
