@@ -404,3 +404,20 @@ accidental synchronization mechanism.
 - `app/src/components/AppConsole/storage.ts`
 - `docs-dev/design/20260502_app_console_cells.md`
 - `docs-dev/design/20260510_webmcp.md`
+
+### Unavailable history during execution
+
+History restoration is optional for execution. WebMCP and the console Run action
+start from the live model without awaiting hydration. If the user edits or runs
+before restoration finishes, the model aborts hydration and keeps that tab in
+memory-only mode. It preserves the live draft/output and ignores late reads;
+it never creates a replacement session or saves over unread history. The UI
+explains that new commands and drafts will not survive closing the tab. Reload
+preparation refuses to discard these unsaved cells.
+
+Hydration has a five-second overall deadline. Each database open, read, migration,
+and write has a 1.5-second deadline and records its stage through `appLogger`.
+Abandoned transactions are aborted; late opens/queued callbacks check cancellation
+before issuing writes. Restoration projects interrupted cells in memory instead
+of requiring a repair write before displaying history. Legacy migration retains
+its original records.

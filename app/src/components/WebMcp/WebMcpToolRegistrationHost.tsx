@@ -252,13 +252,16 @@ export default function WebMcpToolRegistrationHost() {
             signal?.addEventListener('abort', handleAbort, { once: true })
 
             try {
-              await appConsoleData.hydrate()
               if (signal?.aborted) {
                 throw (
                   signal.reason ??
                   new DOMException('ExecuteCode was cancelled.', 'AbortError')
                 )
               }
+              // Restore history in the background; it must not gate acceptance
+              // or the operation's execution timeout. The model preserves live
+              // cells if history is still unavailable when execution starts.
+              void appConsoleData.hydrate()
               const result = await codeOperationRegistry.start({
                 code,
                 ...(typeof input?.timeoutMs === 'number'

@@ -167,3 +167,15 @@ channel,” and verifies the application opens without another settings attempt.
 It also checks that an offline download failure on the standalone recovery page
 does not retry IndexedDB while displaying the recovery error.
 Screenshots and `cached-fallback-result.json` are published with release evidence.
+
+### ExecuteCode with unavailable optional storage
+
+`execute-code-storage-recovery.ts` runs against the emitted app and workers served
+by the Go release fixture. It verifies normal persisted execution and keyed
+retries, seeds a saved console draft, then reloads while faulting opens of
+`runme-app-console` and `runme-code-operations`. The public WebMCP handler must
+return an operation ID, success, and `health-check` output before the browser
+transport deadline. Opening App Console must show the output and a memory-only
+history warning instead of an indefinite loading message. Reading the original
+store must prove the saved draft is unchanged. The screenshot and JSON result
+are uploaded with the controlled-release artifacts.

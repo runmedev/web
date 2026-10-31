@@ -161,7 +161,7 @@ describe('WebMcpToolRegistrationHost', () => {
       accessToken: 'access-token',
     })
     appConsoleDataMock.hydrate.mockReset()
-    appConsoleDataMock.hydrate.mockResolvedValue(undefined)
+    appConsoleDataMock.hydrate.mockImplementation(() => new Promise(() => {}))
     appConsoleDataMock.startExternalExecution.mockReset()
     appConsoleDataMock.startExternalExecution.mockReturnValue({
       cellId: 'cell-1',

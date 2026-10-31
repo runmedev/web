@@ -313,3 +313,110 @@ describe('CodeOperationRegistry', () => {
     })
   })
 })
+
+it.each(['initialize', 'putOperation', 'appendOutputEvent'] as const)(
+  'returns output with an operation ID when %s stalls',
+  async (method) => {
+    vi.useFakeTimers()
+    const storage = new MemoryCodeOperationStorage()
+    vi.spyOn(storage, method).mockImplementation(() => new Promise(() => {}))
+    const executor: CodeModeExecutor = {
+      execute: vi.fn(async ({ hooks }) => {
+        hooks?.onStdout?.('health-check\n')
+        return { output: 'health-check\n', exitCode: 0 }
+      }),
+    }
+    const { registry } = createRegistry(executor, { storage })
+    try {
+      const pending = registry.start({
+        code: "console.log('health-check')",
+        timeoutMs: 1000,
+        maxRuntimeMs: 2000,
+      })
+      await vi.advanceTimersByTimeAsync(5000)
+      const initial = await pending
+      const result = await registry.get({ operationId: initial.operationId })
+      expect(result.status).toBe('succeeded')
+      expect(result.persistence).toBe('memory')
+      expect(result.output.events[0]?.text).toBe('health-check\n')
+      expect(executor.execute).toHaveBeenCalledTimes(1)
+    } finally {
+      vi.useRealTimers()
+    }
+  }
+)
+
+it('does not execute a keyed request if saved deduplication records are unavailable', async () => {
+  const storage = new MemoryCodeOperationStorage()
+  vi.spyOn(storage, 'initialize').mockRejectedValue(new Error('unavailable'))
+  const executor = { execute: vi.fn() }
+  const { registry } = createRegistry(executor, { storage })
+  await expect(
+    registry.start({
+      code: 'createSomething()',
+      idempotencyKey: 'existing-key',
+    })
+  ).rejects.toThrow('IDEMPOTENCY_UNAVAILABLE')
+  expect(executor.execute).not.toHaveBeenCalled()
+})
+
+it('does not execute a keyed request if its acceptance write fails', async () => {
+  const storage = new MemoryCodeOperationStorage()
+  vi.spyOn(storage, 'putOperation').mockRejectedValue(new Error('unavailable'))
+  const executor = { execute: vi.fn() }
+  const { registry } = createRegistry(executor, { storage })
+  const result = await registry.start({
+    code: 'createSomething()',
+    idempotencyKey: 'new-key',
+  })
+  expect(result.status).toBe('failed')
+  expect(result.error?.code).toBe('IDEMPOTENCY_UNAVAILABLE')
+  expect(executor.execute).not.toHaveBeenCalled()
+})
+
+it('runs without durable storage when acquiring the session identity stalls', async () => {
+  vi.useFakeTimers()
+  const storage = new MemoryCodeOperationStorage()
+  const initialize = vi.spyOn(storage, 'initialize')
+  const executor = { execute: vi.fn(async () => ({ output: '', exitCode: 0 })) }
+  const registry = createCodeOperationRegistry({
+    executor,
+    storage,
+    getSessionId: () => new Promise(() => {}),
+  })
+  try {
+    const pending = registry.start({ code: '1' })
+    await vi.advanceTimersByTimeAsync(2000)
+    expect(await pending).toMatchObject({
+      status: 'succeeded',
+      persistence: 'memory',
+    })
+    expect(initialize).not.toHaveBeenCalled()
+  } finally {
+    vi.useRealTimers()
+  }
+})
+
+it('does not execute after cancellation while saving the running state', async () => {
+  vi.useFakeTimers()
+  const storage = new MemoryCodeOperationStorage()
+  const original = storage.putOperation.bind(storage)
+  vi.spyOn(storage, 'putOperation').mockImplementation((record) =>
+    record.status === 'running' ? new Promise(() => {}) : original(record)
+  )
+  const executor = { execute: vi.fn() }
+  const { registry } = createRegistry(executor, { storage })
+  try {
+    const pending = registry.start({
+      code: 'createSomething()',
+      timeoutMs: 1000,
+      timeoutBehavior: 'cancel',
+    })
+    await vi.advanceTimersByTimeAsync(3000)
+    expect((await pending).status).toBe('cancelled')
+    expect(executor.execute).not.toHaveBeenCalled()
+    await registry.waitForIdle()
+  } finally {
+    vi.useRealTimers()
+  }
+})

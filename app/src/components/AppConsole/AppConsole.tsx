@@ -407,8 +407,6 @@ export default function AppConsole({
   )
 
   const executeCurrentCell = useCallback(async () => {
-    await appConsoleData.hydrate()
-
     const execution = appConsoleData.startDraftExecution()
     if (!execution) {
       return

@@ -1,4 +1,8 @@
-import { assertReleaseWritable, registerUpgradeBlocker } from '../../releases/runtime'
+import {
+  assertReleaseWritable,
+  registerUpgradeBlocker,
+} from '../../releases/runtime'
+import { boundedStorage } from '../boundedStorage'
 import { appLogger } from '../logging/runtime'
 import { getClaimedSessionId } from '../tabIdentity'
 import type {
@@ -310,6 +314,17 @@ export class CodeOperationRegistry {
     this.records.set(operationId, record)
     this.outputEvents.set(operationId, [])
     await this.persistRecord(record)
+    if (idempotencyKey && !this.persistenceEnabled) {
+      record.status = 'failed'
+      record.completedAt = this.now().toISOString()
+      record.error = {
+        code: 'IDEMPOTENCY_UNAVAILABLE',
+        message:
+          'The operation could not be durably recorded. Execution was not started.',
+      }
+      onPrepared?.()
+      return this.snapshot(record, { waitExpired: false })
+    }
     try {
       input.onAccepted?.(operationId)
     } catch (error) {
@@ -418,8 +433,10 @@ export class CodeOperationRegistry {
     }
 
     live.cancelRequested = true
-    await this.updateRecord(operationId, { status: 'cancel_requested' })
+    // Deliver cancellation before waiting for optional persistence. Otherwise a
+    // stalled running-state write can finish and start the snippet first.
     live.abortController.abort(new DOMException('Cancelled', 'AbortError'))
+    await this.updateRecord(operationId, { status: 'cancel_requested' })
     await completesWithin(live.completion, CANCEL_GRACE_MS)
     record = await this.requireOperation(operationId, sessionId)
     return this.snapshot(record, {
@@ -435,13 +452,17 @@ export class CodeOperationRegistry {
     live: LiveOperation
   ): Promise<void> {
     const operationId = record.id
-    const releaseBlocker = registerUpgradeBlocker(() => 'Wait for running code operations before upgrading', true)
+    const releaseBlocker = registerUpgradeBlocker(
+      () => 'Wait for running code operations before upgrading',
+      true
+    )
     try {
       assertReleaseWritable()
       await this.updateRecord(operationId, {
         status: 'running',
         startedAt: this.now().toISOString(),
       })
+      live.abortController.signal.throwIfAborted()
       const result = await this.executor.execute({
         code,
         source: 'webmcp',
@@ -606,6 +627,7 @@ export class CodeOperationRegistry {
     )
     return {
       operationId: record.id,
+      persistence: this.persistenceEnabled ? 'indexeddb' : 'memory',
       status: record.status,
       createdAt: record.createdAt,
       ...(record.startedAt ? { startedAt: record.startedAt } : {}),
@@ -631,7 +653,9 @@ export class CodeOperationRegistry {
     let events = this.outputEvents.get(record.id)
     if (!events) {
       events = this.persistenceEnabled
-        ? await this.storage.getOutputEvents(record.id)
+        ? await this.storageCall('read-output', () =>
+            this.storage.getOutputEvents(record.id)
+          )
         : []
       this.outputEvents.set(record.id, events)
     }
@@ -659,11 +683,37 @@ export class CodeOperationRegistry {
     }
   }
 
+  /** Optional persistence must not hold acceptance, output, or cancellation
+   * indefinitely. A failure disables further writes for this registry lifetime. */
+  private async storageCall<T>(
+    stage: string,
+    task: () => Promise<T>
+  ): Promise<T> {
+    try {
+      return await boundedStorage(`execute-code.${stage}`, task)
+    } catch (error) {
+      this.persistenceEnabled = false
+      throw error
+    }
+  }
+
   private async ensureInitialized(): Promise<string> {
     if (!this.initialization) {
-      this.initialization = this.getSessionId().then(async (sessionId) => {
+      this.initialization = (async () => {
+        let sessionId: string
         try {
-          await this.storage.initialize(sessionId)
+          sessionId = await boundedStorage('execute-code.session-claim', () =>
+            this.getSessionId()
+          )
+        } catch {
+          // Never read or write another tab's durable records without its claim.
+          this.persistenceEnabled = false
+          return `temporary:${crypto.randomUUID()}`
+        }
+        try {
+          await this.storageCall('initialize', () =>
+            this.storage.initialize(sessionId)
+          )
         } catch (error) {
           this.persistenceEnabled = false
           appLogger.error('ExecuteCode operation persistence unavailable', {
@@ -675,7 +725,7 @@ export class CodeOperationRegistry {
           })
         }
         return sessionId
-      })
+      })()
     }
     return this.initialization
   }
@@ -693,11 +743,12 @@ export class CodeOperationRegistry {
       return inMemory
     }
     if (!this.persistenceEnabled) {
-      return null
+      throw new Error(
+        'IDEMPOTENCY_UNAVAILABLE: Saved operations cannot be checked. Execution was not started; do not retry with a different key.'
+      )
     }
-    const stored = await this.storage.findByIdempotencyKey(
-      sessionId,
-      idempotencyKey
+    const stored = await this.storageCall('find-idempotency-key', () =>
+      this.storage.findByIdempotencyKey(sessionId, idempotencyKey)
     )
     if (stored) {
       this.records.set(stored.id, stored)
@@ -714,7 +765,9 @@ export class CodeOperationRegistry {
     }
     let record = this.records.get(operationId) ?? null
     if (!record && this.persistenceEnabled) {
-      record = await this.storage.getOperation(operationId)
+      record = await this.storageCall('get-operation', () =>
+        this.storage.getOperation(operationId)
+      )
       if (record) {
         this.records.set(operationId, record)
       }
@@ -763,7 +816,9 @@ export class CodeOperationRegistry {
       return
     }
     try {
-      await this.storage.putOperation(record)
+      await this.storageCall('put-operation', () =>
+        this.storage.putOperation(record)
+      )
     } catch (error) {
       this.persistenceEnabled = false
       appLogger.error('Failed to persist ExecuteCode operation', {
@@ -784,16 +839,21 @@ export class CodeOperationRegistry {
     if (!live || !this.persistenceEnabled) {
       return
     }
-    live.persistChain = live.persistChain.then(task).catch((error) => {
-      this.persistenceEnabled = false
-      appLogger.error('Failed to persist ExecuteCode output', {
-        attrs: {
-          scope: 'webmcp.execute_code.operation',
-          operationId,
-          error: String(error),
-        },
+    live.persistChain = live.persistChain
+      .then(() => {
+        if (!this.persistenceEnabled) return
+        return this.storageCall('persist-output', task)
       })
-    })
+      .catch((error) => {
+        this.persistenceEnabled = false
+        appLogger.error('Failed to persist ExecuteCode output', {
+          attrs: {
+            scope: 'webmcp.execute_code.operation',
+            operationId,
+            error: String(error),
+          },
+        })
+      })
   }
 
   private notify(operationId: string): void {

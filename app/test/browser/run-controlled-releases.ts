@@ -148,6 +148,24 @@ async function main() {
     )
     if (recoveryCode !== 0)
       throw new Error(`Cached recovery CUJ failed: ${recoveryCode}`)
+    const executeRecovery = spawn(
+      process.execPath,
+      [
+        join(
+          dirname(fileURLToPath(import.meta.url)),
+          'execute-code-storage-recovery.js'
+        ),
+      ],
+      {
+        env: { ...process.env, RUNME_TEST_URL: 'http://127.0.0.1:5198' },
+        stdio: 'inherit',
+      }
+    )
+    const executeCode = await new Promise((resolve) =>
+      executeRecovery.once('exit', resolve)
+    )
+    if (executeCode !== 0)
+      throw new Error(`ExecuteCode recovery CUJ failed: ${executeCode}`)
     const startup = spawn(
       process.execPath,
       [

@@ -1,14 +1,16 @@
 import {
+  type ConsoleCell,
   coerceRestoredCells,
   createDraftCell,
   createResultOutput,
   createStdTextOutputs,
-  type ConsoleCell,
 } from "../../components/AppConsole/model";
 import {
-  appConsoleStorage,
   type AppConsoleStorageLike,
+  appConsoleStorage,
 } from "../../components/AppConsole/storage";
+import { boundedStorage } from "../boundedStorage";
+import { appLogger } from "../logging/runtime";
 
 type Listener = () => void;
 
@@ -46,6 +48,7 @@ export class AppConsoleData {
   private persistTimer: ReturnType<typeof setTimeout> | null = null;
   private hydratePromise: Promise<void> | null = null;
   private persistenceEnabled = true;
+  private hydrationController: AbortController | null = null;
   private persistChain: Promise<void> = Promise.resolve();
   private releaseFrozen = false;
   private snapshotCache: AppConsoleSnapshot = {
@@ -89,7 +92,13 @@ export class AppConsoleData {
   }
 
   setDraftSource(source: string): void {
-    if (this.releaseFrozen) throw new Error('App Console is frozen for an upgrade');
+    if (
+      !this.snapshotCache.hydrated &&
+      source !== this.getCurrentDraftCell()?.source
+    )
+      this.prepareForExecution();
+    if (this.releaseFrozen)
+      throw new Error("App Console is frozen for an upgrade");
     this.updateCells((cells) => {
       const draftIndex = this.findDraftIndex(cells);
       if (draftIndex < 0) {
@@ -112,7 +121,8 @@ export class AppConsoleData {
 
   copyCellSourceToDraft(cellId: string): void {
     const source =
-      this.snapshotCache.cells.find((cell) => cell.id === cellId)?.source ?? null;
+      this.snapshotCache.cells.find((cell) => cell.id === cellId)?.source ??
+      null;
     if (source === null) {
       return;
     }
@@ -120,7 +130,9 @@ export class AppConsoleData {
   }
 
   startDraftExecution(): AppConsoleExecutionHandle | null {
-    if (this.releaseFrozen) throw new Error('App Console is frozen for an upgrade');
+    this.prepareForExecution();
+    if (this.releaseFrozen)
+      throw new Error("App Console is frozen for an upgrade");
     const draft = this.getCurrentDraftCell();
     if (!draft || draft.source.trim() === "") {
       return null;
@@ -142,8 +154,8 @@ export class AppConsoleData {
               exitCode: undefined,
               outputs: [],
             }
-          : cell,
-      ),
+          : cell
+      )
     );
 
     return {
@@ -153,7 +165,9 @@ export class AppConsoleData {
   }
 
   startExternalExecution(source: string): AppConsoleExecutionHandle | null {
-    if (this.releaseFrozen) throw new Error('App Console is frozen for an upgrade');
+    this.prepareForExecution();
+    if (this.releaseFrozen)
+      throw new Error("App Console is frozen for an upgrade");
     if (source.trim() === "") {
       return null;
     }
@@ -201,9 +215,12 @@ export class AppConsoleData {
 
   completeExecution(
     cellId: string,
-    result: { exitCode: number; result?: unknown },
+    result: { exitCode: number; result?: unknown }
   ): void {
-    const buffers = this.outputBuffers.get(cellId) ?? { stdout: "", stderr: "" };
+    const buffers = this.outputBuffers.get(cellId) ?? {
+      stdout: "",
+      stderr: "",
+    };
     this.outputBuffers.delete(cellId);
     const completedAt = new Date().toISOString();
     const nextStatus: ConsoleCell["status"] =
@@ -222,7 +239,7 @@ export class AppConsoleData {
                 ...createResultOutput(result.result),
               ],
             }
-          : cell,
+          : cell
       );
 
       return this.ensureTrailingDraft(next);
@@ -231,9 +248,12 @@ export class AppConsoleData {
 
   failExecution(
     cellId: string,
-    error: { exitCode?: number; message?: string },
+    error: { exitCode?: number; message?: string }
   ): void {
-    const current = this.outputBuffers.get(cellId) ?? { stdout: "", stderr: "" };
+    const current = this.outputBuffers.get(cellId) ?? {
+      stdout: "",
+      stderr: "",
+    };
     const stderr = `${current.stderr}${withTrailingNewline(error.message ?? "")}`;
     this.outputBuffers.delete(cellId);
     const completedAt = new Date().toISOString();
@@ -248,7 +268,7 @@ export class AppConsoleData {
               exitCode: error.exitCode ?? 1,
               outputs: createStdTextOutputs(current.stdout, stderr),
             }
-          : cell,
+          : cell
       );
 
       return this.ensureTrailingDraft(next);
@@ -256,6 +276,7 @@ export class AppConsoleData {
   }
 
   dispose(): void {
+    this.hydrationController?.abort();
     if (this.persistTimer) {
       clearTimeout(this.persistTimer);
       this.persistTimer = null;
@@ -264,57 +285,93 @@ export class AppConsoleData {
     this.outputBuffers.clear();
   }
 
+  /** History must never gate execution. Preserve the live draft and detach from
+   * unread history; late reads cannot replace these cells or enable persistence. */
+  private prepareForExecution(): void {
+    if (!this.snapshotCache.hydrated) this.useTemporaryHistory();
+  }
+
+  private useTemporaryHistory(): void {
+    this.hydrationController?.abort();
+    this.persistenceEnabled = false;
+    if (this.persistTimer) clearTimeout(this.persistTimer);
+    this.persistTimer = null;
+    this.replaceSnapshot({
+      ...this.snapshotCache,
+      hydrated: true,
+      loadError:
+        "Console history is unavailable. New commands and drafts are kept only in this tab; saved history has not been changed.",
+    });
+  }
+
   private async doHydrate(): Promise<void> {
-    const now = new Date().toISOString();
+    const controller = new AbortController();
+    this.hydrationController = controller;
     try {
-      const restored = await this.storage.loadLatestSession();
-      if (!restored) {
-        const session = await this.storage.createSession(now);
-        const nextCells = this.ensureTrailingDraft(this.snapshotCache.cells);
-        await this.persistRows(nextCells, session.id, now);
-        this.replaceSnapshot({
-          sessionId: session.id,
-          hydrated: true,
-          loadError: null,
-          cells: nextCells,
-        });
-        return;
-      }
+      await boundedStorage(
+        "console.hydrate",
+        (signal) => this.restoreHistory(signal),
+        controller.signal,
+        5000
+      );
+    } catch (error) {
+      appLogger.warn("Console history unavailable; retaining in-memory cells", {
+        attrs: {
+          scope: "app_console.history",
+          errorName: error instanceof Error ? error.name : "unknown",
+        },
+      });
+      if (!this.snapshotCache.hydrated) this.useTemporaryHistory();
+    } finally {
+      this.hydrationController = null;
+    }
+  }
 
-      const recovered = coerceRestoredCells(restored.cells, now);
-      if (recovered.mutated) {
-        await this.persistRows(recovered.cells, restored.session.id, now);
-      }
-
+  private async restoreHistory(signal: AbortSignal): Promise<void> {
+    const now = new Date().toISOString();
+    const restored = await this.storage.loadLatestSession(signal);
+    signal.throwIfAborted();
+    if (!restored) {
+      const session = await this.storage.createSession(now, signal);
+      signal.throwIfAborted();
+      const nextCells = this.ensureTrailingDraft(this.snapshotCache.cells);
+      await this.persistRows(nextCells, session.id, now, signal);
+      signal.throwIfAborted();
       this.replaceSnapshot({
-        sessionId: restored.session.id,
+        sessionId: session.id,
         hydrated: true,
         loadError: null,
-        cells: this.reindexCells(recovered.cells),
+        cells: nextCells,
       });
-    } catch (error) {
-      console.error("Failed to restore App Console session", error);
-      this.persistenceEnabled = false;
-      this.replaceSnapshot({
-        sessionId:
-          globalThis.crypto?.randomUUID?.() ?? `app-console-fallback-${Date.now()}`,
-        hydrated: true,
-        loadError: "Console history is unavailable for this session.",
-        cells: [createDraftCell(1)],
-      });
+      return;
     }
+
+    const recovered = coerceRestoredCells(restored.cells, now);
+    // Recovery is an in-memory projection. Save it with the next user edit,
+    // rather than making opening history depend on a repair write.
+
+    signal.throwIfAborted();
+    this.replaceSnapshot({
+      sessionId: restored.session.id,
+      hydrated: true,
+      loadError: null,
+      cells: this.reindexCells(recovered.cells),
+    });
   }
 
   private appendOutput(
     cellId: string,
     kind: keyof OutputBuffers,
-    chunk: string,
+    chunk: string
   ): void {
     if (!chunk) {
       return;
     }
 
-    const current = this.outputBuffers.get(cellId) ?? { stdout: "", stderr: "" };
+    const current = this.outputBuffers.get(cellId) ?? {
+      stdout: "",
+      stderr: "",
+    };
     const nextBuffers: OutputBuffers =
       kind === "stdout"
         ? {
@@ -332,10 +389,13 @@ export class AppConsoleData {
         cell.id === cellId
           ? {
               ...cell,
-              outputs: createStdTextOutputs(nextBuffers.stdout, nextBuffers.stderr),
+              outputs: createStdTextOutputs(
+                nextBuffers.stdout,
+                nextBuffers.stderr
+              ),
             }
-          : cell,
-      ),
+          : cell
+      )
     );
   }
 
@@ -376,7 +436,7 @@ export class AppConsoleData {
 
   private updateCells(
     updater: (cells: ConsoleCell[]) => ConsoleCell[],
-    options?: { persist?: boolean },
+    options?: { persist?: boolean }
   ): void {
     const nextCells = updater(this.snapshotCache.cells);
     if (nextCells === this.snapshotCache.cells) {
@@ -430,17 +490,25 @@ export class AppConsoleData {
     // A timed-out reload must not freeze the console when hydration resolves late.
     signal?.throwIfAborted();
     if (!this.snapshotCache.hydrated) return;
-    if (!this.persistenceEnabled) throw new Error('App Console drafts cannot be saved');
-    if (this.snapshotCache.cells.some(cell => cell.status === 'running')) throw new Error('App Console is running');
+    if (!this.persistenceEnabled)
+      throw new Error("App Console drafts cannot be saved");
+    if (this.snapshotCache.cells.some((cell) => cell.status === "running"))
+      throw new Error("App Console is running");
     if (this.persistTimer) clearTimeout(this.persistTimer);
     this.persistTimer = null;
     this.releaseFrozen = true;
-    try { await this.persist(); }
-    catch (error) { this.releaseFrozen = false; throw error; }
+    try {
+      await this.persist();
+    } catch (error) {
+      this.releaseFrozen = false;
+      throw error;
+    }
   }
 
   /** A failed preparation leaves this tab editable; no reload was authorized. */
-  resumeAfterFailedPreparation(): void { this.releaseFrozen = false; }
+  resumeAfterFailedPreparation(): void {
+    this.releaseFrozen = false;
+  }
 
   private persist(): Promise<void> {
     const sessionId = this.snapshotCache.sessionId;
@@ -448,7 +516,9 @@ export class AppConsoleData {
       return Promise.resolve();
     }
     const cells = this.snapshotCache.cells;
-    this.persistChain = this.persistChain.catch(() => {}).then(() => this.persistRows(cells, sessionId, new Date().toISOString()));
+    this.persistChain = this.persistChain
+      .catch(() => {})
+      .then(() => this.persistRows(cells, sessionId, new Date().toISOString()));
     return this.persistChain;
   }
 
@@ -456,6 +526,7 @@ export class AppConsoleData {
     cells: ConsoleCell[],
     sessionId: string,
     updatedAt: string,
+    signal?: AbortSignal
   ): Promise<void> {
     await this.storage.saveCells(
       cells.map((cell) => ({
@@ -463,7 +534,9 @@ export class AppConsoleData {
         sessionId,
         updatedAt,
       })),
+      signal
     );
-    await this.storage.touchSession(sessionId, updatedAt);
+    signal?.throwIfAborted();
+    await this.storage.touchSession(sessionId, updatedAt, signal);
   }
 }

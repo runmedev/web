@@ -7,7 +7,9 @@ import type {
 } from "../../components/AppConsole/model";
 import { AppConsoleData } from "./AppConsoleData";
 
-function decodeOutputs(rows: Array<{ items?: Array<{ data?: Uint8Array }> }>): string {
+function decodeOutputs(
+  rows: Array<{ items?: Array<{ data?: Uint8Array }> }>
+): string {
   const decoder = new TextDecoder();
   return rows
     .flatMap((row) => row.items ?? [])
@@ -41,7 +43,10 @@ function createStorageStub() {
       async saveCells(rows: PersistedConsoleCellRow[]) {
         cells = rows.map((row) => ({ ...row }));
       },
-      async touchSession(sessionId: string, updatedAt = new Date().toISOString()) {
+      async touchSession(
+        sessionId: string,
+        updatedAt = new Date().toISOString()
+      ) {
         session = sessionId
           ? {
               id: sessionId,
@@ -92,8 +97,12 @@ describe("AppConsoleData", () => {
     const completedSnapshot = data.getSnapshot();
     expect(completedSnapshot.cells).toHaveLength(2);
     expect(completedSnapshot.cells[0]?.status).toBe("success");
-    expect(decodeOutputs(completedSnapshot.cells[0]?.outputs ?? [])).toContain("stdout");
-    expect(decodeOutputs(completedSnapshot.cells[0]?.outputs ?? [])).toContain("stderr");
+    expect(decodeOutputs(completedSnapshot.cells[0]?.outputs ?? [])).toContain(
+      "stdout"
+    );
+    expect(decodeOutputs(completedSnapshot.cells[0]?.outputs ?? [])).toContain(
+      "stderr"
+    );
     expect(completedSnapshot.cells[1]?.status).toBe("draft");
     expect(completedSnapshot.cells[1]?.source).toBe("user draft");
 
@@ -102,19 +111,80 @@ describe("AppConsoleData", () => {
   });
 });
 
-
-it('waits for draft persistence and retains the draft when saving fails', async () => {
-  const {storage, getRows} = createStorageStub()
-  const data = new AppConsoleData({storage, persistDelayMs: 60000})
+it("waits for draft persistence and retains the draft when saving fails", async () => {
+  const { storage, getRows } = createStorageStub();
+  const data = new AppConsoleData({ storage, persistDelayMs: 60000 });
   try {
-    await data.hydrate(); data.setDraftSource('unsent private draft')
-    const save = vi.spyOn(storage, 'saveCells').mockRejectedValueOnce(new Error('quota'))
-    await expect(data.flushForRelease()).rejects.toThrow('quota')
-    data.setDraftSource('recovered draft')
-    await data.flushForRelease()
-    expect(save).toHaveBeenCalledTimes(2)
-    expect(getRows().some(row => row.source === 'recovered draft')).toBe(true)
-    expect(() => data.startExternalExecution('new operation')).toThrow('frozen')
-    data.resumeAfterFailedPreparation(); data.setDraftSource('still editable')
-  } finally {data.dispose()}
-})
+    await data.hydrate();
+    data.setDraftSource("unsent private draft");
+    const save = vi
+      .spyOn(storage, "saveCells")
+      .mockRejectedValueOnce(new Error("quota"));
+    await expect(data.flushForRelease()).rejects.toThrow("quota");
+    data.setDraftSource("recovered draft");
+    await data.flushForRelease();
+    expect(save).toHaveBeenCalledTimes(2);
+    expect(getRows().some((row) => row.source === "recovered draft")).toBe(
+      true
+    );
+    expect(() => data.startExternalExecution("new operation")).toThrow(
+      "frozen"
+    );
+    data.resumeAfterFailedPreparation();
+    data.setDraftSource("still editable");
+  } finally {
+    data.dispose();
+  }
+});
+
+it("runs without history and ignores a late read without overwriting the live draft", async () => {
+  const { storage } = createStorageStub();
+  let finish!: (value: any) => void;
+  storage.loadLatestSession = vi.fn(
+    () =>
+      new Promise<Awaited<ReturnType<typeof storage.loadLatestSession>>>((resolve) => {
+        finish = resolve;
+      })
+  );
+  const save = vi.spyOn(storage, "saveCells");
+  const create = vi.spyOn(storage, "createSession");
+  const data = new AppConsoleData({ storage, persistDelayMs: 0 });
+  const pending = data.hydrate();
+  await Promise.resolve();
+  data.setDraftSource("keep this unsent draft");
+  const execution = data.startExternalExecution("console.log('health-check')")!;
+  data.appendStdout(execution.cellId, "health-check\n");
+  data.completeExecution(execution.cellId, { exitCode: 0 });
+  finish(null);
+  await pending;
+  expect(data.getSnapshot().hydrated).toBe(true);
+  expect(data.getSnapshot().loadError).toContain("only in this tab");
+  expect(data.getSnapshot().cells.at(-1)?.source).toBe(
+    "keep this unsent draft"
+  );
+  expect(decodeOutputs(data.getSnapshot().cells[0].outputs)).toContain(
+    "health-check"
+  );
+  expect(save).not.toHaveBeenCalled();
+  expect(create).not.toHaveBeenCalled();
+  await expect(data.flushForRelease()).rejects.toThrow("cannot be saved");
+  data.dispose();
+});
+
+it("bounds hydration even when storage never responds, retaining an editable console", async () => {
+  vi.useFakeTimers();
+  const { storage } = createStorageStub();
+  storage.loadLatestSession = () => new Promise(() => {});
+  const data = new AppConsoleData({ storage });
+  try {
+    const pending = data.hydrate();
+    await vi.advanceTimersByTimeAsync(5000);
+    await pending;
+    expect(data.getSnapshot().hydrated).toBe(true);
+    data.setDraftSource("still editable");
+    expect(data.startDraftExecution()?.source).toBe("still editable");
+  } finally {
+    data.dispose();
+    vi.useRealTimers();
+  }
+});
