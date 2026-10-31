@@ -319,7 +319,14 @@ it.each(['initialize', 'putOperation', 'appendOutputEvent'] as const)(
   async (method) => {
     vi.useFakeTimers()
     const storage = new MemoryCodeOperationStorage()
-    vi.spyOn(storage, method).mockImplementation(() => new Promise(() => {}))
+    let markStarted!: () => void
+    const started = new Promise<void>((resolve) => {
+      markStarted = resolve
+    })
+    vi.spyOn(storage, method).mockImplementation(() => {
+      markStarted()
+      return new Promise(() => {})
+    })
     const executor: CodeModeExecutor = {
       execute: vi.fn(async ({ hooks }) => {
         hooks?.onStdout?.('health-check\n')
@@ -333,6 +340,7 @@ it.each(['initialize', 'putOperation', 'appendOutputEvent'] as const)(
         timeoutMs: 1000,
         maxRuntimeMs: 2000,
       })
+      await started
       await vi.advanceTimersByTimeAsync(5000)
       const initial = await pending
       const result = await registry.get({ operationId: initial.operationId })
@@ -401,8 +409,16 @@ it('does not execute after cancellation while saving the running state', async (
   vi.useFakeTimers()
   const storage = new MemoryCodeOperationStorage()
   const original = storage.putOperation.bind(storage)
+  let markRunning!: () => void
+  const running = new Promise<void>((resolve) => {
+    markRunning = resolve
+  })
   vi.spyOn(storage, 'putOperation').mockImplementation((record) =>
-    record.status === 'running' ? new Promise(() => {}) : original(record)
+    record.status === 'running'
+      ? new Promise(() => {
+          markRunning()
+        })
+      : original(record)
   )
   const executor = { execute: vi.fn() }
   const { registry } = createRegistry(executor, { storage })
@@ -412,6 +428,7 @@ it('does not execute after cancellation while saving the running state', async (
       timeoutMs: 1000,
       timeoutBehavior: 'cancel',
     })
+    await running
     await vi.advanceTimersByTimeAsync(3000)
     expect((await pending).status).toBe('cancelled')
     expect(executor.execute).not.toHaveBeenCalled()
