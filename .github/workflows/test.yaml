@@ -95,6 +95,7 @@ jobs:
           src/lib/runtime/runnerAuthTools.test.ts
           src/lib/runtime/desktopTools.test.ts
           src/lib/runtime/codeOperationRegistry.test.ts
+          src/lib/appConsole/AppConsoleData.test.ts src/lib/boundedStorage.test.ts
           src/components/WebMcp/WebMcpToolRegistrationHost.test.tsx
           --maxWorkers=2 --minWorkers=1
 

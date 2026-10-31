@@ -68,6 +68,8 @@ export type ExecuteCodeOutputPage = {
 }
 
 export type ExecuteCodeOperation = {
+  /** Memory-only results do not survive a page reload. */
+  persistence?: 'indexeddb' | 'memory'
   operationId: string
   status: ExecuteCodeOperationStatus
   createdAt: string

@@ -220,6 +220,8 @@ export default function WebMcpToolRegistrationHost() {
             const executionState: {
               current: ReturnType<typeof appConsoleData.startExternalExecution>
             } = { current: null }
+            const updateConsole = (update: () => void) =>
+              appConsoleData.queueHistoryUpdate(update)
             let acceptedOperationId: string | null = null
             let cancellationPromise: Promise<unknown> | null = null
 
@@ -252,13 +254,16 @@ export default function WebMcpToolRegistrationHost() {
             signal?.addEventListener('abort', handleAbort, { once: true })
 
             try {
-              await appConsoleData.hydrate()
               if (signal?.aborted) {
                 throw (
                   signal.reason ??
                   new DOMException('ExecuteCode was cancelled.', 'AbortError')
                 )
               }
+              // Restore history in the background; it must not gate acceptance
+              // or the operation's execution timeout. The model preserves live
+              // cells if history is still unavailable when execution starts.
+              void appConsoleData.hydrate()
               const result = await codeOperationRegistry.start({
                 code,
                 ...(typeof input?.timeoutMs === 'number'
@@ -276,44 +281,49 @@ export default function WebMcpToolRegistrationHost() {
                   : {}),
                 onAccepted: (operationId) => {
                   acceptedOperationId = operationId
-                  executionState.current =
-                    appConsoleData.startExternalExecution(code)
+                  updateConsole(() => {
+                    executionState.current =
+                      appConsoleData.startExternalExecution(code)
+                  })
                   if (signal?.aborted) {
                     queueMicrotask(cancelAcceptedOperation)
                   }
                 },
                 hooks: {
-                  onStdout: (chunk) => {
-                    const execution = executionState.current
-                    if (execution) {
-                      appConsoleData.appendStdout(execution.cellId, chunk)
-                    }
-                  },
-                  onStderr: (chunk) => {
-                    const execution = executionState.current
-                    if (execution) {
-                      appConsoleData.appendStderr(execution.cellId, chunk)
-                    }
-                  },
+                  onStdout: (chunk) =>
+                    updateConsole(() => {
+                      const execution = executionState.current
+                      if (execution) {
+                        appConsoleData.appendStdout(execution.cellId, chunk)
+                      }
+                    }),
+                  onStderr: (chunk) =>
+                    updateConsole(() => {
+                      const execution = executionState.current
+                      if (execution) {
+                        appConsoleData.appendStderr(execution.cellId, chunk)
+                      }
+                    }),
                 },
-                onSettled: (operation) => {
-                  const execution = executionState.current
-                  if (!execution) {
-                    return
-                  }
-                  if (operation.status === 'succeeded') {
-                    appConsoleData.completeExecution(execution.cellId, {
-                      exitCode: operation.exitCode ?? 0,
+                onSettled: (operation) =>
+                  updateConsole(() => {
+                    const execution = executionState.current
+                    if (!execution) {
+                      return
+                    }
+                    if (operation.status === 'succeeded') {
+                      appConsoleData.completeExecution(execution.cellId, {
+                        exitCode: operation.exitCode ?? 0,
+                      })
+                      return
+                    }
+                    appConsoleData.failExecution(execution.cellId, {
+                      exitCode: operation.exitCode ?? 1,
+                      message:
+                        operation.error?.message ??
+                        `ExecuteCode operation ended with status ${operation.status}.`,
                     })
-                    return
-                  }
-                  appConsoleData.failExecution(execution.cellId, {
-                    exitCode: operation.exitCode ?? 1,
-                    message:
-                      operation.error?.message ??
-                      `ExecuteCode operation ended with status ${operation.status}.`,
-                  })
-                },
+                  }),
               })
               if (signal?.aborted) {
                 acceptedOperationId ??= result.operationId
@@ -322,13 +332,15 @@ export default function WebMcpToolRegistrationHost() {
               }
               return JSON.stringify(result)
             } catch (error) {
-              const execution = executionState.current
-              if (execution) {
-                appConsoleData.failExecution(execution.cellId, {
-                  message:
-                    error instanceof Error ? error.message : String(error),
-                })
-              }
+              updateConsole(() => {
+                const execution = executionState.current
+                if (execution) {
+                  appConsoleData.failExecution(execution.cellId, {
+                    message:
+                      error instanceof Error ? error.message : String(error),
+                  })
+                }
+              })
               throw error
             } finally {
               signal?.removeEventListener('abort', handleAbort)

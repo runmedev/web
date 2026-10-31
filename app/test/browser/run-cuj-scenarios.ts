@@ -245,6 +245,8 @@ function ensureBackendConfig(
     "  agentService: false",
     "  parserService: true",
     "  runnerService: true",
+    // The Jupyter CUJ starts kernels; the agent now requires an explicit opt-in.
+    "  jupyterService: true",
     "  corsOrigins:",
     originsYaml,
     ...(oidc.enabled

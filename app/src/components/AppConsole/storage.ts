@@ -1,7 +1,8 @@
-import { registerReleaseDatabase } from '../../releases/databases'
 import Dexie, { type Table } from "dexie";
-import { getClaimedSessionId } from '../../lib/tabIdentity';
 
+import { boundedStorage, boundedTransaction } from "../../lib/boundedStorage";
+import { getClaimedSessionId } from "../../lib/tabIdentity";
+import { registerReleaseDatabase } from "../../releases/databases";
 import type {
   PersistedConsoleCellRow,
   PersistedConsoleSessionRow,
@@ -13,10 +14,20 @@ export type LoadedConsoleSession = {
 };
 
 export interface AppConsoleStorageLike {
-  createSession(now?: string): Promise<PersistedConsoleSessionRow>;
-  loadLatestSession(): Promise<LoadedConsoleSession | null>;
-  saveCells(rows: PersistedConsoleCellRow[]): Promise<void>;
-  touchSession(sessionId: string, updatedAt?: string): Promise<void>;
+  createSession(
+    now?: string,
+    signal?: AbortSignal
+  ): Promise<PersistedConsoleSessionRow>;
+  loadLatestSession(signal?: AbortSignal): Promise<LoadedConsoleSession | null>;
+  saveCells(
+    rows: PersistedConsoleCellRow[],
+    signal?: AbortSignal
+  ): Promise<void>;
+  touchSession(
+    sessionId: string,
+    updatedAt?: string,
+    signal?: AbortSignal
+  ): Promise<void>;
 }
 
 class AppConsoleDatabase extends Dexie implements AppConsoleStorageLike {
@@ -25,7 +36,7 @@ class AppConsoleDatabase extends Dexie implements AppConsoleStorageLike {
 
   constructor(databaseName = "runme-app-console") {
     super(databaseName);
-    registerReleaseDatabase(this)
+    registerReleaseDatabase(this);
 
     this.version(1).stores({
       sessions: "&id, updatedAt, createdAt",
@@ -36,69 +47,143 @@ class AppConsoleDatabase extends Dexie implements AppConsoleStorageLike {
     this.cells = this.table("cells");
   }
 
-  async createSession(now = new Date().toISOString()): Promise<PersistedConsoleSessionRow> {
+  async createSession(
+    now = new Date().toISOString(),
+    signal?: AbortSignal
+  ): Promise<PersistedConsoleSessionRow> {
     const session: PersistedConsoleSessionRow = {
-      id: `tab:${await getClaimedSessionId()}`,
+      id: `tab:${await boundedStorage("console.session-claim", () => getClaimedSessionId(), signal)}`,
       createdAt: now,
       updatedAt: now,
     };
-    await this.sessions.put(session);
+    await boundedTransaction(
+      this,
+      "rw",
+      ["sessions"],
+      "create-session",
+      () => this.sessions.put(session).then(() => {}),
+      signal
+    );
     return session;
   }
 
-  async loadLatestSession(): Promise<LoadedConsoleSession | null> {
-    const id = `tab:${await getClaimedSessionId()}`;
-    let session = await this.sessions.get(id);
+  async loadLatestSession(
+    signal?: AbortSignal
+  ): Promise<LoadedConsoleSession | null> {
+    const id = `tab:${await boundedStorage("console.session-claim", () => getClaimedSessionId(), signal)}`;
+    let session = await boundedTransaction(
+      this,
+      "r",
+      ["sessions"],
+      "read-session",
+      () => this.sessions.get(id),
+      signal
+    );
     if (!session) {
       // Copy a legacy global console once per tab. Retain its original rows;
       // two tabs must never overwrite each other's unsent console drafts.
-      const legacy = await this.sessions.orderBy('updatedAt').reverse().filter(row => !row.id.startsWith('tab:')).first();
+      const legacy = await boundedTransaction(
+        this,
+        "r",
+        ["sessions"],
+        "find-legacy-session",
+        () =>
+          this.sessions
+            .orderBy("updatedAt")
+            .reverse()
+            .filter((row) => !row.id.startsWith("tab:"))
+            .first(),
+        signal
+      );
       if (!legacy) return null;
-      const original = await this.cells.where('sessionId').equals(legacy.id).sortBy('index');
+      const original = await boundedTransaction(
+        this,
+        "r",
+        ["cells"],
+        "read-legacy-cells",
+        () => this.cells.where("sessionId").equals(legacy.id).sortBy("index"),
+        signal
+      );
       session = { ...legacy, id };
-      const cells = original.map(cell => ({ ...cell, id: crypto.randomUUID(), sessionId: id }));
-      await this.transaction('rw', this.sessions, this.cells, async () => {
-        await this.sessions.put(session!);
-        await this.cells.bulkPut(cells);
-      });
+      const cells = original.map((cell) => ({
+        ...cell,
+        id: crypto.randomUUID(),
+        sessionId: id,
+      }));
+      await boundedTransaction(
+        this,
+        "rw",
+        ["sessions", "cells"],
+        "migrate-history",
+        async () => {
+          await this.sessions.put(session!);
+          await this.cells.bulkPut(cells);
+        },
+        signal
+      );
     }
     if (!session) {
       return null;
     }
-    const cells = await this.cells
-      .where("sessionId")
-      .equals(session.id)
-      .sortBy("index");
+    const cells = await boundedTransaction(
+      this,
+      "r",
+      ["cells"],
+      "read-cells",
+      () => this.cells.where("sessionId").equals(session!.id).sortBy("index"),
+      signal
+    );
     return { session, cells };
   }
 
-  async saveCells(rows: PersistedConsoleCellRow[]): Promise<void> {
+  async saveCells(
+    rows: PersistedConsoleCellRow[],
+    signal?: AbortSignal
+  ): Promise<void> {
     if (rows.length === 0) {
       return;
     }
-    await this.transaction("rw", this.cells, async () => {
-      await this.cells.bulkPut(rows);
-    });
+    await boundedTransaction(
+      this,
+      "rw",
+      ["cells"],
+      "save-cells",
+      async () => {
+        await this.cells.bulkPut(rows);
+      },
+      signal
+    );
   }
 
   async touchSession(
     sessionId: string,
     updatedAt = new Date().toISOString(),
+    signal?: AbortSignal
   ): Promise<void> {
-    const existing = await this.sessions.get(sessionId);
-    if (!existing) {
-      await this.sessions.put({
-        id: sessionId,
-        createdAt: updatedAt,
-        updatedAt,
-      });
-      return;
-    }
-    await this.sessions.put({
-      ...existing,
-      updatedAt,
-    });
+    await boundedTransaction(
+      this,
+      "rw",
+      ["sessions"],
+      "touch-session",
+      async () => {
+        const existing = await this.sessions.get(sessionId);
+        if (!existing) {
+          await this.sessions.put({
+            id: sessionId,
+            createdAt: updatedAt,
+            updatedAt,
+          });
+          return;
+        }
+        await this.sessions.put({
+          ...existing,
+          updatedAt,
+        });
+      },
+      signal
+    );
   }
 }
 
-export const appConsoleStorage: AppConsoleStorageLike = new AppConsoleDatabase();
+export const appConsoleStorage: AppConsoleStorageLike =
+  new AppConsoleDatabase();
