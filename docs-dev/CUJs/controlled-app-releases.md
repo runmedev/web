@@ -149,3 +149,21 @@ advances even when the stable application channel is pinned.
   legacy tab records held by historical tabs. It must retain a release until its
   last lease closes; closing the last lease allows cleanup without a tab-record
   write. Only explicit preference/installed-release changes persist release settings; maintenance does not.
+
+### Cached inventory fallback without readable preferences
+
+When the release-settings read fails and there is no usable cached preference
+copy, enumerate completed release inventories from Cache Storage and try the
+most recent `publishedAt` first, independent of channel. Verify compatibility
+and required cached bytes before activation; an unusable candidate must not hide
+an older usable release. This path does not require network discovery or another
+IndexedDB read. Existing owner draining, lifetime locks and historical-tab guards
+still apply.
+
+`cached-release-recovery.ts` exercises an offline startup with cached code but no
+saved preferences and a permanently stalled release-settings open. It then
+removes inventory markers in its disposable test profile, clicks “Try latest
+channel,” and verifies the application opens without another settings attempt.
+It also checks that an offline download failure on the standalone recovery page
+does not retry IndexedDB while displaying the recovery error.
+Screenshots and `cached-fallback-result.json` are published with release evidence.

@@ -130,6 +130,24 @@ async function main() {
     )
     const code = await new Promise((resolve) => test.once('exit', resolve))
     if (code !== 0) throw new Error(`Controlled release CUJ failed: ${code}`)
+    const cachedRecovery = spawn(
+      process.execPath,
+      [
+        join(
+          dirname(fileURLToPath(import.meta.url)),
+          'cached-release-recovery.js'
+        ),
+      ],
+      {
+        env: { ...process.env, RUNME_TEST_URL: 'http://127.0.0.1:5198' },
+        stdio: 'inherit',
+      }
+    )
+    const recoveryCode = await new Promise((resolve) =>
+      cachedRecovery.once('exit', resolve)
+    )
+    if (recoveryCode !== 0)
+      throw new Error(`Cached recovery CUJ failed: ${recoveryCode}`)
     const startup = spawn(
       process.execPath,
       [

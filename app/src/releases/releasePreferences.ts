@@ -18,6 +18,9 @@ export type ReleaseReference = { releaseId: string; epoch: number }
 export type Preferences = {
   format: 2
   revision: number
+  // A distinct recovery generation supersedes an unreadable primary even if
+  // it had an earlier recovery. Once mirrored to IDB, compare revisions normally.
+  recoveryId?: string
   selection: Selection
   active?: ReleaseReference
   previous?: ReleaseReference
@@ -42,6 +45,14 @@ export function validatePreferences(value: unknown): Preferences {
   const p = value as Preferences
   if (p?.format !== 2 || !Number.isSafeInteger(p.revision) || p.revision < 0)
     throw new Error('Invalid release preferences')
+  if (
+    p.recoveryId !== undefined &&
+    (typeof p.recoveryId !== 'string' ||
+      !/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/.test(
+        p.recoveryId
+      ))
+  )
+    throw new Error('Invalid recovery preference marker')
   validateSelection(p.selection)
   for (const ref of [p.active, p.previous])
     if (

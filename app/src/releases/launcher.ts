@@ -1,3 +1,4 @@
+import { cachedReleases, tryCachedReleases } from './cachedReleaseRecovery'
 import {
   type Active,
   type Control,
@@ -6,19 +7,21 @@ import {
   type Selection,
   control,
   discover,
+  enableCacheOnlyPreferences,
   preferenceSource,
   pruneUnusedCaches,
   readControl,
   releaseIdValid,
   releasePrefix,
+  retryIndexedDBPreferences,
   stage,
   startupMarker,
+  usesCacheOnlyPreferences,
   validateManifest,
   validateSelection,
   verifyCache,
 } from './control'
 import { loaderController } from './loaderController'
-import { recoverUnreadableControl } from './recoverControl'
 import { type ReleaseAttention, releaseAttention } from './releaseAttention'
 import { holdReleaseCache } from './releaseCacheLease'
 import { resolvePublishedRelease } from './releaseCatalog'
@@ -28,10 +31,7 @@ import { releaseDatabaseDiagnostics } from './releaseDiagnostics'
 import { readOwnerTarget } from './releasePreferences'
 import type { OfflineDownloadStatus, ReleaseRuntime } from './runtime'
 import { startupDiagnostics } from './startupDiagnostics'
-import {
-  downloadRecoveryRelease,
-  prepareStartupRecovery,
-} from './startupRecovery'
+import { downloadRecoveryRelease } from './startupRecovery'
 import { upgradeLoader } from './upgradeLoader'
 import { activateWorker } from './workerActivation'
 
@@ -389,6 +389,23 @@ async function begin(target: Manifest): Promise<void> {
           startupScope()
         )
         const current = await readControl()
+        // With no readable selection or modern target, other tab locks may
+        // belong to immutable historical writers. Never bypass their save/close guard.
+        if (
+          usesCacheOnlyPreferences() &&
+          !current.active &&
+          !(await readOwnerTarget())
+        ) {
+          const locks = await navigator.locks.query()
+          if (
+            locks.held?.some(
+              (lock) =>
+                lock.name?.startsWith('runme-release-tab-') &&
+                lock.name !== `runme-release-tab-${tabId}`
+            )
+          )
+            throw legacyMigrationBlocked()
+        }
         if (!current.active || (await requireClosedLegacyTabs(current))) {
           report('Updating the navigation loader for offline startup…')
           await upgradeLoader(navigator.serviceWorker)
@@ -856,18 +873,23 @@ async function startRelease(applyRequest = true): Promise<void> {
   }
   if (s.active) void check(undefined, true).catch(report)
 }
-/** Recovery controls must not depend on a successful settings read. A missing
- * settings service cannot be allowed to hide the only way to retry or choose a
- * release. No notebook/coordination data is cleared by these actions.
- */
-function showStartupRecovery(error: unknown): void {
-  panel.hidden = false
+/** Preserve the original failed read even when cached recovery later succeeds. */
+function recordSettingsFailure(error: unknown): void {
   if (error instanceof ReleaseControlError)
     diagnostics.record(`release-settings-${error.stage}`, 'failed', {
       ...error.diagnosticDetails,
       trace: JSON.stringify(error.trace ?? null),
       stage: `release-settings-${error.stage}`,
     })
+}
+
+/** Recovery controls must not depend on a successful settings read. A missing
+ * settings service cannot be allowed to hide the only way to retry or choose a
+ * release. No notebook/coordination data is cleared by these actions.
+ */
+function showStartupRecovery(error: unknown): void {
+  panel.hidden = false
+  recordSettingsFailure(error)
   for (const node of [...panel.children])
     if (
       node !== status &&
@@ -882,6 +904,7 @@ function showStartupRecovery(error: unknown): void {
       : `${String(error instanceof Error ? error.message : error)} Retry the installed release, or explicitly choose another compatible release below. Stored notebooks have not been removed.`
   )
   button('Retry installed release', async () => {
+    retryIndexedDBPreferences()
     try {
       await startRelease(false)
     } catch (error) {
@@ -911,13 +934,16 @@ function showStartupRecovery(error: unknown): void {
 
 /** Explicit recovery may select latest stable after a settings failure. Downloads do not need the
  * settings DB; activation still uses worker handoff and the exclusive owner lock.
- * Existing transitions are resumed, never discarded to force a new version.
+ * Recovery selects through Cache Storage without reading or repairing IndexedDB.
  */
 async function recoverStartup(
   selection: Selection = { kind: 'channel', name: 'stable' }
 ): Promise<void> {
   if (recoveringStartup) return
   recoveringStartup = true
+  // Error handling must also avoid the failed database if discovery/download
+  // fails before a candidate is available (for example while offline).
+  enableCacheOnlyPreferences()
   try {
     report(
       selection.kind === 'channel' && selection.name === 'stable'
@@ -925,25 +951,24 @@ async function recoverStartup(
         : 'Trying the selected recovery release…'
     )
     const candidate = await diagnostics.step('startup-fallback', () =>
-      prepareStartupRecovery(
+      downloadRecoveryRelease(
         selection,
         (value) => reportProgress('Preparing recovery release', value),
-        startupScope(),
-        async (candidate) => {
-          if (runtime || appReady)
-            throw new Error('Reload before repairing release settings.')
-          await diagnostics.step('quarantine-unreadable-settings', () =>
-            recoverUnreadableControl(tabId, selection, candidate)
-          )
-        },
-        requireRegistrationFreeOwner
+        startupScope()
       )
     )
-    if (!(await readControl()).transition) await begin(candidate)
+    requireRegistrationFreeOwner(candidate)
+    // An explicit recovery selection is independent of the unreadable IDB record.
+    await control((state) => {
+      state.selection = selection
+      delete state.transition
+      delete state.ownerError
+    })
+    await begin(candidate)
     await startRelease(false)
   } catch (error) {
     // Offline discovery must not prevent an already installed release from
-    // starting if IndexedDB has recovered. Do not reapply a broken URL selection.
+    // starting from cached preferences. Do not reapply a broken URL selection.
     try {
       const state = await readControl()
       if (state.active || state.transition) {
@@ -969,13 +994,16 @@ window.runmeVersions = {
       startupScope()
     ),
   recover: async (selection) => {
-    const candidate = await prepareStartupRecovery(
+    const candidate = await downloadRecoveryRelease(
       validateSelection(selection),
       (value) => reportProgress('Preparing recovery release', value),
-      startupScope(),
-      undefined,
-      requireRegistrationFreeOwner
+      startupScope()
     )
+    requireRegistrationFreeOwner(candidate)
+    enableCacheOnlyPreferences()
+    await control((state) => {
+      state.selection = validateSelection(selection)
+    })
     await begin(candidate)
   },
   uiVersion: 1,
@@ -1032,27 +1060,27 @@ window.runmeVersions = {
   },
 }
 
-/** Startup-ready releases remain recovery choices even when optional fonts are
- * unavailable. Activation rechecks code bytes; this does not claim full offline readiness.
- */
-async function cachedReleases(): Promise<Manifest[]> {
-  const releases: Manifest[] = []
-  for (const name of await caches.keys()) {
-    if (!name.startsWith('runme-release-v1-')) continue
-    const id = name.slice('runme-release-v1-'.length)
-    const cache = await caches.open(name)
-    const response =
-      (await cache.match(releasePrefix(id) + 'release.json')) ||
-      (deferredFonts ? await cache.match(startupMarker(id)) : undefined)
-    if (!response) continue
-    try {
-      const manifest = validateManifest(await response.json())
-      if (manifest.releaseId === id) releases.push(manifest)
-    } catch {
-      /* Incomplete caches are not eligible. */
-    }
-  }
-  return releases
+/** Recover selection from the actual downloaded inventories, newest publication
+ * first. No settings write or worker change occurs until a candidate verifies. */
+async function recoverCachedStartup(error: unknown): Promise<void> {
+  if (
+    !startupPrepared ||
+    runtime ||
+    recovery ||
+    error instanceof TabRegistrationRequiredError
+  )
+    throw error
+  recordSettingsFailure(error)
+  enableCacheOnlyPreferences()
+  await diagnostics.step('cached-release-fallback', () =>
+    tryCachedReleases(begin, (manifest, error) => {
+      diagnostics.record('cached-release-rejected', 'failed', {
+        releaseId: manifest.releaseId,
+        errorName: error instanceof Error ? error.name : 'unknown',
+      })
+    })
+  )
+  await startRelease(false)
 }
 // This listener is installed before startup awaits. An old uncontrolled window
 // cannot satisfy this probe, while another starting launcher can respond safely.
@@ -1060,8 +1088,14 @@ navigator.serviceWorker?.addEventListener('message', (event) => {
   if (event.data === 'runme-loader-probe')
     event.ports[0]?.postMessage('runme-loader-1')
 })
-void diagnostics.step('bootstrap', main).catch((error) => {
-  if (startupPrepared) {
-    showStartupRecovery(error)
-  } else report(error)
+void diagnostics.step('bootstrap', main).catch(async (error) => {
+  if (!startupPrepared) {
+    report(error)
+    return
+  }
+  try {
+    await recoverCachedStartup(error)
+  } catch (fallbackError) {
+    showStartupRecovery(fallbackError)
+  }
 })

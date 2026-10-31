@@ -17,7 +17,7 @@
     "preview": "vite preview",
     "test": "pnpm run check:documentation && vitest",
     "cuj:storage": "tsc --target es2022 --module nodenext --moduleResolution nodenext --esModuleInterop --skipLibCheck --outDir test/browser/.generated test/browser/run-storage-worker-reconnect.ts test/browser/storage-worker-reconnect.ts && node test/browser/.generated/run-storage-worker-reconnect.js",
-    "cuj:releases": "tsc --target es2020 --module nodenext --moduleResolution nodenext --esModuleInterop --skipLibCheck --outDir test/browser/.generated test/browser/run-controlled-releases.ts test/browser/controlled-releases.ts test/browser/storage-worker-startup.ts && node test/browser/.generated/run-controlled-releases.js"
+    "cuj:releases": "tsc --target es2020 --module nodenext --moduleResolution nodenext --esModuleInterop --skipLibCheck --outDir test/browser/.generated test/browser/run-controlled-releases.ts test/browser/controlled-releases.ts test/browser/storage-worker-startup.ts test/browser/cached-release-recovery.ts && node test/browser/.generated/run-controlled-releases.js"
   },
   "dependencies": {
     "@buf/googleapis_googleapis.bufbuild_es": "2.6.0-20250411203938-61b203b9a916.1",
