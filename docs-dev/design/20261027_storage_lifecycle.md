@@ -106,3 +106,36 @@ failed snapshots, worker initialization failure, and replacement identity under
 the lifetime lock. Verify OPFS notebook contents after restart, and recovery copies
 when an edit had not committed. Existing upgrade/offline/rollback journeys must
 still pass. Unit tests alone do not establish lifecycle correctness.
+
+## Registration-free tab startup
+
+Normal startup reads the installed release from IndexedDB, verifies its cached
+assets, and rechecks selection using a readonly transaction. Tabs no longer write
+registration, loaded version, session label, or repeated readiness/healthy records.
+The worker accepts unregistered tab IDs while retaining the active release/epoch,
+handoff, and legacy prepared-participant fences before effects. An activation
+racing the startup snapshot is rejected by the worker rather than authorized by a
+persistent admission record.
+
+A shared lifetime Web Lock named for the app release protects lazy-loaded assets.
+Startup acquires it under the shared cache-operation lock before verification;
+cleanup probes its exclusive counterpart without waiting. Failed verification or
+selection rechecks release the lease; document destruction releases retained leases. Existing
+legacy tab records remain roots for cleanup until those tabs close. Old launchers
+that do not understand asset leases cannot provide this new cleanup guarantee.
+
+Manifests advertise `tabAdmissionFormat: 1` for registration-free owners. A new
+launcher with an older selected worker exposes an explicit upgrade before loading
+the app; it never synthesizes a tab record to make the old worker accept requests.
+Rollback to an owner lacking this contract is rejected before changing release
+state. One-time migration requires saving edits and closing older tabs: immutable
+historical launchers can reload on an epoch change before their debounced saves
+finish. The guard checks liveness locks and serializes against new historical
+registrations before handoff. It also applies when retrying a pending activation.
+Registration-free releases continue to upgrade without waiting for peer tabs.
+
+Explicit selection, activation, recovery, owner startup and cache maintenance still persist
+shared release state. Background discovery writes a genuinely new candidate, but
+does not rewrite the installed/already-downloaded candidate on every page load.
+Release selection reads remain a startup dependency: this change removes write
+contention and registration failures, not all possible IndexedDB read failures.

@@ -3,6 +3,7 @@ import {
   LAUNCHER_POINTER,
   launcherDescriptor,
 } from './launcherSelection'
+import { releaseCacheLock } from './releaseCacheLease'
 import { notifyReleaseChange, releaseChangeKey } from './releaseChanges'
 import { releaseTransaction } from './releaseDatabase'
 
@@ -27,6 +28,7 @@ export type Manifest = {
   publishedAt: string
   recoveredControlFormat?: 1
   tabRecoveryFormat?: 1
+  tabAdmissionFormat?: 1
   requiredCapabilities: string[]
   testedRollbackTargets: string[]
   launcherProtocol: { min: number; max: number }
@@ -77,7 +79,7 @@ export type Control = {
   ownerError?: { transitionId?: string; message: string }
 }
 
-/** One transaction serializes admission, readiness and activation. Callbacks must
+/** Transactions serialize explicit release changes. Callbacks must
  * be synchronous: no network/cache awaits may outlive an IndexedDB transaction.
  * Close every connection so a suspended tab cannot block a future loader schema.
  */
@@ -409,8 +411,12 @@ export async function pruneUnusedCaches(): Promise<number> {
     for (const name of await caches.keys()) {
       if (!name.startsWith('runme-release-v1-')) continue
       const id = name.slice('runme-release-v1-'.length)
-      if (releaseIdValid(id) && !keep.has(id) && (await caches.delete(name)))
-        removed++
+      if (releaseIdValid(id) && !keep.has(id))
+        removed += await navigator.locks.request(
+          releaseCacheLock(id),
+          { ifAvailable: true },
+          async (lock) => (lock && (await caches.delete(name)) ? 1 : 0)
+        )
     }
     return removed
   })

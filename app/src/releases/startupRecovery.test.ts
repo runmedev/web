@@ -71,6 +71,19 @@ it('does not overwrite settings after an offline or unverified download', async 
   await expect(prepareStartupRecovery()).rejects.toThrow('checksum mismatch')
   expect(control).not.toHaveBeenCalled()
 })
+it('rejects incompatible recovery before writing or quarantining settings', async () => {
+  const candidate = setup()
+  const repair = vi.fn()
+  const validate = vi.fn(() => {
+    throw new Error('Registration required')
+  })
+  await expect(
+    prepareStartupRecovery(undefined, undefined, 'startup', repair, validate)
+  ).rejects.toThrow('Registration required')
+  expect(validate).toHaveBeenCalledWith(candidate)
+  expect(control).not.toHaveBeenCalled()
+  expect(repair).not.toHaveBeenCalled()
+})
 it('accepts an explicit alternative to stable and never retries coordination errors', async () => {
   setup()
   vi.mocked(control).mockRejectedValue(new Error('Unsupported format'))

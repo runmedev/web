@@ -30,8 +30,10 @@ Acceptance:
   not include notebook data, credentials, or URL query parameters.
 - A stalled release-settings open shows independent recovery controls without
   changing selection or activating stable automatically. Explicit retry opens
-  the installed release. A later admission `get` timeout records failed startup
-  and exposes the same controls; retry retains the installed release.
+  the installed release. Opening an installed current release and repeated app
+  readiness callbacks perform no per-tab settings writes. The browser journey
+  rejects every release `readwrite` transaction in the new tab and verifies app
+  rendering plus a real notebook creation through the worker.
 - Normal startup neither scans peer tab locks nor resumes pending upgrades.
   Release-change hints update badges without a periodic tab reconciliation loop.
   Only explicit activation/retry starts a pending worker (except first install).
@@ -47,26 +49,31 @@ Acceptance:
   adds its default root. Show a persistence warning until a successful reload.
   Missing folder metadata hides only that unresolved root; it must not remove
   the saved mount. Unit tests cover both cases and healthy legacy migration.
-- Deploy B while A is installed. Refresh and new tabs still use app/owner A,
+- Deploy B while a registration-free A is installed. Refresh and new tabs still use app/owner A,
   while the bootstrap selects launcher B. An existing A tab stays open during
   this assertion, and the screenshot must show the rendered app, not merely
   initialized automation APIs or a router error page.
 - For a pre-bootstrap installation, enter through B's immutable
-  `/version/<release-id>/launcher.html`. This entry must normalize its route and
-  open the selected older app without forcing the existing tabs to reload.
+  `/version/<release-id>/launcher.html`. If the historical worker requires tab
+  registration, this entry shows explicit upgrade controls without a settings
+  write or app import. Activation requires older tabs to save and close, and
+  the migrated app must reopen the saved notebook with its content intact;
+  unsupported rollback is rejected before changing selection. The migrated
+  release must then reopen offline.
 - Hold a new tab's launcher discovery pending and probe it from another tab
   through the real service worker. It must answer before importing the launcher,
   then open the selected app when discovery resumes. Slow discovery must never
   misclassify a controlled bootstrap as an incompatible legacy window.
 - Channel changes and exact pins only stage; activation requires an explicit action.
+- A background channel check replaces an obsolete candidate when the channel points
+  back to the installed release; only unchanged checks avoid writing settings.
 - Activating B replaces the worker under its lifetime lock and reloads only the initiating tab.
 - A frozen peer with a failing preparation hook cannot block activation and is never asked to prepare.
 - The old peer keeps its tab identity and mounted editor, then saves through worker B on retry.
 - Reloading another tab is an independent action. A session-storage quota error leaves that tab editable and does not roll back the selected worker.
 - A successful local reload checkpoints and restores editor state without involving a peer.
 - A confirmed capability mismatch triggers local checkpoint/reload recovery before any data RPC. Timeouts alone never do.
-- Historical rollback requires a durable flush of the initiating tab. Current peers refuse checkpoint reload into an app without `tabRecoveryFormat: 1`, retaining their mounted editors.
-- Historical launchers retain their original behavior. The frozen-baseline migration closes durable legacy peers before activation; the initiating historical app flushes locally before worker replacement.
+- Rollback requires `tabAdmissionFormat: 1`; historical owners that require registration are rejected. Current peers also refuse checkpoint reload into an app without `tabRecoveryFormat: 1`, retaining their mounted editors.
 - After full offline readiness, offline restart uses B; offline rollback to A preserves edits made on B and leaves other tabs on their loaded UI versions.
 - The current recovery selector works independently of React/application imports, explains
   that notebooks open in the app, and keeps **Return to Runme** visible. Returning
@@ -133,3 +140,8 @@ advances even when the stable application channel is pinned.
 - Automated coverage: `storageOwner.test.ts`, `storageRecovery.test.ts`, and
   `StorageRecoveryBanner.test.tsx`. Existing browser restart and upgrade journeys
   remain in `storage-owner-recovery.ts` and `controlled-releases.ts`.
+
+- Cache cleanup honors shared lifetime asset leases held by current tabs and
+  legacy tab records held by historical tabs. It must retain a release until its
+  last lease closes; closing the last lease allows cleanup without a tab-record
+  write. Explicit release changes and maintenance still persist shared state.

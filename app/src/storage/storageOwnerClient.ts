@@ -424,6 +424,14 @@ export function createSharedNotebookStore(
     // Migration is part of the handshake: do not let a recovery scan generate a
     // second remote identity while an old reserved ID only exists in localStorage.
     const ready = Promise.resolve().then(async () => {
+      if (release && release.manifest.tabAdmissionFormat !== 1) {
+        const error = new Error(
+          'Selected storage worker requires tab registration. Keep this tab open and select a newer release.'
+        )
+        error.name = 'StorageWorkerIncompatibleError'
+        storageRecovery.set({ phase: 'blocked', message: error.message })
+        throw error
+      }
       // This small contract is stable across data-RPC versions and has no
       // storage effects. Incompatibility is distinct from timeout/unavailability.
       if (release && release.manifest.tabRecoveryFormat !== 1) {

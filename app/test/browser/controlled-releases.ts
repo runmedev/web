@@ -387,66 +387,61 @@ async function main() {
       } finally {
         await pendingContext.close()
       }
-      // Reproduce a later read stall, after initial settings/render succeeded.
-      // Keep a real transaction alive while suppressing its control-get callback.
+      // Opening another tab and reporting readiness must work with release
+      // writes forbidden. Keep real readonly IDB, cache, worker and notebook RPCs.
       const late = await context.newPage()
       try {
         await late.addInitScript(() => {
-          const get = IDBObjectStore.prototype.get
-          let injected = false
-          IDBObjectStore.prototype.get = function (key) {
-            if (
-              this.transaction.db.name === 'runme-release-control' &&
-              this.transaction.mode === 'readwrite' &&
-              key === 'control' &&
-              !injected
-            ) {
-              injected = true
-              const keepAlive = () => {
-                try {
-                  get.call(this, '__keepalive').onsuccess = keepAlive
-                } catch {
-                  /* aborted by deadline */
-                }
-              }
-              keepAlive()
-              return {} as IDBRequest
+          const transaction = IDBDatabase.prototype.transaction
+          ;(window as any).__releaseWrites = 0
+          IDBDatabase.prototype.transaction = function (stores, mode, options) {
+            if (this.name === 'runme-release-control' && mode === 'readwrite') {
+              ;(window as any).__releaseWrites++
+              throw new Error(
+                'Per-tab release writes forbidden by regression test'
+              )
             }
-            return get.call(this, key)
+            return transaction.call(this, stores, mode, options)
           }
         })
-        await late.goto(base + '/?session=late-settings-timeout')
-        await late
-          .getByRole('button', { name: 'Retry installed release', exact: true })
-          .waitFor({ timeout: 20000 })
-        assert.equal(await active(late), undefined)
-        const trace = JSON.parse(
-          (await late
-            .locator('#runme-startup-diagnostics-log')
-            .textContent()) || '[]'
-        )
-        assert.ok(
-          trace.some(
-            (e: any) =>
-              e.attrs.stage === 'tab-admission' && e.attrs.state === 'failed'
-          )
-        )
-        assert.ok(
-          !trace.some(
-            (e: any) =>
-              e.attrs.stage === 'bootstrap' && e.attrs.state === 'completed'
-          )
-        )
-        await late.screenshot({
-          path: output + '/late-settings-timeout-recovery.png',
-        })
-        await late
-          .getByRole('button', { name: 'Retry installed release', exact: true })
-          .click()
+        await late.goto(base + '/?session=readonly-settings-startup')
         await ready(late)
         assert.equal(await active(late), a)
+        await late.evaluate(() => {
+          for (let i = 0; i < 5; i++) (window as any).runmeRelease.ready()
+        })
+        assert.equal(
+          await late.evaluate(() => (window as any).__releaseWrites),
+          0
+        )
+        const state = await late.evaluate(() =>
+          (window as any).runmeVersions.get()
+        )
+        const tabId = await late.evaluate(
+          () => (window as any).runmeRelease.tabId
+        )
+        assert.equal(state.tabs[tabId], undefined)
+        // This invokes the real owner authorization, not just app rendering.
+        assert.match(
+          await execute(
+            late,
+            "const d=await notebooks.createLocal('readonly-startup.runme'); console.log(d.handle.uri)"
+          ),
+          /local:\/\/file\//
+        )
+        // Await a no-change background check as well as readiness/editor work.
+        await late.evaluate(() =>
+          (window as any).runmeVersions.check(undefined, true)
+        )
+        assert.equal(
+          await late.evaluate(() => (window as any).__releaseWrites),
+          0
+        )
+        await late.screenshot({
+          path: output + '/readonly-settings-startup.png',
+        })
         console.log(
-          'PASS: admission get timeout exposes recovery and retries installed release without automatic activation'
+          'PASS: installed app and notebook RPCs work without tab registration or readiness writes'
         )
       } finally {
         await late.close()
@@ -695,6 +690,121 @@ async function main() {
       await damagedContext.close()
     }
     await fetch(base + '/test/promote?release=b', { method: 'POST' })
+    if (process.env.RUNME_RELEASE_BASELINE) {
+      // Frozen owners require persisted registration. The latest launcher must
+      // offer explicit migration without registering or silently switching apps.
+      const saved = (
+        await execute(
+          two,
+          `const d=await notebooks.createLocal('registration-migration.runme'); await notebooks.appendCell({target:{uri:d.handle.uri},kind:'markup',value:'Survives registration-free migration'}); console.log(d.handle.uri)`
+        )
+      ).trim()
+      const oldTab = await two.evaluate(
+        () => (window as any).runmeRelease.tabId
+      )
+      const migration = await context.newPage()
+      pages.push(migration)
+      await migration.addInitScript(() => {
+        const transaction = IDBDatabase.prototype.transaction
+        ;(window as any).__releaseWrites = 0
+        IDBDatabase.prototype.transaction = function (stores, mode, options) {
+          if (this.name === 'runme-release-control' && mode === 'readwrite')
+            (window as any).__releaseWrites++
+          return transaction.call(this, stores, mode, options)
+        }
+      })
+      await migration.goto(
+        `${base}/version/${expected.b}/launcher.html?session=migration`
+      )
+      await migration
+        .getByRole('status')
+        .filter({ hasText: 'requires tab registration' })
+        .waitFor()
+      assert.equal(await active(migration), undefined)
+      assert.equal(
+        await migration.evaluate(() => (window as any).__releaseWrites),
+        0
+      )
+      assert.equal(
+        (await migration.evaluate(() => (window as any).runmeVersions.get()))
+          .active.manifest.releaseId,
+        a
+      )
+      await migration.screenshot({
+        path: output + '/historical-registration-upgrade.png',
+      })
+      await migration
+        .getByRole('button', { name: 'Retry latest stable', exact: true })
+        .click()
+      await migration
+        .getByRole('status')
+        .filter({ hasText: 'close older Runme tabs' })
+        .waitFor()
+      assert.equal(
+        await two.evaluate(() => (window as any).runmeRelease.tabId),
+        oldTab
+      )
+      assert.equal(await active(two), a)
+      assert.equal(
+        (await migration.evaluate(() => (window as any).runmeVersions.get()))
+          .active.manifest.releaseId,
+        a
+      )
+      // Model the instructed durable save before closing immutable old clients.
+      await two.evaluate(() => (window as any).runmeRelease.prepare())
+      await Promise.all([one.close(), two.close()])
+      await migration
+        .getByRole('button', { name: 'Retry latest stable', exact: true })
+        .click()
+      await ready(migration)
+      assert.equal(await active(migration), expected.b)
+      assert.match(
+        await execute(
+          migration,
+          `await notebooks.show(${JSON.stringify(saved)}); console.log((await notebooks.get({uri:${JSON.stringify(saved)}})).notebook.cells.map(c=>c.value).join('\\n'))`
+        ),
+        /Survives registration-free migration/
+      )
+      const rejected = await migration.evaluate(async (id) => {
+        try {
+          await (window as any).runmeVersions.activate(id)
+          return 'unexpected activation'
+        } catch (error) {
+          return String(error)
+        }
+      }, a)
+      assert.match(rejected, /requires tab registration/)
+      assert.equal(
+        (await migration.evaluate(() => (window as any).runmeVersions.get()))
+          .active.manifest.releaseId,
+        expected.b
+      )
+      await context.setOffline(true)
+      await migration.reload()
+      await ready(migration)
+      assert.equal(await active(migration), expected.b)
+      await migration.screenshot({
+        path: output + '/historical-registration-migrated.png',
+      })
+      await writeFile(
+        output + '/result.json',
+        JSON.stringify(
+          {
+            passed: true,
+            a,
+            b: expected.b,
+            scenario: 'explicit-registration-free-migration',
+            errors,
+          },
+          null,
+          2
+        )
+      )
+      console.log(
+        'PASS: frozen owner migration waits for old tabs to save/close, preserves notebooks, rejects unsupported rollback, and opens offline'
+      )
+      return
+    }
     await one.reload()
     await ready(one)
     assert.equal(await active(one), a)
@@ -869,6 +979,18 @@ async function main() {
         s.selection.name === 'stable' && s.candidate?.releaseId === expected.b
     )
     assert.equal(await active(one), a)
+    // A channel rollback must replace a stale candidate even when it now
+    // points at the installed build. Only truly unchanged checks skip writes.
+    await fetch(base + '/test/promote?release=a', { method: 'POST' })
+    await one.evaluate(() =>
+      (window as any).runmeVersions.check(undefined, true)
+    )
+    await waitControl(one, (s) => s.candidate?.releaseId === a)
+    await fetch(base + '/test/promote?release=b', { method: 'POST' })
+    await one.evaluate(() =>
+      (window as any).runmeVersions.check(undefined, true)
+    )
+    await waitControl(one, (s) => s.candidate?.releaseId === expected.b)
     if (!process.env.RUNME_RELEASE_BASELINE) {
       await one.getByTestId('version-attention-badge').waitFor()
       assert.equal(
