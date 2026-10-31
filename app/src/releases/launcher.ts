@@ -941,6 +941,9 @@ async function recoverStartup(
 ): Promise<void> {
   if (recoveringStartup) return
   recoveringStartup = true
+  // Error handling must also avoid the failed database if discovery/download
+  // fails before a candidate is available (for example while offline).
+  enableCacheOnlyPreferences()
   try {
     report(
       selection.kind === 'channel' && selection.name === 'stable'
@@ -956,7 +959,6 @@ async function recoverStartup(
     )
     requireRegistrationFreeOwner(candidate)
     // An explicit recovery selection is independent of the unreadable IDB record.
-    enableCacheOnlyPreferences()
     await control((state) => {
       state.selection = selection
       delete state.transition
@@ -966,7 +968,7 @@ async function recoverStartup(
     await startRelease(false)
   } catch (error) {
     // Offline discovery must not prevent an already installed release from
-    // starting if IndexedDB has recovered. Do not reapply a broken URL selection.
+    // starting from cached preferences. Do not reapply a broken URL selection.
     try {
       const state = await readControl()
       if (state.active || state.transition) {

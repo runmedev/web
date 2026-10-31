@@ -164,4 +164,6 @@ still apply.
 saved preferences and a permanently stalled release-settings open. It then
 removes inventory markers in its disposable test profile, clicks “Try latest
 channel,” and verifies the application opens without another settings attempt.
+It also checks that an offline download failure on the standalone recovery page
+does not retry IndexedDB while displaying the recovery error.
 Screenshots and `cached-fallback-result.json` are published with release evidence.

@@ -101,6 +101,36 @@ async function main() {
     await page.screenshot({
       path: output + '/latest-channel-with-blocked-settings.png',
     })
+    // The standalone recovery page does not automatically select cached code.
+    // A failed offline download must not fall back to another blocked IDB read.
+    await page.evaluate(async () =>
+      (await caches.open('runme-release-preferences-v1')).delete(
+        '/__runme-release-preferences'
+      )
+    )
+    await page.goto(base + '/recovery.html')
+    await page
+      .getByRole('button', { name: 'Try latest channel', exact: true })
+      .waitFor({ timeout: 60000 })
+    const beforeFailedDownload = await page.evaluate(
+      () => (window as any).__settingsAttempts
+    )
+    await context.setOffline(true)
+    await page
+      .getByRole('button', { name: 'Try latest channel', exact: true })
+      .click()
+    await page
+      .getByRole('button', { name: 'Try latest channel', exact: true })
+      .waitFor({ timeout: 60000 })
+    await page.waitForFunction(() =>
+      document
+        .querySelector('[role="status"]')
+        ?.textContent?.includes('Failed to fetch')
+    )
+    assert.equal(
+      await page.evaluate(() => (window as any).__settingsAttempts),
+      beforeFailedDownload
+    )
     assert.deepEqual(errors, [])
     await writeFile(
       output + '/cached-fallback-result.json',
