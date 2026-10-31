@@ -18,6 +18,9 @@ export type ReleaseReference = { releaseId: string; epoch: number }
 export type Preferences = {
   format: 2
   revision: number
+  // A recovery choice supersedes an unreadable primary record whose revision
+  // was unknown. Once copied to IDB, ordinary revision comparison resumes.
+  recovered?: true
   selection: Selection
   active?: ReleaseReference
   previous?: ReleaseReference
@@ -42,6 +45,8 @@ export function validatePreferences(value: unknown): Preferences {
   const p = value as Preferences
   if (p?.format !== 2 || !Number.isSafeInteger(p.revision) || p.revision < 0)
     throw new Error('Invalid release preferences')
+  if (p.recovered !== undefined && p.recovered !== true)
+    throw new Error('Invalid recovery preference marker')
   validateSelection(p.selection)
   for (const ref of [p.active, p.previous])
     if (

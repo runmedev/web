@@ -93,6 +93,22 @@ export type Control = {
 let volatile: Pick<Control, 'candidate' | 'transition' | 'ownerError'> = {}
 let revision = 0
 let preferCached = false
+let cacheOnly = false
+let recoveredPreferences = false
+let lastReadState: Control | undefined
+/** Recovery must not depend on the database that prevented startup. This mode
+ * is page-local; explicit choices persist in Cache Storage, never repair IDB. */
+export function enableCacheOnlyPreferences(): void {
+  cacheOnly = true
+  preferCached = true
+}
+/** An explicit retry may probe IDB again after the user fixes browser storage. */
+export function retryIndexedDBPreferences(): void {
+  cacheOnly = false
+  preferCached = false
+  volatile = {}
+}
+export const usesCacheOnlyPreferences = () => cacheOnly
 let usingCached = false
 /** Expose fallback provenance without persisting diagnostic state. */
 export const preferenceSource = () => (usingCached ? 'cache' : 'indexeddb')
@@ -102,55 +118,80 @@ let volatileSelection: string | undefined
  * explicit selection from Cache Storage; startup never repairs/writes settings.
  */
 export async function readControl(): Promise<Control> {
-  let state: Control
+  let state: Control | undefined
   const cached = await readSavedPreferences().catch(() => undefined)
-  try {
-    if (preferCached && cached)
-      throw new Error('Continuing with cached preferences after a failed read')
-    const value = await releaseTransaction(CONTROL_DB, false, (value) => ({
-      state: value,
-      result: value,
-    }))
-    if (value && (value as { format: number }).format === 2) {
-      const stored = validatePreferences(value)
-      const selected =
-        cached && cached.revision > stored.revision ? cached : stored
-      usingCached = selected === cached
-      revision = selected.revision
-      state = await expandPreferences(selected)
-    } else if (cached) {
+  if (cacheOnly) {
+    usingCached = true
+    recoveredPreferences = true
+    revision = cached?.revision ?? revision
+    try {
+      state = cached ? await expandPreferences(cached) : undefined
+    } catch (error) {
+      reportPreferenceFallback(error)
+    }
+    state ??= lastReadState ?? {
+      format: 1,
+      selection: { kind: 'channel', name: 'stable' },
+      tabs: {},
+    }
+  } else
+    try {
+      if (preferCached && cached)
+        throw new Error(
+          'Continuing with cached preferences after a failed read'
+        )
+      const value = await releaseTransaction(CONTROL_DB, false, (value) => ({
+        state: value,
+        result: value,
+      }))
+      if (value && (value as { format: number }).format === 2) {
+        const stored = validatePreferences(value)
+        const selected =
+          cached &&
+          (cached.revision > stored.revision ||
+            (cached.recovered && !stored.recovered))
+            ? cached
+            : stored
+        usingCached = selected === cached
+        revision = selected.revision
+        recoveredPreferences = Boolean(selected.recovered)
+        state = await expandPreferences(selected)
+      } else if (cached) {
+        usingCached = true
+        revision = cached.revision
+        recoveredPreferences = Boolean(cached.recovered)
+        state = await expandPreferences(cached)
+      } else {
+        // Read historical records without rewriting them on startup.
+        const legacy = (value as Control | undefined) ?? {
+          format: 1,
+          selection: { kind: 'channel', name: 'stable' },
+          tabs: {},
+        }
+        if (legacy.format !== 1)
+          throw new Error('Unsupported release preferences')
+        validateSelection(legacy.selection)
+        // Old handoffs, tab registrations and worker errors are not live state.
+        // Keep the original record untouched for historical workers, but never
+        // let an abandoned transition block explicit migration in this launcher.
+        state = {
+          format: 1,
+          selection: legacy.selection,
+          active: legacy.active,
+          previous: legacy.previous,
+          tabs: {},
+        }
+      }
+    } catch (error) {
+      if (!cached) throw error
+      if (!preferCached) reportPreferenceFallback(error)
+      preferCached = true
       usingCached = true
       revision = cached.revision
+      recoveredPreferences = Boolean(cached.recovered)
       state = await expandPreferences(cached)
-    } else {
-      // Read historical records without rewriting them on startup.
-      const legacy = (value as Control | undefined) ?? {
-        format: 1,
-        selection: { kind: 'channel', name: 'stable' },
-        tabs: {},
-      }
-      if (legacy.format !== 1)
-        throw new Error('Unsupported release preferences')
-      validateSelection(legacy.selection)
-      // Old handoffs, tab registrations and worker errors are not live state.
-      // Keep the original record untouched for historical workers, but never
-      // let an abandoned transition block explicit migration in this launcher.
-      state = {
-        format: 1,
-        selection: legacy.selection,
-        active: legacy.active,
-        previous: legacy.previous,
-        tabs: {},
-      }
     }
-  } catch (error) {
-    if (!cached) throw error
-    if (!preferCached) reportPreferenceFallback(error)
-    preferCached = true
-    usingCached = true
-    revision = cached.revision
-    state = await expandPreferences(cached)
-  }
+  lastReadState = state
   if (
     volatile.transition &&
     state.active &&
@@ -179,13 +220,14 @@ export async function control<T>(
     const changed = before !== JSON.stringify(preferences(state, 0))
     if (changed) {
       const record = preferences(state, revision + 1)
+      if (cacheOnly || recoveredPreferences) record.recovered = true
       // Commit the independent copy first. If IDB fails or its outcome is
       // uncertain, the higher revision still preserves the explicit user choice.
       await savePreferences(record)
       revision = record.revision
       // Historical owners still read format 1. Keep their record intact until
       // explicit migration has closed their tabs and started a new owner.
-      if (state.active?.manifest.storageControlFormat === 1)
+      if (!cacheOnly && state.active?.manifest.storageControlFormat === 1)
         await releaseTransaction(CONTROL_DB, true, () => ({
           state: record,
           result: undefined,

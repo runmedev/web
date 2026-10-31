@@ -50,6 +50,9 @@ beforeEach(() => {
     locks: { request: async (_key: string, run: () => unknown) => run() },
   })
   vi.stubGlobal('caches', {
+    keys: async () => [
+      ...new Set([...cache.keys()].map((key) => key.split('/')[0])),
+    ],
     open: async (name: string) => ({
       match: async (path: string) => cache.get(name + path)?.clone(),
       put: async (path: string, response: Response) => {
@@ -243,4 +246,113 @@ it('ignores abandoned historical coordination without rewriting the original rec
   expect((await readControl()).transition).toBeUndefined()
   expect(writes()).toHaveLength(0)
   expect(stored).toEqual(original)
+})
+
+it('can initialize recovered preferences without any IDB access or previous preference copy', async () => {
+  vi.mocked(releaseTransaction).mockRejectedValue(
+    new Error('IDB must not be accessed')
+  )
+  const { enableCacheOnlyPreferences, control, readControl } = await import(
+    './control'
+  )
+  enableCacheOnlyPreferences()
+  await control((state) => {
+    state.selection = { kind: 'channel', name: 'latest' }
+  })
+  await control((state) => {
+    state.active = { manifest, epoch: 10 }
+  })
+  expect((await readControl()).active?.epoch).toBe(10)
+  expect((await readControl()).selection).toEqual({
+    kind: 'channel',
+    name: 'latest',
+  })
+  expect(releaseTransaction).not.toHaveBeenCalled()
+  expect(stored).toBeUndefined()
+  vi.resetModules()
+  const nextPage = await import('./control')
+  expect((await nextPage.readControl()).active?.epoch).toBe(10)
+  expect(releaseTransaction).toHaveBeenCalledTimes(1)
+  expect(writes()).toHaveLength(0)
+})
+
+it('tries the newest published inventory first, skipping unusable candidates without preferences', async () => {
+  const newerId = `${'c'.repeat(40)}-${'d'.repeat(64)}`
+  const newest = {
+    ...manifest,
+    releaseId: newerId,
+    webCommit: 'c'.repeat(40),
+    buildId: 'd'.repeat(64),
+    buildInputsDigest: 'd'.repeat(64),
+    owner: { ...manifest.owner, buildId: 'd'.repeat(64) },
+    publishedAt: '2026-10-31T00:00:00Z',
+  }
+  cache.set(
+    `runme-release-v1-${newerId}/__runme-startup/${newerId}`,
+    Response.json(newest)
+  )
+  // Even newer cache names without a completion marker are not candidates.
+  cache.set(
+    `runme-release-v1-${'e'.repeat(40)}-${'f'.repeat(64)}/launcher.js`,
+    new Response('partial')
+  )
+  const { tryCachedReleases } = await import('./cachedReleaseRecovery')
+  const activate = vi.fn(async (candidate: Manifest) => {
+    if (candidate.releaseId === newerId) throw new Error('asset missing')
+  })
+  const rejected = vi.fn()
+  await tryCachedReleases(activate, rejected)
+  expect(activate.mock.calls.map(([candidate]) => candidate.releaseId)).toEqual(
+    [newerId, id]
+  )
+  expect(rejected).toHaveBeenCalledOnce()
+  expect(releaseTransaction).not.toHaveBeenCalled()
+})
+
+it('retains an explicit recovery choice when the unknown primary revision later becomes readable', async () => {
+  stored = {
+    format: 2,
+    revision: 100,
+    selection: { kind: 'channel', name: 'stable' },
+    active: { releaseId: id, epoch: 1 },
+  }
+  const { enableCacheOnlyPreferences, control } = await import('./control')
+  enableCacheOnlyPreferences()
+  await control((state) => {
+    state.selection = { kind: 'channel', name: 'latest' }
+    state.active = { manifest, epoch: 10 }
+  })
+  expect(releaseTransaction).not.toHaveBeenCalled()
+  vi.resetModules()
+  const nextPage = await import('./control')
+  expect((await nextPage.readControl()).selection).toEqual({
+    kind: 'channel',
+    name: 'latest',
+  })
+  expect((await nextPage.readControl()).active?.epoch).toBe(10)
+  await nextPage.control((state) => {
+    state.selection = { kind: 'pinned', releaseId: id }
+  })
+  expect((stored as { recovered?: boolean }).recovered).toBe(true)
+})
+
+it('retains a successful historical snapshot when explicit recovery switches to cache-only mode', async () => {
+  const active = {
+    manifest: { ...manifest, storageControlFormat: undefined },
+    epoch: 3,
+  }
+  stored = {
+    format: 1,
+    selection: { kind: 'channel', name: 'stable' },
+    active,
+    tabs: {},
+  }
+  const { readControl, enableCacheOnlyPreferences } = await import('./control')
+  await readControl()
+  vi.mocked(releaseTransaction)
+    .mockClear()
+    .mockRejectedValue(new Error('must not retry'))
+  enableCacheOnlyPreferences()
+  expect((await readControl()).active).toEqual(active)
+  expect(releaseTransaction).not.toHaveBeenCalled()
 })

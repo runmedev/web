@@ -203,3 +203,25 @@ while an older release is installed stay in the cached preference copy until
 migration completes, leaving the old worker's format-1 record readable.
 
 Historical format-1 records are projected into saved selection, active and previous releases on read. Old tab registrations, handoffs, candidates and worker errors are ignored by the new launcher, without rewriting the historical record. This prevents abandoned coordination from blocking explicit migration while old workers still retain their original settings.
+
+### Recovery when both IndexedDB settings and the preference copy are unavailable
+
+The launcher enumerates startup-ready/full-offline Cache Storage manifests,
+orders them by publication timestamp descending (channel is not considered),
+and attempts verified, compatible candidates in that order. Recovery uses a
+page-local cache-only preferences mode: no IndexedDB read or write is required
+for activation, boot, or subsequent version UI reads. Explicit startup recovery
+buttons download and verify their requested release, then use this same mode.
+They no longer retry the unavailable database before recording a choice.
+
+Recovered preference records carry a marker so an older primary record with an
+unknown, higher revision cannot undo recovery when IndexedDB becomes readable.
+Once a later explicit preference change copies that marker into IndexedDB,
+normal revision comparison applies between the two copies again. Startup does
+not repair or overwrite IndexedDB. “Retry installed release” explicitly permits
+a fresh IndexedDB probe.
+
+A missing modern storage-target pointer plus other live tab locks still requires
+older tabs to save and close before migration. Candidate activation retains the
+normal worker drain and exclusive lifetime lock; cache selection alone never
+authorizes concurrent notebook writers.
