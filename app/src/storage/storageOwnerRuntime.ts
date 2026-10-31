@@ -1,7 +1,7 @@
 import { appLogger } from '../lib/logging/runtime'
 import { appState } from '../lib/runtime/AppState'
 import { authorizeReleaseRequest } from '../releases/authorizeReleaseRequest'
-import { RELEASE_CAPABILITIES, readControl } from '../releases/control'
+import { RELEASE_CAPABILITIES } from '../releases/control'
 import { closeReleaseDatabases } from '../releases/databases'
 import { DriveNotebookStore } from './drive'
 import { FilesystemNotebookStore } from './fs'
@@ -47,8 +47,7 @@ export async function startStorageOwner(identity?: {
     },
     identity
       ? async (request) => {
-          const state = await readControl()
-          authorizeReleaseRequest(state, identity, request)
+          authorizeReleaseRequest(identity, request)
         }
       : undefined,
     identity ? { ...identity, capabilities: RELEASE_CAPABILITIES } : undefined
@@ -65,17 +64,6 @@ export async function startStorageOwner(identity?: {
 
   try {
     await store.ready
-    if (identity) {
-      const pending = (await readControl()).transition
-      if (
-        pending?.phase === 'handoff' &&
-        pending.epoch === identity.epoch &&
-        pending.target.releaseId === identity.releaseId
-      )
-        await store.verifyReleaseCommits(
-          Object.values(pending.participants).flatMap((p) => p.ready ?? [])
-        )
-    }
   } catch (error) {
     clearInterval(timer)
     await store.drainForStorageRestart()

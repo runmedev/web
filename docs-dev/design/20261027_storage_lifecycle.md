@@ -139,3 +139,65 @@ shared release state. Background discovery writes a genuinely new candidate, but
 does not rewrite the installed/already-downloaded candidate on every page load.
 Release selection reads remain a startup dependency: this change removes write
 contention and registration failures, not all possible IndexedDB read failures.
+
+
+## Small preferences and independent worker admission (2026-10-30)
+
+The launcher reads a compact format-2 preference record containing a revision,
+channel/pin selection, and current/previous release ID and generation references.
+It resolves manifests from completed immutable Cache Storage inventories. It
+reads historical format-1 records without rewriting them on page load. Only an
+explicit selection change or completed activation writes preferences. Background
+candidates, tab registration, readiness, startup errors, handoff progress and
+cancellation are not persisted. Cache cleanup no longer prunes tab records.
+
+A separate small Cache Storage copy preserves the last explicit selection. The
+copy is written first under the preference-write Web Lock, with a monotonically
+increasing revision. If an IDB write fails or commits late, a newer cached revision
+wins. On a failed settings read, the launcher uses this copy and stops repeatedly
+probing the failing database for the remainder of the page session. A subsequent
+successful explicit settings write restores normal reads. A missing previous
+cache cannot block opening the current release. No notebook data is repaired or
+removed by this fallback. Without a usable saved copy, independent recovery
+controls remain available; the launcher does not guess that the newest cache is
+the user's intended selection.
+
+Storage ownership is independent of preferences. Explicit activation writes a
+small Cache Storage storage-target reference, asks responding workers to drain
+through their memory-only management channel, and waits for the actual lifetime
+ownership lock to become free. A worker validates its target before constructing
+stores and after initialization, then reports readiness through its MessagePort.
+It never opens the release-settings database. RPC authorization checks the
+connected worker generation and tab identity in memory; host admission closes
+before draining. The exclusive lifetime lock still prevents concurrent notebook
+owners. Stale worker names fail before constructing stores. A stop failure or
+unresponsive owner retains ownership; no timeout steals its lock.
+
+The storage-target reference is an explicit activation intent, separate from the
+last successfully installed app. If the initiating tab disappears, the previous
+app can still open; compatible tabs can connect to the selected storage worker.
+A failed target can be replaced explicitly with another cached compatible build.
+Selecting app code does not erase or rewrite notebook stores. Surviving tabs keep
+their editors and reconnect lazily; only the initiating tab checkpoints/reloads.
+
+The manifest advertises `storageControlFormat: 1`. Historical workers cannot be
+made independent of preferences by changing only their launcher. Their tabs must
+save and close for the one-time migration; releases lacking this contract are not
+rollback targets. Current releases keep independent tabs and replayable saves.
+
+Validation includes preference projection/no-op tests, cached fallback after
+failed reads and uncertain writes, real worker startup and RPC while a release
+settings writer is held open, multi-tab activation/rollback with preserved edits,
+and frozen historical migration. The launcher reports the preference source in
+startup diagnostics; worker lifecycle/errors remain in memory and logs.
+
+
+Before the first compact installed-release record is written, the launcher
+ensures that the controlling navigation worker serves the latest-launcher
+bootstrap. An immutable historical worker can otherwise serve its old launcher
+on an offline refresh, which cannot parse format 2. Migration explicitly asks a
+waiting loader to activate; that worker independently verifies every live window's
+loader contract before `skipWaiting` and does not reload any editor. Ordinary
+refreshes still use their existing controller immediately. Channel/pin changes
+while an older release is installed stay in the cached preference copy until
+migration completes, leaving the old worker's format-1 record readable.

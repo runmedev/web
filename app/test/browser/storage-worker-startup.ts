@@ -16,9 +16,8 @@ async function until(
   throw new Error(`Timed out: ${label}`)
 }
 
-/** Hold a real IndexedDB transaction ahead of the emitted worker's settings read.
- * This exercises Chromium scheduling rather than mocking a request callback.
- */
+/** Keep a real IndexedDB writer open while starting the emitted worker and
+ * authorizing an RPC. Neither operation may depend on release settings. */
 async function main() {
   const base = process.env.RUNME_TEST_URL ?? 'http://127.0.0.1:5198'
   await fetch(`${base}/test/promote?release=b`, { method: 'POST' })
@@ -133,105 +132,43 @@ async function main() {
       async () => {
         const w = window as any
         w.management.postMessage({ type: 'discover' })
-        return (
-          w.workerStatus?.phase === 'reading-release-settings' &&
-          w.workerStatus.releaseDatabase?.active?.some(
-            (trace: any) => trace.phase === 'get-requested'
-          )
-        )
-      },
-      'queued settings get visible before runtime initialization'
-    )
-    const queued = await page.evaluate(() => (window as any).workerStatus)
-    await page.evaluate(() => {
-      const w = window as any
-      w.management.postMessage({
-        type: 'stop',
-        instanceId: w.workerStatus.instanceId,
-        force: false,
-        restart: false,
-      })
-    })
-    await until(
-      page,
-      async () => {
-        const w = window as any
-        w.management.postMessage({ type: 'discover' })
-        return w.workerStatus?.phase === 'draining'
-      },
-      'graceful drain still observable'
-    )
-    await page.evaluate(() => {
-      const w = window as any
-      w.management.postMessage({
-        type: 'stop',
-        instanceId: w.workerStatus.instanceId,
-        force: true,
-        restart: false,
-      })
-    })
-    await until(
-      page,
-      async () =>
-        navigator.locks.request(
-          'runme-storage-owner-lifetime-v1',
-          { ifAvailable: true },
-          (lock) => Boolean(lock)
-        ),
-      'force close bypasses stalled initialization'
-    )
-    await page.evaluate(() => {
-      const w = window as any
-      w.workerStatus = undefined
-      w.startOwner()
-    })
-    await until(
-      page,
-      async () => {
-        const w = window as any
-        w.management.postMessage({ type: 'discover' })
-        return (
-          w.workerStatus?.phase === 'failed' &&
-          w.workerStatus.releaseDatabase?.failures?.length > 0
-        )
-      },
-      'real queued get timeout reported'
-    )
-    const timedOut = await page.evaluate(() => (window as any).workerStatus)
-    await page.evaluate(() => {
-      const w = window as any
-      w.management.postMessage({
-        type: 'stop',
-        instanceId: w.workerStatus.instanceId,
-        force: true,
-        restart: false,
-      })
-    })
-    await until(
-      page,
-      async () =>
-        navigator.locks.request(
-          'runme-storage-owner-lifetime-v1',
-          { ifAvailable: true },
-          (lock) => Boolean(lock)
-        ),
-      'failed owner exit'
-    )
-    await page.evaluate(() => {
-      const w = window as any
-      w.releaseDatabase()
-      w.workerStatus = undefined
-      w.startOwner()
-    })
-    await until(
-      page,
-      async () => {
-        const w = window as any
-        w.management.postMessage({ type: 'discover' })
         return w.workerStatus?.phase === 'ready'
       },
-      'replacement initializes after the blocking transaction ends'
+      'replacement starts while release-settings writer is still holding its transaction'
     )
+    const readyUnderLock = await page.evaluate(
+      () => (window as any).workerStatus
+    )
+    const reply = await page.evaluate(
+      () =>
+        new Promise<any>((resolve, reject) => {
+          const w = window as any
+          const id = crypto.randomUUID()
+          const timer = setTimeout(
+            () => reject(new Error('RPC blocked on release settings')),
+            5000
+          )
+          w.worker.port.onmessage = ({ data }: MessageEvent) => {
+            if (data.type === 'result' && data.id === id) {
+              clearTimeout(timer)
+              resolve(data)
+            }
+          }
+          w.worker.port.postMessage({
+            type: 'request',
+            id,
+            version: 8,
+            method: 'heartbeat',
+            args: [],
+            tabId: 'blocked-settings-test',
+            epoch: w.active.epoch,
+          })
+        })
+    )
+    assert.equal(reply.error, undefined)
+    assert.equal(readyUnderLock.releaseDatabase?.active?.length ?? 0, 0)
+    // The lock was never released to make the worker ready or authorize its RPC.
+    await page.evaluate(() => (window as any).releaseDatabase())
     assert.equal(
       await page.evaluate(() => (window as any).pageIdentity),
       identity
@@ -241,8 +178,8 @@ async function main() {
       JSON.stringify(
         {
           passed: true,
-          queued,
-          timedOut,
+          readyUnderLock,
+          reply,
           replacement: await page.evaluate(() => (window as any).workerStatus),
         },
         null,
@@ -250,7 +187,7 @@ async function main() {
       )
     )
     console.log(
-      'PASS: real IndexedDB get stall is observable; force close bypasses a stalled drain; replacement starts without page reload'
+      'PASS: worker startup and authorized RPC succeed while a real IndexedDB writer blocks release settings'
     )
   } finally {
     const diagnostics = await Promise.all(

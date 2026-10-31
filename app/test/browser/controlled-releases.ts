@@ -260,11 +260,6 @@ async function main() {
         }) as typeof indexedDB.open
       })
       await settings.goto(base + '/?session=settings-transient-failure')
-      if (!process.env.RUNME_RELEASE_BASELINE) {
-        await settings
-          .getByRole('button', { name: 'Retry installed release', exact: true })
-          .click()
-      }
       await ready(settings)
       assert.equal(await active(settings), a)
       await waitControl(
@@ -274,10 +269,12 @@ async function main() {
       const trace = await settings
         .locator('#runme-startup-diagnostics-log')
         .textContent()
-      assert.ok(trace?.includes('release-settings-open'))
-      assert.equal(
-        trace?.includes('startup-fallback'),
-        Boolean(process.env.RUNME_RELEASE_BASELINE)
+      assert.ok(
+        trace?.includes(
+          process.env.RUNME_RELEASE_BASELINE
+            ? 'release-settings-open'
+            : '"source": "cache"'
+        )
       )
       await settings.screenshot({
         path: output + '/settings-transient-recovered.png',
@@ -289,104 +286,6 @@ async function main() {
       await settings.close()
     }
     if (!process.env.RUNME_RELEASE_BASELINE) {
-      const pendingContext = await browser.newContext()
-      await pendingContext.addInitScript(installTools)
-      try {
-        const source = await pendingContext.newPage()
-        await source.goto(base + '/?session=pending-source')
-        await ready(source)
-        const epoch = await source.evaluate(async () => {
-          // Simulate an initiator disappearing after committing handoff but
-          // before starting its candidate. No launcher's action runs here.
-          return await new Promise<number>((resolve, reject) => {
-            const open = indexedDB.open('runme-release-control')
-            open.onerror = () => reject(open.error)
-            open.onsuccess = () => {
-              const db = open.result
-              const tx = db.transaction('state', 'readwrite')
-              let epoch = 0
-              const store = tx.objectStore('state')
-              const get = store.get('control')
-              get.onsuccess = () => {
-                const state = get.result
-                epoch = state.active.epoch + 1
-                state.transition = {
-                  id: crypto.randomUUID(),
-                  from: state.active,
-                  target: state.active.manifest,
-                  epoch,
-                  phase: 'handoff',
-                  participants: {},
-                }
-                store.put(state, 'control')
-              }
-              tx.oncomplete = () => {
-                db.close()
-                resolve(epoch)
-              }
-              tx.onabort = () => {
-                db.close()
-                reject(tx.error)
-              }
-            }
-          })
-        })
-        const newcomer = await pendingContext.newPage()
-        await newcomer.addInitScript(() => {
-          const Worker = SharedWorker
-          ;(window as any).__candidateStarts = 0
-          window.SharedWorker = new Proxy(Worker, {
-            construct(target, args) {
-              if (String(args[1]?.name).startsWith('runme-storage-owner-'))
-                (window as any).__candidateStarts++
-              return Reflect.construct(target, args)
-            },
-          })
-        })
-        await newcomer.goto(base + '/?session=pending-newcomer')
-        await newcomer
-          .getByRole('button', { name: 'Retry worker activation', exact: true })
-          .waitFor()
-        await newcomer.waitForTimeout(2200)
-        await newcomer
-          .getByRole('status')
-          .filter({ hasText: 'An upgrade is pending' })
-          .waitFor()
-        assert.equal(
-          await newcomer.evaluate(() => (window as any).__candidateStarts),
-          0
-        )
-        assert.equal(await active(newcomer), undefined)
-        assert.equal(
-          (await newcomer.evaluate(() => (window as any).runmeVersions.get()))
-            .transition.epoch,
-          epoch
-        )
-        await newcomer.screenshot({
-          path: output + '/pending-activation-explicit-retry.png',
-        })
-        await newcomer
-          .getByRole('button', { name: 'Retry worker activation', exact: true })
-          .click()
-        await ready(newcomer)
-        assert.equal(
-          await newcomer.evaluate(
-            () => (window as any).runmeRelease.active.epoch
-          ),
-          epoch
-        )
-        assert.equal(
-          await source.evaluate(
-            () => (window as any).runmeRelease.active.epoch
-          ),
-          epoch - 1
-        )
-        console.log(
-          'PASS: opening a tab does not resume abandoned activation; explicit retry starts worker without reloading its peer'
-        )
-      } finally {
-        await pendingContext.close()
-      }
       // Opening another tab and reporting readiness must work with release
       // writes forbidden. Keep real readonly IDB, cache, worker and notebook RPCs.
       const late = await context.newPage()
@@ -478,34 +377,52 @@ async function main() {
         }) as typeof indexedDB.open
       })
       await unavailable.goto(base + '/?session=settings-unavailable')
-      await unavailable
-        .getByRole('button', { name: 'Retry latest stable', exact: true })
-        .waitFor({ timeout: 60000 })
-      assert.equal(await active(unavailable), undefined)
-      assert.equal(await active(one), a)
-      await unavailable
-        .getByRole('button', { name: 'Try latest channel', exact: true })
-        .waitFor()
-      await unavailable
-        .getByRole('button', { name: 'Try exact release', exact: true })
-        .waitFor()
-      await unavailable.screenshot({
-        path: output + '/settings-unavailable-recovery.png',
-      })
-      await unavailable.evaluate(() => {
-        ;(window as any).__settingsUnavailable = false
-      })
-      await unavailable
-        .getByRole('button', { name: 'Retry latest stable', exact: true })
-        .click()
-      await ready(unavailable)
-      assert.equal(await active(unavailable), a)
-      await unavailable.screenshot({
-        path: output + '/settings-manual-recovered.png',
-      })
-      console.log(
-        'PASS: unavailable settings expose independent recovery controls and retry preserves normal ownership'
-      )
+      if (!process.env.RUNME_RELEASE_BASELINE) {
+        await ready(unavailable)
+        assert.equal(await active(unavailable), a)
+        assert.match(
+          await execute(
+            unavailable,
+            "const d=await notebooks.createLocal('fallback-settings.runme'); console.log(d.handle.uri)"
+          ),
+          /local:\/\/file\//
+        )
+        await unavailable.screenshot({
+          path: output + '/settings-unavailable-cached-app.png',
+        })
+        console.log(
+          'PASS: unavailable release settings fall back to cached selection; real notebook writes still work'
+        )
+      } else {
+        await unavailable
+          .getByRole('button', { name: 'Retry latest stable', exact: true })
+          .waitFor({ timeout: 60000 })
+        assert.equal(await active(unavailable), undefined)
+        assert.equal(await active(one), a)
+        await unavailable
+          .getByRole('button', { name: 'Try latest channel', exact: true })
+          .waitFor()
+        await unavailable
+          .getByRole('button', { name: 'Try exact release', exact: true })
+          .waitFor()
+        await unavailable.screenshot({
+          path: output + '/settings-unavailable-recovery.png',
+        })
+        await unavailable.evaluate(() => {
+          ;(window as any).__settingsUnavailable = false
+        })
+        await unavailable
+          .getByRole('button', { name: 'Retry latest stable', exact: true })
+          .click()
+        await ready(unavailable)
+        assert.equal(await active(unavailable), a)
+        await unavailable.screenshot({
+          path: output + '/settings-manual-recovered.png',
+        })
+        console.log(
+          'PASS: unavailable settings expose independent recovery controls and retry preserves normal ownership'
+        )
+      }
     } finally {
       await unavailable.close()
     }
@@ -633,7 +550,10 @@ async function main() {
       const repairState = await repaired.evaluate(() =>
         (window as any).runmeVersions.get()
       )
-      assert.equal(repairState.recoveredControlFormat, 1)
+      assert.equal(
+        repairState.recoveredControlFormat,
+        process.env.RUNME_RELEASE_BASELINE ? 1 : undefined
+      )
       assert.ok(repairState.active.epoch > 1)
       assert.match(
         await execute(
@@ -642,10 +562,14 @@ async function main() {
         ),
         /Preserve this notebook/
       )
-      const schema = await repaired.evaluate(
-        () =>
-          new Promise<{ version: number; stores: string[]; encoding: string }>(
-            (resolve, reject) => {
+      if (process.env.RUNME_RELEASE_BASELINE) {
+        const schema = await repaired.evaluate(
+          () =>
+            new Promise<{
+              version: number
+              stores: string[]
+              encoding: string
+            }>((resolve, reject) => {
               const request = indexedDB.open('runme-release-control')
               request.onerror = () => reject(request.error)
               request.onsuccess = () => {
@@ -667,12 +591,12 @@ async function main() {
                   db.close()
                 }
               }
-            }
-          )
-      )
-      assert.equal(schema.version, 2)
-      assert.ok(schema.stores.includes('unreadable-state-1'))
-      assert.equal(schema.encoding, 'runme-control-json-chunks-v1')
+            })
+        )
+        assert.equal(schema.version, 2)
+        assert.ok(schema.stores.includes('unreadable-state-1'))
+        assert.equal(schema.encoding, 'runme-control-json-chunks-v1')
+      }
       await repaired.reload()
       await ready(repaired)
       await repaired
@@ -689,7 +613,9 @@ async function main() {
         path: output + '/settings-quarantined-recovered.png',
       })
       console.log(
-        'PASS: irrecoverable settings are quarantined; notebooks survive recovery and reload'
+        process.env.RUNME_RELEASE_BASELINE
+          ? 'PASS: historical settings repair preserves notebooks'
+          : 'PASS: unreadable settings use cached selection; notebooks and Explorer folders survive reload without repair'
       )
     } catch (error) {
       for (const page of damagedContext.pages()) {
@@ -734,7 +660,10 @@ async function main() {
       )
       await migration
         .getByRole('status')
-        .filter({ hasText: 'requires tab registration' })
+        .filter({
+          hasText:
+            'requires the older persistent storage-coordination protocol',
+        })
         .waitFor()
       assert.equal(await active(migration), undefined)
       assert.equal(
@@ -789,7 +718,10 @@ async function main() {
           return String(error)
         }
       }, a)
-      assert.match(rejected, /requires tab registration/)
+      assert.match(
+        rejected,
+        /requires the older persistent storage-coordination protocol/
+      )
       assert.equal(
         (await migration.evaluate(() => (window as any).runmeVersions.get()))
           .active.manifest.releaseId,
@@ -1468,26 +1400,37 @@ async function main() {
         })
         .click()
       await waitControl(
-        recovery,
+        restored,
         (s) => s.transition?.phase === 'handoff' && Boolean(s.ownerError)
       )
       assert.equal(await active(restored), a)
-      await recovery
-        .getByRole('status')
-        .filter({ hasText: 'Storage startup failed' })
-        .waitFor({ timeout: 30000 })
-      await recovery.screenshot({
+      const peerState = await recovery.evaluate(() =>
+        (window as any).runmeVersions.get()
+      )
+      assert.equal(
+        peerState.transition,
+        undefined,
+        'Failed handoff is not persisted or inherited by peers'
+      )
+      assert.equal(peerState.ownerError, undefined)
+      await restored.screenshot({
         path: output + '/08-broken-owner-selector.png',
       })
       await recovery
-        .getByRole('button', {
-          name: `Use cached ${a.slice(0, 8)} / ${a.split('-')[1].slice(0, 8)}`,
-          exact: true,
-        })
+        .getByRole('button', { name: 'Retry worker activation', exact: true })
         .click()
       await waitControl(
         recovery,
-        (s) => !s.transition && s.active?.manifest.releaseId === a
+        (s) =>
+          !s.transition &&
+          s.active?.manifest.releaseId === a &&
+          s.active.epoch > peerState.active.epoch
+      )
+      assert.equal(
+        (await recovery.evaluate(() => (window as any).runmeVersions.get()))
+          .previous?.manifest.releaseId,
+        peerState.previous?.manifest.releaseId,
+        'Restarting the same installed release preserves the previous version'
       )
       await ready(restored)
       assert.match(

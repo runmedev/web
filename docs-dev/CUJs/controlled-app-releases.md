@@ -28,24 +28,23 @@ Acceptance:
 - Startup diagnostics expose timestamped stage, duration, and waiting/failure
   events before the app starts. The trace is bounded, stays in memory, and does
   not include notebook data, credentials, or URL query parameters.
-- A stalled release-settings open shows independent recovery controls without
-  changing selection or activating stable automatically. Explicit retry opens
-  the installed release. Opening an installed current release and repeated app
-  readiness callbacks perform no per-tab settings writes. The browser journey
-  rejects every release `readwrite` transaction in the new tab and verifies app
-  rendering plus a real notebook creation through the worker. Holding the global
-  cache-maintenance lock in another tab must not block this cached startup.
-- Normal startup neither scans peer tab locks nor resumes pending upgrades.
-  Release-change hints update badges without a periodic tab reconciliation loop.
-  Only explicit activation/retry starts a pending worker (except first install).
-  Abandoned activation remains visible for an explicit retry.
-- An irrecoverable settings value (`NotReadableError`) is quarantined only when
-  no storage owner or other tab remains. The old object store is preserved, a
-  version bump fences older readers, and the recovered state uses bounded chunks.
-  The browser test verifies an existing notebook and a mounted Explorer folder
-  survive repair and reload. The folder is persisted in the separate notebook
-  database and localStorage before injecting the release-control failure.
-  Unit tests reject repair for live owners/tabs and transient errors.
+- Opening tabs, worker startup, editor readiness, background discovery, worker
+  errors, and cache cleanup perform no release-settings writes. The browser
+  journey forbids release `readwrite` transactions while rendering the app and
+  creating a real notebook. A global cache-maintenance lock cannot block startup.
+- A stalled or irrecoverable release-settings read uses the independent saved
+  selection in Cache Storage. It does not quarantine/repair settings, reload
+  peers, or select an arbitrary downloaded candidate. A damaged-settings journey
+  verifies that saved notebook content and a mounted Explorer folder survive
+  fallback and reload. Historical baselines retain their historical repair test.
+- A real write transaction held open on the release-settings store cannot block
+  starting a replacement storage worker or authorizing its notebook RPCs. The
+  browser test keeps the transaction open until both operations succeed.
+- Download candidates, handoff progress, readiness and errors are memory-only.
+  An abandoned launcher cannot leave a persisted handoff blocking later tabs.
+  Explicit activations serialize under a Web Lock, drain the previous owner, and
+  save the installed release only after the replacement reports ready. No
+  timeout permits stealing the storage ownership lock.
 - Unreadable workspace preferences remain untouched, including when Explorer
   adds its default root. Show a persistence warning until a successful reload.
   Missing folder metadata hides only that unresolved root; it must not remove
@@ -60,21 +59,25 @@ Acceptance:
   write or app import. Activation requires older tabs to save and close, and
   the migrated app must reopen the saved notebook with its content intact;
   unsupported rollback is rejected before changing selection. The migrated
-  release must then reopen offline.
+  release must then reopen offline. Before the compact preferences are committed,
+  migration activates a navigation loader that serves the latest-launcher
+  bootstrap; a waiting loader must refuse activation if an unknown window fails
+  its compatibility probe. Pre-migration channel changes retain the historical
+  IDB record so older workers can continue saving until their tabs close.
 - Hold a new tab's launcher discovery pending and probe it from another tab
   through the real service worker. It must answer before importing the launcher,
   then open the selected app when discovery resumes. Slow discovery must never
   misclassify a controlled bootstrap as an incompatible legacy window.
 - Channel changes and exact pins only stage; activation requires an explicit action.
 - A background channel check replaces an obsolete candidate when the channel points
-  back to the installed release; only unchanged checks avoid writing settings.
+  back to the installed release; no background candidate checks write settings.
 - Activating B replaces the worker under its lifetime lock and reloads only the initiating tab.
 - A frozen peer with a failing preparation hook cannot block activation and is never asked to prepare.
 - The old peer keeps its tab identity and mounted editor, then saves through worker B on retry.
 - Reloading another tab is an independent action. A session-storage quota error leaves that tab editable and does not roll back the selected worker.
 - A successful local reload checkpoints and restores editor state without involving a peer.
 - A confirmed capability mismatch triggers local checkpoint/reload recovery before any data RPC. Timeouts alone never do.
-- Rollback requires `tabAdmissionFormat: 1`; historical owners that require registration are rejected. Current peers also refuse checkpoint reload into an app without `tabRecoveryFormat: 1`, retaining their mounted editors.
+- Rollback requires `storageControlFormat: 1` and `tabAdmissionFormat: 1`; historical owners that require registration are rejected. Current peers also refuse checkpoint reload into an app without `tabRecoveryFormat: 1`, retaining their mounted editors.
 - After full offline readiness, offline restart uses B; offline rollback to A preserves edits made on B and leaves other tabs on their loaded UI versions.
 - The current recovery selector works independently of React/application imports, explains
   that notebooks open in the app, and keeps **Return to Runme** visible. Returning
@@ -145,4 +148,4 @@ advances even when the stable application channel is pinned.
 - Cache cleanup honors shared lifetime asset leases held by current tabs and
   legacy tab records held by historical tabs. It must retain a release until its
   last lease closes; closing the last lease allows cleanup without a tab-record
-  write. Explicit release changes and maintenance still persist shared state.
+  write. Only explicit preference/installed-release changes persist release settings; maintenance does not.

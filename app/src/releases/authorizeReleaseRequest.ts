@@ -1,23 +1,11 @@
-import type { Control } from './control'
-
-/** The lifetime owner lock prevents concurrent stores; this read-only fence
- * rejects obsolete epochs and prepared legacy participants before effects.
- * Tab IDs identify clients, but no persistent tab registration is required.
+/** The host closes admission before draining. The lifetime lock prevents two
+ * store owners; the connected worker's identity fences stale client messages.
+ * Notebook requests never consult release preferences or persistent tab records.
  */
 export function authorizeReleaseRequest(
-  state: Control,
   identity: { releaseId: string; epoch: number },
   request: { tabId?: string; epoch?: number }
 ): void {
-  if (
-    !request.tabId ||
-    request.epoch !== identity.epoch ||
-    state.active?.epoch !== identity.epoch ||
-    state.active.manifest.releaseId !== identity.releaseId ||
-    state.transition?.phase === 'handoff' ||
-    state.transition?.participants[request.tabId]?.ready
-  )
-    throw new Error(
-      'Stale or frozen release: storage request rejected before effects'
-    )
+  if (!request.tabId || request.epoch !== identity.epoch)
+    throw new Error('Stale release: storage request rejected before effects')
 }

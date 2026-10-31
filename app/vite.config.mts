@@ -200,6 +200,7 @@ function pwaServiceWorkerPlugin(): Plugin {
           recoveredControlFormat: 1,
           tabRecoveryFormat: 1,
           tabAdmissionFormat: 1,
+          storageControlFormat: 1,
           requiredCapabilities: ['durable-prepare-v1', 'epoch-fence-v1', 'owner-lock-v1'], testedRollbackTargets: [],
           owner: { buildId: releaseId.split('-')[1], entry: 'storage-owner.js', rpcMin: 8, rpcMax: 8 },
           launcherProtocol: { min: 1, max: 1 },
