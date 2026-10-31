@@ -122,3 +122,89 @@ describe('loader manifest discovery', () => {
     expect(match).not.toHaveBeenCalled()
   })
 })
+
+/** Exercise the actual waiting worker's explicit migration handshake. */
+function migrationWorker(
+  peers: { id: string; postMessage?: (...args: any[]) => void }[]
+) {
+  const listeners = new Map<string, (event: any) => void>()
+  const known = new Set<string>()
+  const skipWaiting = vi.fn(async () => {})
+  const source = readFileSync(
+    new URL('./loader-worker.js', import.meta.url),
+    'utf8'
+  )
+    .replace('__RUNME_LOADER_SHELL__', '"shell"')
+    .replace('__RUNME_LOADER_BOOTSTRAP__', '[]')
+  runInNewContext(source, {
+    self: {
+      clients: { matchAll: async () => peers },
+      skipWaiting,
+      addEventListener: (name: string, listener: (event: any) => void) =>
+        listeners.set(name, listener),
+    },
+    caches: {
+      open: async () => ({
+        put: async (key: string) => {
+          known.add(key)
+        },
+        match: async (key: string) => known.has(key),
+      }),
+    },
+    Response,
+    setTimeout,
+    clearTimeout,
+    MessageChannel: class {
+      port1 = { close() {}, onmessage: undefined }
+      port2 = {}
+    },
+  })
+  return { receive: listeners.get('message')!, skipWaiting }
+}
+
+it('activates the new navigation shell only after an explicit compatible migration request', async () => {
+  const worker = migrationWorker([{ id: 'current' }])
+  const reply = vi.fn()
+  let work: Promise<void> | undefined
+  worker.receive({
+    data: 'runme-loader-upgrade',
+    ports: [{ postMessage: reply }],
+  })
+  expect(worker.skipWaiting).not.toHaveBeenCalled()
+  worker.receive({
+    data: 'runme-loader-upgrade',
+    source: { id: 'current' },
+    ports: [{ postMessage: reply }],
+    waitUntil: (task: Promise<void>) => {
+      work = task
+    },
+  })
+  await work
+  expect(worker.skipWaiting).toHaveBeenCalledOnce()
+  expect(reply).toHaveBeenCalledWith('runme-loader-1')
+})
+
+it('does not activate a waiting loader while an unknown window fails its compatibility probe', async () => {
+  vi.useFakeTimers()
+  try {
+    const worker = migrationWorker([{ id: 'unknown', postMessage() {} }])
+    const reply = vi.fn()
+    let work: Promise<void> | undefined
+    worker.receive({
+      data: 'runme-loader-upgrade',
+      source: { id: 'current' },
+      ports: [{ postMessage: reply }],
+      waitUntil: (task: Promise<void>) => {
+        work = task
+      },
+    })
+    await vi.advanceTimersByTimeAsync(2000)
+    await work
+    expect(worker.skipWaiting).not.toHaveBeenCalled()
+    expect(reply).toHaveBeenCalledWith(
+      expect.stringContaining('close all older Runme tabs')
+    )
+  } finally {
+    vi.useRealTimers()
+  }
+})

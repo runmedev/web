@@ -1,7 +1,20 @@
 import { afterEach, expect, it, vi } from 'vitest'
 
-import { control, readControl } from './control'
 import { ReleaseControlError, releaseTransaction } from './releaseDatabase'
+
+/** Exercise the transaction primitive directly; preference/fallback policy is
+ * covered separately by releasePreferences.test.ts. */
+function control<T>(mutate: (state: any) => T) {
+  return releaseTransaction('test', true, (value) => {
+    const state = value ?? {}
+    return { state, result: mutate(state) }
+  })
+}
+const readControl = () =>
+  releaseTransaction('test', false, (value) => ({
+    state: value,
+    result: value,
+  }))
 
 /** Drive browser events explicitly to exercise errors and callbacks that arrive
  * after cancellation, which an always-successful IndexedDB mock would miss.
@@ -27,23 +40,6 @@ async function opened(mock: ReturnType<typeof database>) {
 afterEach(() => {
   vi.useRealTimers()
   vi.unstubAllGlobals()
-})
-
-it('uses stable defaults only when the settings record is missing', async () => {
-  const mock = database()
-  const pending = readControl()
-  mock.open.onupgradeneeded()
-  await opened(mock)
-  mock.get.onsuccess()
-  mock.tx.oncomplete()
-  await expect(pending).resolves.toEqual({
-    format: 1,
-    selection: { kind: 'channel', name: 'stable' },
-    tabs: {},
-  })
-  expect(mock.db.createObjectStore).toHaveBeenCalledWith('state')
-  expect(mock.table.put).not.toHaveBeenCalled()
-  expect(mock.db.close).toHaveBeenCalledOnce()
 })
 
 it.each(['blocked', 'error'])(
@@ -80,9 +76,7 @@ it('times out a silent open, permits a fresh attempt and closes the late result'
   await opened(retry)
   retry.get.onsuccess()
   retry.tx.oncomplete()
-  await expect(pending).resolves.toMatchObject({
-    selection: { name: 'stable' },
-  })
+  await expect(pending).resolves.toBeUndefined()
   expect(vi.getTimerCount()).toBe(0)
 })
 
@@ -198,18 +192,6 @@ it('aborts an upgrade that began before the open deadline expired', async () => 
   mock.open.onsuccess()
   expect(mock.db.close).toHaveBeenCalledOnce()
   expect(mock.db.transaction).not.toHaveBeenCalled()
-})
-
-it('preserves unsupported records rather than replacing them with defaults', async () => {
-  const mock = database({ format: 2, active: { epoch: 9 } })
-  const failed = expect(readControl()).rejects.toThrow(
-    'Unsupported release-control format'
-  )
-  await opened(mock)
-  mock.get.onsuccess()
-  await failed
-  expect(mock.table.put).not.toHaveBeenCalled()
-  expect(mock.db.close).toHaveBeenCalledOnce()
 })
 
 it('reports a missing store or transaction creation error and closes the connection', async () => {

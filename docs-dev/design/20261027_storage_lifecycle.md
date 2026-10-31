@@ -106,3 +106,100 @@ failed snapshots, worker initialization failure, and replacement identity under
 the lifetime lock. Verify OPFS notebook contents after restart, and recovery copies
 when an edit had not committed. Existing upgrade/offline/rollback journeys must
 still pass. Unit tests alone do not establish lifecycle correctness.
+
+## Registration-free tab startup
+
+Normal startup reads the installed release from IndexedDB, verifies its cached
+assets, and rechecks selection using a readonly transaction. Tabs no longer write
+registration, loaded version, session label, or repeated readiness/healthy records.
+The worker accepts unregistered tab IDs while retaining the active release/epoch,
+handoff, and legacy prepared-participant fences before effects. An activation
+racing the startup snapshot is rejected by the worker rather than authorized by a
+persistent admission record.
+
+A shared lifetime Web Lock named for the app release protects lazy-loaded assets.
+Startup acquires it before verification without waiting on global downloads or
+cleanup; cleanup probes its exclusive counterpart without waiting. Failed verification or
+selection rechecks release the lease; document destruction releases retained leases. Existing
+legacy tab records remain roots for cleanup until those tabs close. Old launchers
+that do not understand asset leases cannot provide this new cleanup guarantee.
+
+Manifests advertise `tabAdmissionFormat: 1` for registration-free owners. A new
+launcher with an older selected worker exposes an explicit upgrade before loading
+the app; it never synthesizes a tab record to make the old worker accept requests.
+Rollback to an owner lacking this contract is rejected before changing release
+state. One-time migration requires saving edits and closing older tabs: immutable
+historical launchers can reload on an epoch change before their debounced saves
+finish. The guard checks liveness locks and serializes against new historical
+registrations before handoff. It also applies when retrying a pending activation.
+Registration-free releases continue to upgrade without waiting for peer tabs.
+
+Explicit selection, activation, recovery, owner startup and cache maintenance still persist
+shared release state. Background discovery writes a genuinely new candidate, but
+does not rewrite the installed/already-downloaded candidate on every page load.
+Release selection reads remain a startup dependency: this change removes write
+contention and registration failures, not all possible IndexedDB read failures.
+
+
+## Small preferences and independent worker admission (2026-10-30)
+
+The launcher reads a compact format-2 preference record containing a revision,
+channel/pin selection, and current/previous release ID and generation references.
+It resolves manifests from completed immutable Cache Storage inventories. It
+reads historical format-1 records without rewriting them on page load. Only an
+explicit selection change or completed activation writes preferences. Background
+candidates, tab registration, readiness, startup errors, handoff progress and
+cancellation are not persisted. Cache cleanup no longer prunes tab records.
+
+A separate small Cache Storage copy preserves the last explicit selection. The
+copy is written first under the preference-write Web Lock, with a monotonically
+increasing revision. If an IDB write fails or commits late, a newer cached revision
+wins. On a failed settings read, the launcher uses this copy and stops repeatedly
+probing the failing database for the remainder of the page session. A subsequent
+successful explicit settings write restores normal reads. A missing previous
+cache cannot block opening the current release. No notebook data is repaired or
+removed by this fallback. Without a usable saved copy, independent recovery
+controls remain available; the launcher does not guess that the newest cache is
+the user's intended selection.
+
+Storage ownership is independent of preferences. Explicit activation writes a
+small Cache Storage storage-target reference, asks responding workers to drain
+through their memory-only management channel, and waits for the actual lifetime
+ownership lock to become free. A worker validates its target before constructing
+stores and after initialization, then reports readiness through its MessagePort.
+It never opens the release-settings database. RPC authorization checks the
+connected worker generation and tab identity in memory; host admission closes
+before draining. The exclusive lifetime lock still prevents concurrent notebook
+owners. Stale worker names fail before constructing stores. A stop failure or
+unresponsive owner retains ownership; no timeout steals its lock.
+
+The storage-target reference is an explicit activation intent, separate from the
+last successfully installed app. If the initiating tab disappears, the previous
+app can still open; compatible tabs can connect to the selected storage worker.
+A failed target can be replaced explicitly with another cached compatible build.
+Selecting app code does not erase or rewrite notebook stores. Surviving tabs keep
+their editors and reconnect lazily; only the initiating tab checkpoints/reloads.
+
+The manifest advertises `storageControlFormat: 1`. Historical workers cannot be
+made independent of preferences by changing only their launcher. Their tabs must
+save and close for the one-time migration; releases lacking this contract are not
+rollback targets. Current releases keep independent tabs and replayable saves.
+
+Validation includes preference projection/no-op tests, cached fallback after
+failed reads and uncertain writes, real worker startup and RPC while a release
+settings writer is held open, multi-tab activation/rollback with preserved edits,
+and frozen historical migration. The launcher reports the preference source in
+startup diagnostics; worker lifecycle/errors remain in memory and logs.
+
+
+Before the first compact installed-release record is written, the launcher
+ensures that the controlling navigation worker serves the latest-launcher
+bootstrap. An immutable historical worker can otherwise serve its old launcher
+on an offline refresh, which cannot parse format 2. Migration explicitly asks a
+waiting loader to activate; that worker independently verifies every live window's
+loader contract before `skipWaiting` and does not reload any editor. Ordinary
+refreshes still use their existing controller immediately. Channel/pin changes
+while an older release is installed stay in the cached preference copy until
+migration completes, leaving the old worker's format-1 record readable.
+
+Historical format-1 records are projected into saved selection, active and previous releases on read. Old tab registrations, handoffs, candidates and worker errors are ignored by the new launcher, without rewriting the historical record. This prevents abandoned coordination from blocking explicit migration while old workers still retain their original settings.

@@ -1,7 +1,7 @@
 import { appLogger } from '../lib/logging/runtime'
-import { OWNER_LOCK, control, readControl } from '../releases/control'
+import { OWNER_LOCK } from '../releases/control'
 import { releaseDatabaseDiagnostics } from '../releases/releaseDiagnostics'
-import { retireUnreadableOwner } from './releaseOwnerFailure'
+import { readOwnerTarget } from '../releases/releasePreferences'
 import { installStorageWorkerControl } from './storageWorkerControl'
 
 const scope = globalThis as unknown as {
@@ -71,36 +71,26 @@ scope.onconnect = (event) => {
   else ports.push(port)
 }
 
-/** Delay the store graph until exclusive ownership. Revalidate after acquisition;
- * a canceled candidate must never initialize stores or migrate data.
+/** Reject obsolete worker names before constructing any store. The target is a
+ * small Cache Storage reference written by explicit activation, never worker IO.
+ */
+async function assertSelected(): Promise<void> {
+  if (!releaseId) return
+  const selected = await readOwnerTarget()
+  if (selected?.manifest.releaseId !== releaseId || selected.epoch !== epoch)
+    throw new Error('Storage candidate is no longer selected')
+}
+
+/** Only the lifetime lock authorizes opening stores. Readiness and failures are
+ * messages, not release-settings writes. Graceful stop closes RPC admission and
+ * drains all effects before the worker and its lifetime lock are released.
  */
 async function start(): Promise<void> {
   if (!navigator.locks)
     throw new Error('Web Locks are required for storage ownership')
   await navigator.locks.request(OWNER_LOCK, async () => {
-    setPhase('reading-release-settings')
-    if (releaseId) {
-      const state = await readControl()
-      const pending = state.transition
-      if (
-        !(
-          state.active?.manifest.releaseId === releaseId &&
-          state.active.epoch === epoch &&
-          pending?.phase !== 'handoff'
-        ) &&
-        !(
-          pending?.phase === 'handoff' &&
-          pending.target.releaseId === releaseId &&
-          pending.epoch === epoch
-        )
-      )
-        throw new Error('Storage candidate is no longer selected')
-    }
-    setPhase('recording-startup')
-    if (releaseId)
-      await control((s) => {
-        s.ownerStartup = { releaseId, epoch, phase: 'initializing' }
-      })
+    setPhase('checking-storage-target')
+    await assertSelected()
     setPhase('importing-runtime')
     const { startStorageOwner } = await import('./storageOwnerRuntime')
     setPhase('initializing-storage')
@@ -108,105 +98,44 @@ async function start(): Promise<void> {
       releaseId ? { releaseId, epoch } : undefined
     )
     finishRuntime()
-    if (stopping) await new Promise<never>(() => {})
-    const activeRuntime = runtime
-    setPhase('publishing-ready')
     try {
-      if (releaseId)
-        await control((state) => {
-          const pending = state.transition
-          if (
-            pending?.phase === 'handoff' &&
-            pending.target.releaseId === releaseId &&
-            pending.epoch === epoch
-          ) {
-            state.completedTransition = pending
-            state.ownerStartup = { releaseId, epoch, phase: 'ready' }
-            state.previous = state.active
-            state.active = { manifest: pending.target, epoch }
-            delete state.transition
-            delete state.ownerError
-          } else if (
-            state.active?.epoch !== epoch ||
-            state.active.manifest.releaseId !== releaseId
-          )
-            throw new Error('Storage admission changed during startup')
-          delete state.emergencyRestart
-          state.ownerStartup = { releaseId, epoch, phase: 'ready' }
-        })
+      // Activation may have changed while a store was initializing.
+      await assertSelected()
+      if (stopping) await new Promise<never>(() => {})
+      setPhase('ready')
+      attach = (port) => {
+        if (stopping) {
+          port.postMessage({
+            type: 'release-owner-error',
+            error: 'Storage is stopping; retry the connection.',
+          })
+          port.close()
+          return
+        }
+        runtime!.attach(port)
+        port.postMessage({ type: 'release-owner-ready', releaseId, epoch })
+      }
+      for (const port of ports.splice(0)) attach(port)
+      await new Promise<never>(() => {})
     } catch (error) {
-      // If startup lost admission, finish maintenance before releasing ownership.
-      await activeRuntime.drain()
-      activeRuntime.close()
+      await runtime.drain()
+      runtime.close()
       throw error
     }
-    setPhase('ready')
-    attach = activeRuntime.attach
-    for (const port of ports.splice(0)) attach(port)
-    await new Promise<void>((resolve) => {
-      let checking = false
-      const timer = setInterval(async () => {
-        if (!releaseId || checking) return
-        checking = true
-        try {
-          const state = await readControl()
-          if (
-            state.transition?.phase === 'handoff' ||
-            state.active?.epoch !== epoch
-          ) {
-            await activeRuntime.drain()
-            clearInterval(timer)
-            activeRuntime.close()
-            resolve()
-          }
-        } catch (error) {
-          // A failed drain is not proof that in-flight effects stopped. Keep the
-          // lock and retry reconciliation; never release it on a timeout/error.
-          try {
-            if (
-              await retireUnreadableOwner(error, activeRuntime, () => {
-                clearInterval(timer)
-                resolve()
-              })
-            )
-              return
-            await control((s) => {
-              s.ownerError = {
-                transitionId: s.transition?.id,
-                message: `Storage drain blocked: ${String(error)}`,
-              }
-            })
-          } catch {
-            // Error reporting uses the same failing database. Do not let that
-            // turn each timer tick into an unhandled rejection or release a lock.
-            appLogger.warn(
-              'Storage owner cannot drain or record its failure; ownership retained',
-              { attrs: { scope: 'storage.owner' } }
-            )
-          }
-        } finally {
-          checking = false
-        }
-      }, 500)
-    })
   })
-  scope.close()
 }
-void start().catch(async (error) => {
+void start().catch((error) => {
   finishRuntime()
   setPhase('failed')
-  await control((state) => {
-    if (
-      releaseId &&
-      state.transition?.target.releaseId !== releaseId &&
-      state.active?.manifest.releaseId !== releaseId
-    )
-      return
-    state.ownerError = {
-      transitionId: state.transition?.id,
-      message: String(error),
-    }
-  }).catch(() => {})
+  appLogger.error('Storage owner startup failed', {
+    attrs: {
+      scope: 'storage.owner',
+      instanceId,
+      releaseId,
+      epoch,
+      error: String(error),
+    },
+  })
   for (const port of ports)
     port.postMessage({ type: 'release-owner-error', error: String(error) })
   scope.close()

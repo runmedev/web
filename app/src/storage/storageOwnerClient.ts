@@ -5,9 +5,10 @@ import {
   type Active,
   OWNER_LOCK,
   RELEASE_CAPABILITIES,
-  readControl,
   releasePrefix,
 } from '../releases/control'
+import { subscribeReleaseChanges } from '../releases/releaseChanges'
+import { readOwnerTarget } from '../releases/releasePreferences'
 import { registerUpgradeBlocker } from '../releases/runtime'
 import { DriveCreateNotCommittedError, type DriveNotebookStore } from './drive'
 import { EditorSaveSession } from './editorSaveSession'
@@ -424,6 +425,18 @@ export function createSharedNotebookStore(
     // Migration is part of the handshake: do not let a recovery scan generate a
     // second remote identity while an old reserved ID only exists in localStorage.
     const ready = Promise.resolve().then(async () => {
+      if (
+        release &&
+        (release.manifest.tabAdmissionFormat !== 1 ||
+          release.manifest.storageControlFormat !== 1)
+      ) {
+        const error = new Error(
+          'Selected storage worker requires tab registration. Keep this tab open and select a newer release.'
+        )
+        error.name = 'StorageWorkerIncompatibleError'
+        storageRecovery.set({ phase: 'blocked', message: error.message })
+        throw error
+      }
       // This small contract is stable across data-RPC versions and has no
       // storage effects. Incompatibility is distinct from timeout/unavailability.
       if (release && release.manifest.tabRecoveryFormat !== 1) {
@@ -550,7 +563,11 @@ export function createSharedNotebookStore(
       },
     }
   }
-  let connection = connect()
+  let connection = connect(window.runmeRelease?.storage ?? release)
+  let selectionChanged = false
+  const unsubscribeSelection = subscribeReleaseChanges(() => {
+    selectionChanged = true
+  })
   let checkpointing = false
   let needsConnection = false
   let connecting: Promise<void> | undefined
@@ -626,18 +643,13 @@ export function createSharedNotebookStore(
   async function ensureConnected(): Promise<void> {
     if (connection.client.needsReconnect) needsConnection = true
     if (connecting) return connecting
-    const selected = release ? await readControl() : undefined
+    const selected =
+      release && (needsConnection || selectionChanged)
+        ? await readOwnerTarget()
+        : connection.selected
     if (connecting) return connecting
-    if (selected?.transition?.phase === 'handoff')
-      throw new Error(
-        'Storage worker is changing versions. Pending saves remain in this tab; retry after activation.'
-      )
-    if (release && !selected?.active)
-      throw new Error('No active storage worker is selected')
-    if (
-      selected?.active &&
-      selected.active.epoch !== connection.selected?.epoch
-    )
+    selectionChanged = false
+    if (selected && selected.epoch !== connection.selected?.epoch)
       needsConnection = true
     if (!needsConnection) {
       await connection.ready
@@ -646,7 +658,7 @@ export function createSharedNotebookStore(
     const operation = (async () => {
       connection.client.onFailure = undefined
       connection.client.close()
-      connection = connect(selected?.active)
+      connection = connect(selected)
       const handshake = await connection.ready
       if (handshake.editorCommitVersion !== 1)
         throw new Error(
@@ -781,6 +793,7 @@ export function createSharedNotebookStore(
       void connection.client.request('disconnect').catch(() => {})
       connection.client.close()
       management.close()
+      unsubscribeSelection()
     }
     // A BFCache round trip must not remove the eventual disconnect handler.
   )

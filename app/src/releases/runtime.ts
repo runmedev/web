@@ -14,6 +14,7 @@ import type { releaseDatabaseDiagnostics } from './releaseDiagnostics'
  */
 export type ReleaseRuntime = {
   active: Active
+  storage?: Active
   tabId: string
   prepare?: () => Promise<CommitReference[]>
   prepareReload?: () => Promise<void>

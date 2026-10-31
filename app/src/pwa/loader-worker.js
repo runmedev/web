@@ -5,7 +5,7 @@ const BOOTSTRAP = __RUNME_LOADER_BOOTSTRAP__;
 const LOADER_CACHE = '__RUNME_LOADER_CACHE__';
 const RETIRED_OWNER = "self.onconnect=e=>{const p=e.ports[0];p.onmessage=()=>p.postMessage('runme-legacy-owner-retired');p.start();p.postMessage('runme-legacy-owner-retired')}";
 self.addEventListener('install', event => {
-  // No skipWaiting: pre-contract pages must be retired before this worker takes
+  // No automatic skipWaiting: pre-contract pages must retire before this worker takes
   // control. Installation never changes the application's selected release.
   event.waitUntil((async () => {
     const cache = await caches.open(LOADER_CACHE);
@@ -18,11 +18,16 @@ self.addEventListener('activate', event => event.waitUntil(self.clients.claim())
  * evidence that an unknown old writer stopped. Client IDs are browser assigned.
  */
 self.addEventListener('message', event => {
+  if (event.data === 'runme-loader-bootstrap-policy') {
+    event.ports[0]?.postMessage('latest-launcher-v1');
+    return;
+  }
   if (event.data === 'runme-loader-font-policy') {
     event.ports[0]?.postMessage('deferred-fonts-v1');
     return;
   }
-  if (event.data !== 'runme-loader-version' || !event.source?.id) return;
+  const upgrade = event.data === 'runme-loader-upgrade';
+  if ((!upgrade && event.data !== 'runme-loader-version') || !event.source?.id) return;
   event.waitUntil((async () => {
     const registry = await caches.open('runme-loader-clients-v1');
     const key = id => `/__runme-loader-client/${encodeURIComponent(id)}`;
@@ -39,6 +44,9 @@ self.addEventListener('message', event => {
       if (!compatible) throw new Error('Preserve edits, close all older Runme tabs, then reload to install controlled upgrades.');
       await registry.put(key(peer.id), new Response('1'));
     }
+    // Explicit migration only, after every live window proves the loader contract.
+    // Claiming changes future navigation; it never reloads an editor.
+    if (upgrade) await self.skipWaiting();
     event.ports[0]?.postMessage('runme-loader-1');
   })().catch(error => event.ports[0]?.postMessage(String(error.message || error))));
 });

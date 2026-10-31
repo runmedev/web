@@ -6,6 +6,7 @@ import {
   type Selection,
   control,
   discover,
+  preferenceSource,
   pruneUnusedCaches,
   readControl,
   releaseIdValid,
@@ -18,20 +19,34 @@ import {
 } from './control'
 import { loaderController } from './loaderController'
 import { recoverUnreadableControl } from './recoverControl'
-import { withRecoveryOwner } from './recoveryOwnerLock'
 import { type ReleaseAttention, releaseAttention } from './releaseAttention'
+import { holdReleaseCache } from './releaseCacheLease'
 import { resolvePublishedRelease } from './releaseCatalog'
 import { subscribeReleaseChanges } from './releaseChanges'
 import { ReleaseControlError } from './releaseDatabase'
 import { releaseDatabaseDiagnostics } from './releaseDiagnostics'
+import { readOwnerTarget } from './releasePreferences'
 import type { OfflineDownloadStatus, ReleaseRuntime } from './runtime'
 import { startupDiagnostics } from './startupDiagnostics'
 import {
   downloadRecoveryRelease,
   prepareStartupRecovery,
 } from './startupRecovery'
+import { upgradeLoader } from './upgradeLoader'
+import { activateWorker } from './workerActivation'
 
 const tabId = crypto.randomUUID()
+/** Historical owners cannot accept an unregistered tab. Keep recovery outside
+ * the app so choosing a compatible worker remains an explicit user action.
+ */
+class TabRegistrationRequiredError extends Error {}
+/** Immutable historical owners cannot authorize tabs without IDB registration. */
+function requireRegistrationFreeOwner(manifest: Manifest): void {
+  if (manifest.tabAdmissionFormat !== 1 || manifest.storageControlFormat !== 1)
+    throw new TabRegistrationRequiredError(
+      'This release requires the older persistent storage-coordination protocol. Choose a newer release below. Existing tabs have not been reloaded.'
+    )
+}
 const recovery = location.pathname === '/recovery.html'
 const panel = document.createElement('section')
 panel.id = 'runme-release-panel'
@@ -86,7 +101,6 @@ let booting = false
 let startupComplete = false
 let backgroundStarted = false
 let owner: SharedWorker | undefined
-let ownerKey = ''
 let dismissedCandidate: string | undefined
 let appReady = false
 let versionUiUsers = 0
@@ -163,6 +177,27 @@ function reportProgress(label: string, value: ReleaseProgress): void {
     `${label}: ${value.completed} / ${value.total} files (${percent}%)`,
     value
   )
+}
+/** Historical launchers can reload on epoch changes before saving their edits. */
+function legacyMigrationBlocked(): Error {
+  return new TabRegistrationRequiredError(
+    'Save edits and close older Runme tabs before retrying this upgrade. Their older launchers can reload before pending edits are saved. Keep this upgrade tab open.'
+  )
+}
+/** This one-time guard is unnecessary between registration-free releases. */
+async function requireClosedLegacyTabs(state: Control): Promise<boolean> {
+  if (!state.active || state.active.manifest.storageControlFormat === 1)
+    return false
+  const locks = await navigator.locks.query()
+  if (
+    locks.held?.some(
+      (lock) =>
+        lock.name?.startsWith('runme-release-tab-') &&
+        lock.name !== `runme-release-tab-${tabId}`
+    )
+  )
+    throw legacyMigrationBlocked()
+  return true
 }
 function button(label: string, action: () => unknown): void {
   const b = document.createElement('button')
@@ -292,12 +327,15 @@ async function installLoader(): Promise<void> {
 }
 
 /** Discovery stages only. Changing a selection or refreshing never activates it. */
-async function check(selection?: Selection): Promise<void> {
+async function check(selection?: Selection, background = false): Promise<void> {
   await navigator.locks.request('runme-release-cache', { mode: 'shared' }, () =>
-    downloadSelection(selection)
+    downloadSelection(selection, background)
   )
 }
-async function downloadSelection(selection?: Selection): Promise<void> {
+async function downloadSelection(
+  selection?: Selection,
+  background = false
+): Promise<void> {
   if (selection)
     await control((s) => {
       s.selection = validateSelection(selection)
@@ -311,162 +349,122 @@ async function downloadSelection(selection?: Selection): Promise<void> {
     (value) => reportProgress('Downloading and verifying startup files', value),
     startupScope()
   )
-  await control((s) => {
-    if (JSON.stringify(s.selection) === JSON.stringify(selected))
-      s.candidate = candidate
-  })
+  // Refreshes that find the installed/already-downloaded build need no write.
+  // A new candidate stays local to this launcher; discovery does not persist it.
+  const current = await readControl()
+  if (
+    JSON.stringify(current.selection) === JSON.stringify(selected) &&
+    (!background ||
+      (current.candidate?.releaseId ?? current.active?.manifest.releaseId) !==
+        candidate.releaseId)
+  )
+    await control((s) => {
+      if (JSON.stringify(s.selection) === JSON.stringify(selected))
+        s.candidate = candidate
+    })
   await render()
   if (appReady) void completeOffline(candidate)
 }
 
-async function begin(target: Manifest): Promise<void> {
-  try {
-    await navigator.locks.request(
-      'runme-release-cache',
-      { mode: 'shared' },
-      () => beginLocked(target)
-    )
-  } catch (error) {
-    // Historical apps can only flush to their original worker. A completed
-    // local flush permits restoring that tab even if activation then failed.
-    if (legacyPrepared) location.reload()
-    throw error
-  }
-}
-async function beginLocked(target: Manifest): Promise<void> {
-  report('Verifying the downloaded release…')
-  await verifyCache(
-    target,
-    (value) => reportProgress('Verifying downloaded release', value),
-    startupScope()
-  )
-  const current = await readControl()
-  if (current.recoveredControlFormat && target.recoveredControlFormat !== 1)
-    throw new Error(
-      'This release predates release-settings recovery. Choose a newer release.'
-    )
-  if (
-    runtime &&
-    (!runtime.prepareReload || target.tabRecoveryFormat !== 1) &&
-    !legacyPrepared
-  ) {
-    if (!runtime.prepare)
-      throw new Error(
-        'Wait for this tab to finish loading before activating a release'
-      )
-    await runtime.prepare()
-    legacyPrepared = true
-    freeze()
-  }
-  const pending = current.transition
-  if (pending?.phase === 'handoff') {
-    // Recovery can replace a failed candidate only while no storage owner exists.
-    // A frozen/unresponsive owner is never evicted by a timeout.
-    await withRecoveryOwner(async () => {
-      await control((s) => {
-        if (s.transition?.id !== pending.id || !s.ownerError)
-          throw new Error(
-            'Wait for candidate startup or retry the pending upgrade'
-          )
-        if (
-          pending.target.storageCompatibilityId !==
-          target.storageCompatibilityId
-        )
-          throw new Error('Incompatible recovery release')
-        if (s.emergencyRestart)
-          throw new Error(
-            'Finish the pending storage recovery before upgrading'
-          )
-        s.transition = {
-          ...pending,
-          id: crypto.randomUUID(),
-          target,
-          epoch: pending.epoch + 1,
-        }
-        delete s.ownerError
-      })
-    })
-    ownerKey = ''
-    await activateSelectedRelease()
-    return
-  }
-  await control((s) => {
-    if (s.transition)
-      throw new Error(
-        'An upgrade is already pending. Resume or cancel it below.'
-      )
-    if (s.active?.manifest.releaseId === target.releaseId) return
-    if (
-      s.active &&
-      s.active.manifest.storageCompatibilityId !== target.storageCompatibilityId
-    )
-      throw new Error('This release cannot read and write current data')
-    if (s.emergencyRestart)
-      throw new Error('Finish the pending storage recovery before upgrading')
-    s.transition = {
-      id: crypto.randomUUID(),
-      from: s.active,
-      target,
-      epoch: Math.max(s.active?.epoch ?? 0, s.epochBase ?? 0) + 1,
-      phase: 'handoff',
-      participants: {},
-    }
-  })
-  await activateSelectedRelease()
-}
-
-/** Only an explicit activate/retry (or first installation) starts a candidate.
- * Poll only for this bounded operation; peers never drive an abandoned handoff.
- * The worker retains the lifetime lock until its writes have drained.
+/** Serialize explicit activations, not tab loads. A crashed launcher leaves no
+ * IDB handoff to block startup; the previous installed app remains selectable.
  */
-async function activateSelectedRelease(): Promise<void> {
+async function begin(target: Manifest): Promise<void> {
+  requireRegistrationFreeOwner(target)
   if (activating) throw new Error('Activation is already running in this tab')
-  activating = true
-  try {
-    const selected = await readControl()
-    const pending = selected.transition
-    if (pending?.phase === 'prepare')
-      throw new Error(
-        'Cancel the older pending upgrade before activating a release'
-      )
-    if (pending) {
-      await verifyCache(pending.target, undefined, startupScope())
-      report('Activating the selected release; other tabs stay open…')
-      startOwner({ manifest: pending.target, epoch: pending.epoch })
-      const deadline = Date.now() + 30000
-      while (true) {
-        const state = await readControl()
-        if (state.ownerError?.transitionId === pending.id)
-          throw new Error(state.ownerError.message)
-        if (!state.transition) {
-          if (state.active?.epoch !== pending.epoch)
-            throw new Error('Activation changed; review the selected release')
-          break
+  await navigator.locks.request(
+    'runme-release-activation',
+    { ifAvailable: true },
+    async (lock) => {
+      if (!lock)
+        throw new Error(
+          'Another activation is in progress; retry when it finishes.'
+        )
+      const releaseTarget = await holdReleaseCache(target.releaseId)
+      activating = true
+      try {
+        await verifyCache(
+          target,
+          (value) => reportProgress('Verifying downloaded release', value),
+          startupScope()
+        )
+        const current = await readControl()
+        if (!current.active || (await requireClosedLegacyTabs(current))) {
+          report('Updating the navigation loader for offline startup…')
+          await upgradeLoader(navigator.serviceWorker)
         }
-        if (state.transition.id !== pending.id)
-          throw new Error(
-            'Activation was superseded; review the selected release'
-          )
-        if (Date.now() >= deadline)
-          throw new Error(
-            'Activation is still pending. Retry activation from Versions; other tabs remain open.'
-          )
-        await new Promise((resolve) => setTimeout(resolve, 250))
+        if (
+          runtime &&
+          (!runtime.prepareReload || target.tabRecoveryFormat !== 1) &&
+          !legacyPrepared
+        ) {
+          if (!runtime.prepare)
+            throw new Error(
+              'Wait for this tab to finish loading before activating a release'
+            )
+          await runtime.prepare()
+          legacyPrepared = true
+          freeze()
+        }
+        const previousTarget = await readOwnerTarget()
+        const next = {
+          manifest: target,
+          epoch: Math.max(
+            Date.now(),
+            (previousTarget?.epoch ?? 0) + 1,
+            (current.active?.epoch ?? 0) + 1
+          ),
+        }
+        await control((s) => {
+          s.transition = {
+            id: crypto.randomUUID(),
+            from: current.active,
+            target,
+            epoch: next.epoch,
+            phase: 'handoff',
+            participants: {},
+          }
+          delete s.ownerError
+        })
+        report('Starting the selected storage worker; other tabs stay open…')
+        const replacement = await activateWorker(next)
+        owner?.port.close()
+        owner = replacement
+        // Only a ready worker can become the saved installed release. There are no
+        // persistent initializing/ready/error/cancellation records.
+        await control((s) => {
+          if (s.active?.manifest.releaseId !== target.releaseId)
+            s.previous = s.active
+          s.active = next
+          delete s.transition
+          delete s.ownerError
+        })
+        if (runtime) await reloadThisTab()
+        else await loadInstalledRelease()
+        await render()
+      } catch (error) {
+        await control((s) => {
+          s.ownerError = { message: String(error) }
+        }).catch(() => {})
+        if (legacyPrepared) location.reload()
+        throw error
+      } finally {
+        releaseTarget()
+        activating = false
+        if (observationPending) void observeRelease()
       }
     }
-    if (
-      runtime &&
-      (pending ||
-        selected.active?.manifest.releaseId !==
-          runtime.active.manifest.releaseId)
-    )
-      await reloadThisTab()
-    else await loadInstalledRelease()
-    await render()
-  } finally {
-    activating = false
-    if (observationPending) void observeRelease()
-  }
+  )
+}
+
+/** Explicit retries create a fresh worker generation; startup never resumes an
+ * abandoned transition from another tab or rewrites release preferences.
+ */
+async function activateSelectedRelease(): Promise<void> {
+  const selected = await readControl()
+  const target = selected.transition?.target ?? selected.active?.manifest
+  if (!target) throw new Error('Choose a downloaded release first')
+  await begin(target)
 }
 
 /** Only a user action or this tab's own activation can authorize its reload.
@@ -499,54 +497,12 @@ async function reloadThisTab(): Promise<void> {
   }
 }
 
-/** Starting a worker only contends for the lifetime lock. Its verified startup
- * commits the target; the tab cannot declare an uninitialized owner active.
+/** Cancellation discards only this launcher's local attempt; saved preferences
+ * and other tabs are unchanged. A running activation must finish/drain first.
  */
-function startOwner(active: Active): void {
-  const key = `${active.manifest.releaseId}-${active.epoch}`
-  if (ownerKey === key) return
-  owner?.port.close()
-  ownerKey = key
-  owner = new SharedWorker(
-    `${releasePrefix(active.manifest.releaseId)}${active.manifest.owner.entry}`,
-    { type: 'module', name: `runme-storage-owner-${key}` }
-  )
-  owner.port.onmessage = (e) => {
-    if (e.data?.type === 'release-owner-error') report(e.data.error)
-  }
-  owner.onerror = () => {
-    const message =
-      'Storage startup failed. Retry from Versions or select a cached compatible release; current notebook data has been retained.'
-    // A module-load failure happens before the worker can persist diagnostics.
-    // Record it here so recovery can replace a failed handoff under OWNER_LOCK.
-    // Do not retry endlessly: the user can explicitly resume or choose recovery.
-    void control((s) => {
-      if (
-        s.transition?.phase === 'handoff' &&
-        s.transition.target.releaseId === active.manifest.releaseId &&
-        s.transition.epoch === active.epoch
-      )
-        s.ownerError = { transitionId: s.transition.id, message }
-    }).catch(report)
-    report(message)
-  }
-  owner.port.start()
-}
-
-/** Before handoff, cancellation leaves the current owner active. Prepared tabs
- * reload their confirmed durable state; failed tabs keep their unsaved editors.
- */
-async function cancel(expectedId?: string): Promise<void> {
+async function cancel(): Promise<void> {
+  if (activating) throw new Error('Wait for the current activation to finish')
   await control((s) => {
-    if (!s.transition) return
-    if (expectedId && s.transition.id !== expectedId)
-      throw new Error(
-        'This upgrade was superseded; review the current transition before canceling'
-      )
-    if (s.transition.phase !== 'prepare')
-      throw new Error(
-        'Storage handoff already started; use phase-aware recovery'
-      )
     delete s.transition
     delete s.ownerError
   })
@@ -578,7 +534,7 @@ async function observeRelease(): Promise<void> {
   }
 }
 
-/** Admission is the only settings write required to load an installed app.
+/** Loading an installed app reads settings without registering the tab in IDB.
  * A pending handoff requires an explicit retry; startup never starts its target.
  */
 async function loadInstalledRelease(state?: Control): Promise<void> {
@@ -600,37 +556,48 @@ async function loadInstalledRelease(state?: Control): Promise<void> {
   }
 }
 
-/** Admission and transition creation use the same transaction. App imports only
- * occur after admission; a mid-upgrade new tab cannot construct database readers.
+/** Protect lazy assets with a lifetime lease, then recheck selection read-only.
+ * A later activation can race this snapshot: the worker fences requests against
+ * its current epoch before effects, independently of any per-tab DB record.
  */
 async function boot(active: Active): Promise<void> {
+  requireRegistrationFreeOwner(active.manifest)
   diagnostics.record('selected-release', 'info', {
     releaseId: active.manifest.releaseId,
   })
-  await diagnostics.step('cached-file-verification', () =>
-    verifyCache(
-      active.manifest,
-      (value) => reportProgress('Checking installed release', value),
-      startupScope()
+  // The per-release lease alone serializes with deletion. Joining the global
+  // cache lock would let unrelated downloads or cleanup delay cached startup.
+  const releaseCache = await diagnostics.step('release-cache-lease', () =>
+    holdReleaseCache(active.manifest.releaseId)
+  )
+  try {
+    await diagnostics.step('cached-file-verification', () =>
+      verifyCache(
+        active.manifest,
+        (value) => reportProgress('Checking installed release', value),
+        startupScope()
+      )
     )
-  )
-  const admitted = await diagnostics.step('tab-admission', () =>
-    control((s) => {
-      if (s.transition || s.active?.epoch !== active.epoch) return false
-      s.tabs[tabId] = {
-        epoch: active.epoch,
-        releaseId: active.manifest.releaseId,
-        label:
-          new URLSearchParams(location.search).get('session') ??
-          tabId.slice(0, 8),
-      }
-      return true
-    })
-  )
-  if (!admitted) return
+    const current = await diagnostics.step(
+      'selected-release-recheck',
+      readControl
+    )
+    if (
+      current.transition ||
+      current.active?.epoch !== active.epoch ||
+      current.active.manifest.releaseId !== active.manifest.releaseId
+    ) {
+      releaseCache()
+      return
+    }
+  } catch (error) {
+    releaseCache()
+    throw error
+  }
   const finishAppStartup = diagnostics.begin('application-ready')
   runtime = window.runmeRelease = {
     active,
+    storage: await readOwnerTarget(),
     tabId,
     ready: () => {
       // Notebook subscriptions repeat readiness after edits. Start background
@@ -640,14 +607,6 @@ async function boot(active: Active): Promise<void> {
       appReady = true
       updatePanelVisibility()
       if (firstReady) void completeOffline(active.manifest)
-      void control((s) => {
-        if (s.active?.epoch === active.epoch)
-          s.healthy = active.manifest.releaseId
-        if (s.tabs[tabId])
-          s.tabs[tabId].label =
-            new URLSearchParams(location.search).get('session') ??
-            tabId.slice(0, 8)
-      })
     },
   }
   for (const path of active.manifest.styles) {
@@ -773,7 +732,7 @@ async function render(state?: Control): Promise<void> {
         await render()
       })
     if (s.transition?.phase === 'prepare')
-      button('Cancel upgrade', () => cancel(s.transition!.id))
+      button('Cancel upgrade', () => cancel())
     const label = document.createElement('label')
     label.textContent = 'Commit SHA or release ID '
     const input = document.createElement('input')
@@ -787,7 +746,6 @@ async function render(state?: Control): Promise<void> {
       })
     )
     button('Retry worker activation', async () => {
-      ownerKey = ''
       await activateSelectedRelease()
     })
     for (const name of await caches.keys()) {
@@ -856,10 +814,13 @@ async function main(): Promise<void> {
   await startRelease()
 }
 
-/** Run admission only after loader compatibility and tab liveness are ready. */
+/** Read selection only after loader compatibility and tab liveness are ready. */
 async function startRelease(applyRequest = true): Promise<void> {
   report('Reading the installed release…')
   await diagnostics.step('initial-release-state', render)
+  diagnostics.record('release-preferences', 'info', {
+    source: preferenceSource(),
+  })
   const query = new URLSearchParams(location.search)
   const requested = !applyRequest
     ? undefined
@@ -891,9 +852,9 @@ async function startRelease(applyRequest = true): Promise<void> {
     subscribeReleaseChanges(() => void observeRelease())
     window.addEventListener('pageshow', () => void observeRelease())
     // Discovery can download a channel release, but cannot activate it.
-    setInterval(() => void check().catch(report), 60 * 60 * 1000)
+    setInterval(() => void check(undefined, true).catch(report), 60 * 60 * 1000)
   }
-  if (s.active) void check().catch(report)
+  if (s.active) void check(undefined, true).catch(report)
 }
 /** Recovery controls must not depend on a successful settings read. A missing
  * settings service cannot be allowed to hide the only way to retry or choose a
@@ -916,7 +877,9 @@ function showStartupRecovery(error: unknown): void {
     )
       node.remove()
   report(
-    `${String(error instanceof Error ? error.message : error)} Retry the installed release, or explicitly choose another release below. Browser storage must respond before Runme can safely open notebooks.`
+    error instanceof TabRegistrationRequiredError
+      ? error.message
+      : `${String(error instanceof Error ? error.message : error)} Retry the installed release, or explicitly choose another compatible release below. Stored notebooks have not been removed.`
   )
   button('Retry installed release', async () => {
     try {
@@ -972,7 +935,8 @@ async function recoverStartup(
           await diagnostics.step('quarantine-unreadable-settings', () =>
             recoverUnreadableControl(tabId, selection, candidate)
           )
-        }
+        },
+        requireRegistrationFreeOwner
       )
     )
     if (!(await readControl()).transition) await begin(candidate)
@@ -1008,7 +972,9 @@ window.runmeVersions = {
     const candidate = await prepareStartupRecovery(
       validateSelection(selection),
       (value) => reportProgress('Preparing recovery release', value),
-      startupScope()
+      startupScope(),
+      undefined,
+      requireRegistrationFreeOwner
     )
     await begin(candidate)
   },
@@ -1062,7 +1028,6 @@ window.runmeVersions = {
   cancel,
   prune: pruneUnusedCaches,
   retry: async () => {
-    ownerKey = ''
     await activateSelectedRelease()
   },
 }
@@ -1096,7 +1061,7 @@ navigator.serviceWorker?.addEventListener('message', (event) => {
     event.ports[0]?.postMessage('runme-loader-1')
 })
 void diagnostics.step('bootstrap', main).catch((error) => {
-  if (startupPrepared && error instanceof ReleaseControlError) {
+  if (startupPrepared) {
     showStartupRecovery(error)
   } else report(error)
 })

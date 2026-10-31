@@ -3,8 +3,18 @@ import {
   LAUNCHER_POINTER,
   launcherDescriptor,
 } from './launcherSelection'
-import { notifyReleaseChange, releaseChangeKey } from './releaseChanges'
+import { releaseCacheLock } from './releaseCacheLease'
+import { notifyReleaseChange } from './releaseChanges'
 import { releaseTransaction } from './releaseDatabase'
+import {
+  expandPreferences,
+  preferences,
+  readOwnerTarget,
+  readSavedPreferences,
+  reportPreferenceFallback,
+  savePreferences,
+  validatePreferences,
+} from './releasePreferences'
 
 /** Loader protocol 1 is independent of notebook schemas and application builds. */
 export const CONTROL_DB = 'runme-release-control'
@@ -27,6 +37,8 @@ export type Manifest = {
   publishedAt: string
   recoveredControlFormat?: 1
   tabRecoveryFormat?: 1
+  tabAdmissionFormat?: 1
+  storageControlFormat?: 1
   requiredCapabilities: string[]
   testedRollbackTargets: string[]
   launcherProtocol: { min: number; max: number }
@@ -77,33 +89,121 @@ export type Control = {
   ownerError?: { transitionId?: string; message: string }
 }
 
-/** One transaction serializes admission, readiness and activation. Callbacks must
- * be synchronous: no network/cache awaits may outlive an IndexedDB transaction.
- * Close every connection so a suspended tab cannot block a future loader schema.
+/** Download candidates and progress belong to this launcher, not shared persistence. */
+let volatile: Pick<Control, 'candidate' | 'transition' | 'ownerError'> = {}
+let revision = 0
+let preferCached = false
+let usingCached = false
+/** Expose fallback provenance without persisting diagnostic state. */
+export const preferenceSource = () => (usingCached ? 'cache' : 'indexeddb')
+let volatileSelection: string | undefined
+
+/** Read the user's small selection record. A failed IDB read can use the last
+ * explicit selection from Cache Storage; startup never repairs/writes settings.
+ */
+export async function readControl(): Promise<Control> {
+  let state: Control
+  const cached = await readSavedPreferences().catch(() => undefined)
+  try {
+    if (preferCached && cached)
+      throw new Error('Continuing with cached preferences after a failed read')
+    const value = await releaseTransaction(CONTROL_DB, false, (value) => ({
+      state: value,
+      result: value,
+    }))
+    if (value && (value as { format: number }).format === 2) {
+      const stored = validatePreferences(value)
+      const selected =
+        cached && cached.revision > stored.revision ? cached : stored
+      usingCached = selected === cached
+      revision = selected.revision
+      state = await expandPreferences(selected)
+    } else if (cached) {
+      usingCached = true
+      revision = cached.revision
+      state = await expandPreferences(cached)
+    } else {
+      // Read historical records without rewriting them on startup.
+      const legacy = (value as Control | undefined) ?? {
+        format: 1,
+        selection: { kind: 'channel', name: 'stable' },
+        tabs: {},
+      }
+      if (legacy.format !== 1)
+        throw new Error('Unsupported release preferences')
+      validateSelection(legacy.selection)
+      // Old handoffs, tab registrations and worker errors are not live state.
+      // Keep the original record untouched for historical workers, but never
+      // let an abandoned transition block explicit migration in this launcher.
+      state = {
+        format: 1,
+        selection: legacy.selection,
+        active: legacy.active,
+        previous: legacy.previous,
+        tabs: {},
+      }
+    }
+  } catch (error) {
+    if (!cached) throw error
+    if (!preferCached) reportPreferenceFallback(error)
+    preferCached = true
+    usingCached = true
+    revision = cached.revision
+    state = await expandPreferences(cached)
+  }
+  if (
+    volatile.transition &&
+    state.active &&
+    state.active.epoch > volatile.transition.epoch
+  ) {
+    delete volatile.transition
+    delete volatile.ownerError
+  }
+  if (volatileSelection !== JSON.stringify(state.selection))
+    delete volatile.candidate
+  return { ...state, ...volatile }
+}
+
+/** Only selection/installed-release changes persist. Serialize user actions
+ * across tabs; no-op calls and transient progress never open a write transaction.
  */
 export async function control<T>(
   mutate: (state: Control) => T,
   write = true
 ): Promise<T> {
-  let changed = false
-  const result = await releaseTransaction(CONTROL_DB, write, (value) => {
-    const state: Control = (value as Control | undefined) ?? {
-      format: 1,
-      selection: { kind: 'channel', name: 'stable' },
-      tabs: {},
-    }
-    if (state.format !== 1)
-      throw new Error('Unsupported release-control format')
-    const before = write ? releaseChangeKey(state) : undefined
+  if (!write) return mutate(await readControl())
+  return navigator.locks.request('runme-release-preference-write', async () => {
+    const state = await readControl()
+    const before = JSON.stringify(preferences(state, 0))
     const result = mutate(state)
-    changed = write && before !== releaseChangeKey(state)
-    return { state, result }
+    const changed = before !== JSON.stringify(preferences(state, 0))
+    if (changed) {
+      const record = preferences(state, revision + 1)
+      // Commit the independent copy first. If IDB fails or its outcome is
+      // uncertain, the higher revision still preserves the explicit user choice.
+      await savePreferences(record)
+      revision = record.revision
+      // Historical owners still read format 1. Keep their record intact until
+      // explicit migration has closed their tabs and started a new owner.
+      if (state.active?.manifest.storageControlFormat === 1)
+        await releaseTransaction(CONTROL_DB, true, () => ({
+          state: record,
+          result: undefined,
+        })).then(() => {
+          preferCached = false
+        }, reportPreferenceFallback)
+    }
+    volatileSelection = JSON.stringify(state.selection)
+    volatile = {
+      candidate: state.candidate,
+      transition: state.transition,
+      ownerError: state.ownerError,
+    }
+    if (changed) notifyReleaseChange()
+    return result
   })
-  if (changed) notifyReleaseChange()
-  return result
 }
 
-export const readControl = () => control((state) => state, false)
 export const releasePrefix = (id: string) => `/version/${id}/`
 export const cacheName = (id: string) => `runme-release-v1-${id}`
 // Separate from the legacy full-offline completion marker. Older loaders still
@@ -363,23 +463,6 @@ export async function discover(selection: Selection): Promise<Manifest> {
  */
 export async function pruneUnusedCaches(): Promise<number> {
   return navigator.locks.request('runme-release-cache', async () => {
-    // Tab bookkeeping is maintenance requested by the user, never startup work.
-    const snapshot = await readControl()
-    const closed: string[] = []
-    for (const id of Object.keys(snapshot.tabs)) {
-      if (
-        await navigator.locks.request(
-          `runme-release-tab-${id}`,
-          { ifAvailable: true },
-          (lock) => Boolean(lock)
-        )
-      )
-        closed.push(id)
-    }
-    if (closed.length)
-      await control((state) => {
-        for (const id of closed) delete state.tabs[id]
-      })
     const state = await readControl()
     const keep = new Set([
       state.active?.manifest.releaseId,
@@ -391,6 +474,7 @@ export async function pruneUnusedCaches(): Promise<number> {
       state.selection.kind === 'pinned' ? state.selection.releaseId : undefined,
       ...Object.values(state.tabs).map((tab) => tab.releaseId),
     ])
+    keep.add((await readOwnerTarget())?.manifest.releaseId)
     // A newer launcher can host an older selected app. Keep its modules for
     // offline startup even when no app tab references that release.
     if (typeof document !== 'undefined')
@@ -409,8 +493,12 @@ export async function pruneUnusedCaches(): Promise<number> {
     for (const name of await caches.keys()) {
       if (!name.startsWith('runme-release-v1-')) continue
       const id = name.slice('runme-release-v1-'.length)
-      if (releaseIdValid(id) && !keep.has(id) && (await caches.delete(name)))
-        removed++
+      if (releaseIdValid(id) && !keep.has(id))
+        removed += await navigator.locks.request(
+          releaseCacheLock(id),
+          { ifAvailable: true },
+          async (lock) => (lock && (await caches.delete(name)) ? 1 : 0)
+        )
     }
     return removed
   })

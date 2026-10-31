@@ -16,9 +16,12 @@ export async function prepareStartupRecovery(
   selection: Selection = { kind: 'channel', name: 'stable' },
   progress?: (value: ReleaseProgress) => void,
   scope: 'all' | 'startup' = 'all',
-  repair?: (candidate: Manifest) => Promise<void>
+  repair?: (candidate: Manifest) => Promise<void>,
+  validate?: (candidate: Manifest) => void
 ): Promise<Manifest> {
   const candidate = await downloadRecoveryRelease(selection, progress, scope)
+  // Reject incompatible recovery targets before persisting or repairing state.
+  validate?.(candidate)
   // A transient error can clear while downloading. Retry a second bounded
   // transaction, always rereading state so a prior uncertain commit is safe.
   for (let attempt = 0; ; attempt++) {

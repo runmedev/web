@@ -1,6 +1,7 @@
 import { appLogger } from '../lib/logging/runtime'
 import { appState } from '../lib/runtime/AppState'
-import { RELEASE_CAPABILITIES, readControl } from '../releases/control'
+import { authorizeReleaseRequest } from '../releases/authorizeReleaseRequest'
+import { RELEASE_CAPABILITIES } from '../releases/control'
 import { closeReleaseDatabases } from '../releases/databases'
 import { DriveNotebookStore } from './drive'
 import { FilesystemNotebookStore } from './fs'
@@ -46,20 +47,7 @@ export async function startStorageOwner(identity?: {
     },
     identity
       ? async (request) => {
-          const state = await readControl()
-          const tab = request.tabId && state.tabs[request.tabId]
-          if (
-            request.epoch !== identity.epoch ||
-            !tab ||
-            state.active?.epoch !== identity.epoch ||
-            state.active.manifest.releaseId !== identity.releaseId ||
-            state.transition?.phase === 'handoff' ||
-            (request.tabId &&
-              state.transition?.participants[request.tabId]?.ready)
-          )
-            throw new Error(
-              'Stale or frozen release: storage request rejected before effects'
-            )
+          authorizeReleaseRequest(identity, request)
         }
       : undefined,
     identity ? { ...identity, capabilities: RELEASE_CAPABILITIES } : undefined
@@ -76,17 +64,6 @@ export async function startStorageOwner(identity?: {
 
   try {
     await store.ready
-    if (identity) {
-      const pending = (await readControl()).transition
-      if (
-        pending?.phase === 'handoff' &&
-        pending.epoch === identity.epoch &&
-        pending.target.releaseId === identity.releaseId
-      )
-        await store.verifyReleaseCommits(
-          Object.values(pending.participants).flatMap((p) => p.ready ?? [])
-        )
-    }
   } catch (error) {
     clearInterval(timer)
     await store.drainForStorageRestart()
