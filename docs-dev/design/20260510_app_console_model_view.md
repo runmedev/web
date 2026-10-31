@@ -407,10 +407,12 @@ accidental synchronization mechanism.
 
 ### Unavailable history during execution
 
-History restoration is optional for execution. WebMCP and the console Run action
-start from the live model without awaiting hydration. If the user edits or runs
-before restoration finishes, the model aborts hydration and keeps that tab in
-memory-only mode. It preserves the live draft/output and ignores late reads;
+History restoration is optional for execution. WebMCP starts code immediately
+and queues console recording behind bounded hydration. Reload preparation drains
+that queue before saving, so a fast command cannot unnecessarily disable healthy
+history or lose output during an upgrade. If the user edits or directly runs the
+console draft before restoration finishes, the model aborts hydration and keeps
+that tab in memory-only mode. It preserves the live draft/output and ignores late reads;
 it never creates a replacement session or saves over unread history. The UI
 explains that new commands and drafts will not survive closing the tab. Reload
 preparation refuses to discard these unsaved cells.

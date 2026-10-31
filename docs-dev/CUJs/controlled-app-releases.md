@@ -171,8 +171,8 @@ Screenshots and `cached-fallback-result.json` are published with release evidenc
 ### ExecuteCode with unavailable optional storage
 
 `execute-code-storage-recovery.ts` runs against the emitted app and workers served
-by the Go release fixture. It verifies normal persisted execution and keyed
-retries, seeds a saved console draft, then reloads while faulting opens of
+by the Go release fixture. It verifies normal persisted execution, keyed retries, and reload preparation
+that drains pending console recording; seeds a saved console draft, then reloads while faulting opens of
 `runme-app-console` and `runme-code-operations`. The public WebMCP handler must
 return an operation ID, success, and `health-check` output before the browser
 transport deadline. Opening App Console must show the output and a memory-only

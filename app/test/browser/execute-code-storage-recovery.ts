@@ -48,6 +48,9 @@ async function main() {
     assert.equal(healthy.first.status, 'succeeded')
     assert.equal(healthy.first.persistence, 'indexeddb')
     assert.equal(healthy.retry.operationId, healthy.first.operationId)
+    // Recording may finish after the tool returns; reload must drain it and
+    // preserve history instead of treating healthy storage as unavailable.
+    await page.evaluate(() => (window as any).runmeRelease.prepare())
     // Seed history in this disposable profile, then close the seed connection.
     await page.evaluate(async () => {
       const request = indexedDB.open('runme-app-console', 10)

@@ -142,9 +142,11 @@ it("runs without history and ignores a late read without overwriting the live dr
   let finish!: (value: any) => void;
   storage.loadLatestSession = vi.fn(
     () =>
-      new Promise<Awaited<ReturnType<typeof storage.loadLatestSession>>>((resolve) => {
-        finish = resolve;
-      })
+      new Promise<Awaited<ReturnType<typeof storage.loadLatestSession>>>(
+        (resolve) => {
+          finish = resolve;
+        }
+      )
   );
   const save = vi.spyOn(storage, "saveCells");
   const create = vi.spyOn(storage, "createSession");
@@ -186,5 +188,53 @@ it("bounds hydration even when storage never responds, retaining an editable con
   } finally {
     data.dispose();
     vi.useRealTimers();
+  }
+});
+
+it("records fast external commands after healthy history and drains them before reload", async () => {
+  const { storage, getRows } = createStorageStub();
+  const original = new AppConsoleData({ storage });
+  await original.hydrate();
+  original.setDraftSource("saved draft");
+  await original.flushForRelease();
+  original.dispose();
+  const saved = await storage.loadLatestSession();
+  let finish!: (value: typeof saved) => void;
+  let markStarted!: () => void;
+  const started = new Promise<void>((resolve) => {
+    markStarted = resolve;
+  });
+  vi.spyOn(storage, "loadLatestSession").mockImplementation(
+    () =>
+      new Promise((resolve) => {
+        finish = resolve;
+        markStarted();
+      })
+  );
+  const data = new AppConsoleData({ storage });
+  let execution: ReturnType<AppConsoleData["startExternalExecution"]> = null;
+  data.queueHistoryUpdate(() => {
+    execution = data.startExternalExecution("health-check");
+  });
+  data.queueHistoryUpdate(() => {
+    data.appendStdout(execution!.cellId, "done\n");
+  });
+  data.queueHistoryUpdate(() => {
+    data.completeExecution(execution!.cellId, { exitCode: 0 });
+  });
+  const flush = data.flushForRelease();
+  try {
+    await started;
+    finish(saved);
+    await flush;
+    expect(data.getSnapshot().loadError).toBeNull();
+    expect(
+      data.getSnapshot().cells.find((cell) => cell.status === "draft")?.source
+    ).toBe("saved draft");
+    expect(getRows().find((row) => row.source === "health-check")?.status).toBe(
+      "success"
+    );
+  } finally {
+    data.dispose();
   }
 });

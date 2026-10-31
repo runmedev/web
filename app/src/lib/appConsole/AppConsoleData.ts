@@ -47,6 +47,7 @@ export class AppConsoleData {
   private readonly persistDelayMs: number;
   private persistTimer: ReturnType<typeof setTimeout> | null = null;
   private hydratePromise: Promise<void> | null = null;
+  private historyUpdates: Promise<void> = Promise.resolve();
   private persistenceEnabled = true;
   private hydrationController: AbortController | null = null;
   private persistChain: Promise<void> = Promise.resolve();
@@ -285,6 +286,23 @@ export class AppConsoleData {
     this.outputBuffers.clear();
   }
 
+  /** Queue console recording independently of code execution. Healthy history
+   * restores before new output is inserted; failed history uses the live model.
+   * Reload preparation drains this queue so accepted output is not discarded. */
+  queueHistoryUpdate(update: () => void): void {
+    this.historyUpdates = this.historyUpdates
+      .then(() => this.hydrate())
+      .then(update)
+      .catch((error) => {
+        appLogger.error("Failed to record App Console update", {
+          attrs: {
+            scope: "app_console.history",
+            errorName: error instanceof Error ? error.name : "unknown",
+          },
+        });
+      });
+  }
+
   /** History must never gate execution. Preserve the live draft and detach from
    * unread history; late reads cannot replace these cells or enable persistence. */
   private prepareForExecution(): void {
@@ -487,6 +505,7 @@ export class AppConsoleData {
   /** Flush the latest draft after earlier writes; failure is an upgrade blocker. */
   async flushForRelease(signal?: AbortSignal): Promise<void> {
     if (this.hydratePromise) await this.hydratePromise;
+    await this.historyUpdates;
     // A timed-out reload must not freeze the console when hydration resolves late.
     signal?.throwIfAborted();
     if (!this.snapshotCache.hydrated) return;

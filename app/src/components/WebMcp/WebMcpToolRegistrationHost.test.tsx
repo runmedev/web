@@ -24,6 +24,7 @@ const {
   startGoogleDriveOAuthMock: vi.fn(),
   appConsoleDataMock: {
     hydrate: vi.fn(),
+    queueHistoryUpdate: (update: () => void) => update(),
     startExternalExecution: vi.fn(),
     appendStdout: vi.fn(),
     appendStderr: vi.fn(),
