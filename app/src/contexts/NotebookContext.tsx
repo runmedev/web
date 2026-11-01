@@ -21,7 +21,6 @@ import { appState } from "../lib/runtime/AppState";
 import { isNotebookDocumentUri } from "../lib/workspaceDocuments/workspaceDocumentTypes";
 import { prepareRelease } from '../releases/prepare';
 import { prepareTabReload } from '../releases/prepareTabReload';
-import { adoptLegacyVersionUi } from '../releases/runtime';
 import { useCurrentDoc } from "./CurrentDocContext";
 import { useNotebookStore } from "./NotebookStoreContext";
 
@@ -69,7 +68,6 @@ export function NotebookProvider({ children }: { children: ReactNode }) {
     if (!store || !window.runmeRelease) return;
     const runtime = window.runmeRelease;
     let disposed = false;
-    let releaseLegacyUi: (() => void) | undefined;
     const check = () => {
       if (disposed) return;
       const entries = controller.getOpenNotebooks();
@@ -78,7 +76,6 @@ export function NotebookProvider({ children }: { children: ReactNode }) {
       runtime.prepareReload = prepareTabReload;
       if (entries.every(entry => entry.state === 'loaded' || entry.state === 'blocked')) {
         runtime.ready?.();
-        releaseLegacyUi ??= adoptLegacyVersionUi();
       }
     };
     let unsubscribe: (() => void) | undefined;
@@ -89,7 +86,7 @@ export function NotebookProvider({ children }: { children: ReactNode }) {
     }).catch(error => appLogger.warn('Release startup did not become healthy', {
       attrs: { scope: 'release.startup', error: String(error) },
     }));
-    return () => { disposed = true; unsubscribe?.(); releaseLegacyUi?.(); delete runtime.prepare; delete runtime.prepareReload; };
+    return () => { disposed = true; unsubscribe?.(); delete runtime.prepare; delete runtime.prepareReload; };
   }, [controller, store]);
 
   const getNotebookData = useCallback(

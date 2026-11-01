@@ -188,6 +188,77 @@ async function main() {
     await two.goto(base + '/?session=release-two')
     await ready(two)
     assert.equal(await active(two), a)
+    if (!process.env.RUNME_RELEASE_BASELINE) {
+      const stalled = await context.newPage()
+      try {
+        // Drop only this tab's storage handshake. Real loader/worker/cache
+        // behavior and other tabs remain intact; no notebook data is changed.
+        await stalled.addInitScript(() => {
+          const send = MessagePort.prototype.postMessage
+          MessagePort.prototype.postMessage = function (
+            message: any,
+            transfer?: any
+          ) {
+            if (message?.type === 'request' && message.method === 'handshake')
+              return
+            return send.call(this, message, transfer)
+          }
+        })
+        await stalled.goto(base + '/?session=storage-not-ready')
+        await openVersions(stalled)
+        await stalled.getByText('Runme storage needs to reconnect').waitFor()
+        const health = await stalled.evaluate(() => {
+          const runtime = (window as any).runmeRelease
+          const trace = JSON.parse(
+            document.getElementById('runme-startup-diagnostics-log')!.textContent!
+          )
+          return {
+            prepare: typeof runtime.prepare,
+            prepareReload: typeof runtime.prepareReload,
+            reportedHealthy: trace.some(
+              (event: any) =>
+                event.attrs.stage === 'application-ready' &&
+                event.attrs.state === 'completed'
+            ),
+          }
+        })
+        assert.deepEqual(health, {
+          prepare: 'undefined',
+          prepareReload: 'undefined',
+          reportedHealthy: false,
+        })
+        const reload = await stalled.evaluate(async () => {
+          const attempt = (window as any).runmeVersions.reloadTab()
+          const root = document.getElementById('root')!
+          const panel = document.getElementById('runme-release-panel')!
+          const fallbackDuringFreeze = root.inert && !panel.hidden
+          let error = ''
+          try {
+            await attempt
+          } catch (reason) {
+            error = String(reason)
+          }
+          return {
+            fallbackDuringFreeze,
+            error,
+            frozen: root.inert,
+            hidden: panel.hidden,
+          }
+        })
+        assert.equal(reload.fallbackDuringFreeze, true)
+        assert.match(reload.error, /not ready to preserve its editors/)
+        assert.equal(reload.frozen, false)
+        assert.equal(reload.hidden, true)
+        await stalled.screenshot({
+          path: output + '/version-ui-storage-not-ready.png',
+        })
+        console.log(
+          'PASS: mounted version UI hides fallback during a stalled storage handshake without reporting healthy startup or bypassing editor preservation'
+        )
+      } finally {
+        await stalled.close()
+      }
+    }
     // A controlled tab can start from cache even if browser registration
     // readiness is stalled. Keep real service workers, caches and app admission;
     // only stall the two browser promises that must not gate a warm startup.

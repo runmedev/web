@@ -68,6 +68,7 @@ import { SuggestionGraderSettings } from '../SuggestionGraderSettings/Suggestion
 import { showToast } from '../../lib/toast'
 
 import { useReleaseAttention } from '../../releases/useReleaseAttention'
+import { adoptLegacyVersionUi } from '../../releases/runtime'
 
 const sideButtonBase = 'group side-btn'
 
@@ -241,6 +242,10 @@ function OpenDocumentsPanel() {
 
 export function SidePanelToolbar() {
   const versionAttention = useReleaseAttention()
+  // This mounted toolbar provides the Information entry point and update badge
+  // even when notebook storage is unavailable. Release its UI ownership on
+  // unmount; the notebook provider alone reports healthy storage/model startup.
+  useEffect(() => adoptLegacyVersionUi(), [])
   // Keep the indicator current even while the vault panel is closed.
   const vaultSnapshot = useSyncExternalStore(keyVault.subscribe, keyVault.getSnapshot)
   const vaultUnlocked = vaultSnapshot.status === 'unlocked'
