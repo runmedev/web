@@ -433,6 +433,37 @@ async function handleSandboxAppKernelBridgeCall({
     }
     case 'app.getVersion':
       return globals.app.getVersion()
+    case 'runme.storageWorkers.list':
+      return globals.runme.storageWorkers.list(
+        args[0] as Parameters<typeof globals.runme.storageWorkers.list>[0]
+      )
+    case 'runme.storageWorkers.listSessions':
+    case 'runme.logs.listWorkerSessions':
+      return globals.runme.logs.listWorkerSessions(
+        args[0] as Parameters<typeof globals.runme.logs.listWorkerSessions>[0]
+      )
+    case 'runme.logs.getWorkerStatus':
+      return globals.runme.logs.getWorkerStatus(
+        args[0] as Parameters<typeof globals.runme.logs.getWorkerStatus>[0]
+      )
+    case 'runme.logs.readWorkerLogs':
+      return globals.runme.logs.readWorkerLogs(
+        args[0] as Parameters<typeof globals.runme.logs.readWorkerLogs>[0]
+      )
+    case 'runme.storageWorkers.status':
+      return globals.runme.storageWorkers.status(
+        args[0] as Parameters<typeof globals.runme.storageWorkers.status>[0]
+      )
+    case 'runme.storageWorkers.readLogs':
+      return globals.runme.storageWorkers.readLogs(
+        args[0] as Parameters<typeof globals.runme.storageWorkers.readLogs>[0]
+      )
+    case 'runme.storageWorkers.restart':
+      return globals.runme.storageWorkers.restart(
+        args[0] as Parameters<typeof globals.runme.storageWorkers.restart>[0]
+      )
+    case 'runme.storageWorkers.help':
+      return globals.runme.storageWorkers.help()
     case 'app.getSessionId':
       return getClaimedSessionId()
     case 'app.getSessionID':

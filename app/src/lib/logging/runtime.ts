@@ -104,6 +104,7 @@ export interface LoggingRuntimeStore {
   log(level: LogLevel, message: string, options?: LogOptions): LogEvent
   list(query?: LogQuery): LogEvent[]
   subscribe(listener: () => void): () => void
+  observe(listener: (event: LogEvent) => void): () => void
 }
 
 /**
@@ -114,6 +115,8 @@ class LoggingRuntime implements LoggingRuntimeStore {
   private events: LogEvent[] = []
 
   private listeners = new Set<() => void>()
+
+  private observers = new Set<(event: LogEvent) => void>()
 
   /**
    * log creates a normalized LogEvent and stores it in a ring buffer.
@@ -134,7 +137,22 @@ class LoggingRuntime implements LoggingRuntimeStore {
     }
 
     mirrorEventToConsole(event)
-    this.listeners.forEach((listener) => listener())
+    // Optional UI/persistence consumers must never break the operation logging
+    // an event. In particular, a failed diagnostics sink cannot block storage.
+    this.listeners.forEach((listener) => {
+      try {
+        listener()
+      } catch {
+        /* Isolate optional consumers. */
+      }
+    })
+    this.observers.forEach((listener) => {
+      try {
+        listener({ ...event })
+      } catch {
+        /* Do not recursively log sink errors. */
+      }
+    })
     return event
   }
 
@@ -155,6 +173,14 @@ class LoggingRuntime implements LoggingRuntimeStore {
     this.listeners.add(listener)
     return () => {
       this.listeners.delete(listener)
+    }
+  }
+
+  /** Receive each new event without repeatedly copying the entire ring buffer. */
+  observe(listener: (event: LogEvent) => void): () => void {
+    this.observers.add(listener)
+    return () => {
+      this.observers.delete(listener)
     }
   }
 }

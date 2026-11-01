@@ -152,6 +152,7 @@ import {
   type RevisionDocStorage,
   createDefaultRevisionDocStorage,
 } from './revisionDocs'
+import { traceStorage } from './storageTrace'
 import { SyncDeferred, SyncWorkQueue } from './syncWorkQueue'
 import { readTablePage, scanTable, tableHasRecords } from './tableScan'
 
@@ -5688,7 +5689,14 @@ export class LocalNotebooks extends Dexie {
     id: string,
     name: string
   ): Promise<LocalFolderRecord> {
-    const existing = await this.folders.get(id)
+    const existing = await traceStorage(
+      'ensure-folder-read',
+      () => this.folders.get(id),
+      {
+        database: this.name,
+        store: 'folders',
+      }
+    )
     if (existing) {
       return existing
     }
@@ -5699,7 +5707,10 @@ export class LocalNotebooks extends Dexie {
       children: [],
       lastSynced: '',
     }
-    await this.folders.put(record)
+    await traceStorage('ensure-folder-write', () => this.folders.put(record), {
+      database: this.name,
+      store: 'folders',
+    })
     return record
   }
 

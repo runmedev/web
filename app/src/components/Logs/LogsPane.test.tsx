@@ -1,5 +1,12 @@
 // @vitest-environment jsdom
-import { act, fireEvent, render, screen, waitFor, within } from '@testing-library/react'
+import {
+  act,
+  fireEvent,
+  render,
+  screen,
+  waitFor,
+  within,
+} from '@testing-library/react'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 
 import type { LogEvent } from '../../lib/logging/runtime'
@@ -14,6 +21,10 @@ const mocks = vi.hoisted(() => ({
 
 vi.mock('../../lib/logging/runtime', () => ({
   loggingRuntime: { list: mocks.list, subscribe: mocks.subscribe },
+}))
+
+vi.mock('./StorageWorkerLogs', () => ({
+  default: () => <p>Worker evidence</p>,
 }))
 
 vi.mock('../../lib/toast', () => ({ showToast: mocks.showToast }))
@@ -52,16 +63,38 @@ describe('LogsPane structured copying', () => {
     vi.unstubAllGlobals()
   })
 
+  it('moves focus and selection between log sources with the keyboard', () => {
+    render(<LogsPane />)
+    const app = screen.getByRole('tab', { name: 'Application' })
+    const worker = screen.getByRole('tab', { name: 'Storage worker' })
+    app.focus()
+    fireEvent.keyDown(app, { key: 'ArrowRight' })
+    expect(document.activeElement).toBe(worker)
+    expect(worker.getAttribute('aria-selected')).toBe('true')
+    expect(screen.getByText('Worker evidence')).toBeTruthy()
+    fireEvent.keyDown(worker, { key: 'Home' })
+    expect(document.activeElement).toBe(app)
+    expect(app.getAttribute('aria-selected')).toBe('true')
+    expect(worker.tabIndex).toBe(-1)
+  })
+
   it('copies only the chosen entry, including its full timestamp and nested attributes', async () => {
     render(<LogsPane />)
     const rows = screen.getAllByRole('listitem')
-    expect(screen.getAllByRole('button', { name: 'Copy log entry as JSON' })).toHaveLength(2)
+    expect(
+      screen.getAllByRole('button', { name: 'Copy log entry as JSON' })
+    ).toHaveLength(2)
 
-    fireEvent.click(within(rows[1]).getByRole('button', { name: 'Copy log entry as JSON' }))
+    fireEvent.click(
+      within(rows[1]).getByRole('button', { name: 'Copy log entry as JSON' })
+    )
 
-    await waitFor(() => expect(mocks.showToast).toHaveBeenCalledWith({
-      message: 'Log entry copied as JSON', tone: 'success',
-    }))
+    await waitFor(() =>
+      expect(mocks.showToast).toHaveBeenCalledWith({
+        message: 'Log entry copied as JSON',
+        tone: 'success',
+      })
+    )
     expect(mocks.writeText).toHaveBeenCalledOnce()
     const copied = mocks.writeText.mock.calls[0][0]
     expect(JSON.parse(copied)).toEqual(entries[1])
@@ -74,36 +107,60 @@ describe('LogsPane structured copying', () => {
     mocks.list.mockReturnValue([entry])
     render(<LogsPane />)
 
-    fireEvent.click(screen.getByRole('button', { name: 'Copy log entry as JSON' }))
+    fireEvent.click(
+      screen.getByRole('button', { name: 'Copy log entry as JSON' })
+    )
 
-    await waitFor(() => expect(mocks.showToast).toHaveBeenCalledWith(expect.objectContaining({ tone: 'success' })))
+    await waitFor(() =>
+      expect(mocks.showToast).toHaveBeenCalledWith(
+        expect.objectContaining({ tone: 'success' })
+      )
+    )
     expect(JSON.parse(mocks.writeText.mock.calls[0][0])).toEqual(entry)
   })
 
   it('reports success only after the clipboard write finishes', async () => {
     let resolveWrite!: () => void
-    mocks.writeText.mockReturnValue(new Promise<void>(resolve => { resolveWrite = resolve }))
+    mocks.writeText.mockReturnValue(
+      new Promise<void>((resolve) => {
+        resolveWrite = resolve
+      })
+    )
     render(<LogsPane />)
 
-    fireEvent.click(screen.getAllByRole('button', { name: 'Copy log entry as JSON' })[0])
+    fireEvent.click(
+      screen.getAllByRole('button', { name: 'Copy log entry as JSON' })[0]
+    )
     expect(mocks.showToast).not.toHaveBeenCalled()
     await act(async () => resolveWrite())
-    expect(mocks.showToast).toHaveBeenCalledWith(expect.objectContaining({ tone: 'success' }))
+    expect(mocks.showToast).toHaveBeenCalledWith(
+      expect.objectContaining({ tone: 'success' })
+    )
   })
 
-  it.each(['denied', 'unavailable'])('reports a %s clipboard without claiming success', async mode => {
-    if (mode === 'denied') {
-      mocks.writeText.mockRejectedValue(new DOMException('Permission denied', 'NotAllowedError'))
-    } else {
-      vi.stubGlobal('navigator', {})
+  it.each(['denied', 'unavailable'])(
+    'reports a %s clipboard without claiming success',
+    async (mode) => {
+      if (mode === 'denied') {
+        mocks.writeText.mockRejectedValue(
+          new DOMException('Permission denied', 'NotAllowedError')
+        )
+      } else {
+        vi.stubGlobal('navigator', {})
+      }
+      render(<LogsPane />)
+
+      fireEvent.click(
+        screen.getAllByRole('button', { name: 'Copy log entry as JSON' })[0]
+      )
+
+      await waitFor(() =>
+        expect(mocks.showToast).toHaveBeenCalledWith({
+          message: 'Failed to copy log entry to clipboard',
+          tone: 'error',
+        })
+      )
+      expect(mocks.showToast).toHaveBeenCalledOnce()
     }
-    render(<LogsPane />)
-
-    fireEvent.click(screen.getAllByRole('button', { name: 'Copy log entry as JSON' })[0])
-
-    await waitFor(() => expect(mocks.showToast).toHaveBeenCalledWith({
-      message: 'Failed to copy log entry to clipboard', tone: 'error',
-    }))
-    expect(mocks.showToast).toHaveBeenCalledOnce()
-  })
+  )
 })

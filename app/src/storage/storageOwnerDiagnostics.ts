@@ -22,6 +22,7 @@ export type StorageOwnerDiagnostics = {
     inFlight: number
   }
   oldestRequests: {
+    requestId?: string
     method: string
     elapsedMs: number
     stage: string

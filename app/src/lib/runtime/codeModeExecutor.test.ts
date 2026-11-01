@@ -3,6 +3,7 @@ import { create } from '@bufbuild/protobuf'
 import { afterEach, describe, expect, it, vi } from 'vitest'
 
 import { parser_pb } from '../../runme/client'
+import { storageWorkersApi } from '../../storage/workerDiagnostics'
 import { explorerSync } from '../explorerSync'
 import { appLogger } from '../logging/runtime'
 import { __resetTabIdForTests, getClaimedSessionId } from '../tabIdentity'
@@ -29,6 +30,51 @@ const createNotebook = () => {
 }
 
 describe('codeModeExecutor', () => {
+  it.each(['browser', 'sandbox'] as const)(
+    'exposes worker control without a notebook in %s mode',
+    async (mode) => {
+      const status = {
+        instanceId: 'one',
+        epoch: 1,
+        phase: 'waiting-for-lock',
+        phaseElapsedMs: 10,
+        uptimeMs: 20,
+      }
+      const inspect = vi
+        .spyOn(storageWorkersApi, 'status')
+        .mockResolvedValue(status)
+      let observed: unknown
+      if (mode === 'sandbox') {
+        vi.spyOn(SandboxJSKernel.prototype, 'run').mockImplementation(
+          async function (this: SandboxJSKernel) {
+            const bridge = (
+              this as unknown as {
+                bridge: {
+                  call: (method: string, args: unknown[]) => Promise<unknown>
+                }
+              }
+            ).bridge
+            observed = await bridge.call('runme.storageWorkers.status', [
+              { instanceId: 'one' },
+            ])
+          }
+        )
+      }
+      const result = await createCodeModeExecutor({
+        mode,
+        resolveNotebook: () => null,
+      }).execute({
+        source: 'webmcp',
+        code: 'console.log(JSON.stringify(await runme.storageWorkers.status({instanceId:"one"})))',
+      })
+      expect(result.exitCode).toBe(0)
+      expect(mode === 'sandbox' ? observed : JSON.parse(result.output)).toEqual(
+        status
+      )
+      expect(inspect).toHaveBeenCalledWith({ instanceId: 'one' })
+    }
+  )
+
   it('dispatches explorer sync through the code-mode sandbox bridge', async () => {
     const result = { refreshed: ['local://folder/local'], failed: [] }
     const sync = vi.spyOn(explorerSync, 'sync').mockResolvedValue(result)

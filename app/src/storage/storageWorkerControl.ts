@@ -1,4 +1,7 @@
+import { appLogger } from '../lib/logging/runtime'
 import type { StorageOwnerDiagnostics } from './storageOwnerDiagnostics'
+import type { WorkerLogPage, WorkerLogQuery } from './workerLog'
+import type { WorkerLogPersistence } from './workerLogArchive'
 
 export const STORAGE_WORKER_CONTROL = 'runme-storage-worker-control-v1'
 export type WorkerStatus = {
@@ -11,31 +14,111 @@ export type WorkerStatus = {
   diagnostics?: StorageOwnerDiagnostics
   releaseDatabase?: StorageOwnerDiagnostics['releaseDatabase']
   error?: string
+  logProtocol?: 1
+  logPersistence?: WorkerLogPersistence
 }
 export type WorkerControlEvent =
   | { type: 'status'; status: WorkerStatus }
-  | { type: 'stopping' | 'stopped'; status: WorkerStatus; restart: boolean }
+  | {
+      type: 'stopping' | 'stopped'
+      status: WorkerStatus
+      restart: boolean
+      requestId?: string
+    }
+  | {
+      type: 'logs'
+      status: WorkerStatus
+      requestId: string
+      page?: WorkerLogPage
+      error?: string
+    }
 type WorkerCommand =
   | { type: 'discover' }
-  | { type: 'stop'; instanceId: string; force: boolean; restart: boolean }
+  | {
+      type: 'logs'
+      instanceId: string
+      requestId: string
+      query?: WorkerLogQuery
+    }
+  | {
+      type: 'stop'
+      instanceId: string
+      force: boolean
+      restart: boolean
+      requestId?: string
+    }
 
 /** A memory-only management connection, independent of storage RPC and IndexedDB.
  * Discovery includes only responding Runme workers implementing this protocol.
  */
 export class StorageWorkerControl {
   private readonly channel = new BroadcastChannel(STORAGE_WORKER_CONTROL)
+  private readonly pending = new Map<
+    string,
+    {
+      instanceId: string
+      resolve: (page: WorkerLogPage) => void
+      reject: (error: Error) => void
+      timer: ReturnType<typeof setTimeout>
+    }
+  >()
   constructor(onEvent: (event: WorkerControlEvent) => void) {
     this.channel.onmessage = ({ data }) => {
+      if (data?.type === 'logs') {
+        const request = this.pending.get(data.requestId)
+        if (request && request.instanceId === data.status?.instanceId) {
+          this.pending.delete(data.requestId)
+          clearTimeout(request.timer)
+          if (data.page) request.resolve(data.page)
+          else
+            request.reject(
+              new Error(data.error || 'Worker log retrieval unavailable')
+            )
+        }
+        return
+      }
       if (['status', 'stopping', 'stopped'].includes(data?.type) && data.status)
         onEvent(data as WorkerControlEvent)
     }
+  }
+  /** This responder exists before notebook RPC, and never reads a database. */
+  readLogs(
+    instanceId: string,
+    query: WorkerLogQuery = {},
+    timeoutMs = 2000
+  ): Promise<WorkerLogPage> {
+    const requestId = crypto.randomUUID()
+    return new Promise((resolve, reject) => {
+      const timer = setTimeout(
+        () => {
+          this.pending.delete(requestId)
+          reject(
+            new Error('Worker log response timed out; worker state is unknown')
+          )
+        },
+        Math.min(10000, Math.max(100, timeoutMs))
+      )
+      this.pending.set(requestId, { instanceId, resolve, reject, timer })
+      try {
+        this.channel.postMessage({
+          type: 'logs',
+          instanceId,
+          requestId,
+          query,
+        } satisfies WorkerCommand)
+      } catch (error) {
+        this.pending.delete(requestId)
+        clearTimeout(timer)
+        reject(error)
+      }
+    })
   }
   discover(): void {
     this.channel.postMessage({ type: 'discover' } satisfies WorkerCommand)
   }
   stop(
     instanceId: string,
-    options: { force: boolean; restart: boolean }
+    options: { force: boolean; restart: boolean; requestId?: string }
   ): void {
     this.channel.postMessage({
       type: 'stop',
@@ -44,6 +127,11 @@ export class StorageWorkerControl {
     } satisfies WorkerCommand)
   }
   close(): void {
+    for (const request of this.pending.values()) {
+      clearTimeout(request.timer)
+      request.reject(new Error('Worker control connection closed'))
+    }
+    this.pending.clear()
     this.channel.close()
   }
 }
@@ -57,15 +145,21 @@ export function installStorageWorkerControl(options: {
   drain: () => Promise<void>
   close: () => void
   phase: (phase: string) => void
+  logs?: (query: WorkerLogQuery) => WorkerLogPage
 }): () => void {
   const channel = new BroadcastChannel(STORAGE_WORKER_CONTROL)
   let stopping = false
   let closed = false
-  const publish = (type: 'stopping' | 'stopped', restart: boolean) =>
+  const publish = (
+    type: 'stopping' | 'stopped',
+    restart: boolean,
+    requestId?: string
+  ) =>
     channel.postMessage({
       type,
       status: options.status(),
       restart,
+      requestId,
     } satisfies WorkerControlEvent)
   channel.onmessage = async ({ data }: MessageEvent<WorkerCommand>) => {
     if (data?.type === 'discover') {
@@ -76,26 +170,67 @@ export function installStorageWorkerControl(options: {
       return
     }
     if (
+      data?.type === 'logs' &&
+      data.instanceId === options.status().instanceId &&
+      typeof data.requestId === 'string'
+    ) {
+      try {
+        channel.postMessage({
+          type: 'logs',
+          status: options.status(),
+          requestId: data.requestId,
+          ...(options.logs
+            ? { page: options.logs(data.query ?? {}) }
+            : { error: 'Worker log retrieval unsupported' }),
+        } satisfies WorkerControlEvent)
+      } catch {
+        channel.postMessage({
+          type: 'logs',
+          status: options.status(),
+          requestId: data.requestId,
+          error: 'Worker log retrieval failed',
+        } satisfies WorkerControlEvent)
+      }
+      return
+    }
+    if (
       data?.type !== 'stop' ||
       data.instanceId !== options.status().instanceId ||
-      closed
+      closed ||
+      typeof data.force !== 'boolean' ||
+      typeof data.restart !== 'boolean'
     )
       return
     // A force request can interrupt a graceful drain stuck in storage/network IO.
     if (stopping && !data.force) return
     stopping = true
+    appLogger.info('Storage worker stop requested', {
+      attrs: {
+        scope: 'storage.owner.control',
+        requestId: data.requestId,
+        force: data.force,
+        restart: data.restart,
+      },
+    })
     options.phase(data.force ? 'force-closing' : 'draining')
-    publish('stopping', data.restart)
+    publish('stopping', data.restart, data.requestId)
     try {
       if (!data.force) await options.drain()
       if (closed) return
       closed = true
       options.phase('closing')
-      publish('stopped', data.restart)
+      publish('stopped', data.restart, data.requestId)
       options.close()
     } catch (error) {
       stopping = false
       options.phase('drain-failed')
+      appLogger.error('Storage worker drain failed', {
+        attrs: {
+          scope: 'storage.owner.control',
+          requestId: data.requestId,
+          errorName: error instanceof Error ? error.name : 'Error',
+        },
+      })
       channel.postMessage({
         type: 'status',
         status: { ...options.status(), error: String(error) },

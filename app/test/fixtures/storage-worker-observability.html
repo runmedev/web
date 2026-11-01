@@ -1,0 +1,11 @@
+<!doctype html>
+<html><head><title>SharedWorker observability fault checks</title></head>
+<body style="margin:16px;font:14px system-ui;background:#f4f6f8;color:#172033">
+<h1>SharedWorker observability fault checks</h1>
+<p>Loopback-only integration fixture. Creates a test notebook; never clears site data.</p>
+<button id="start">Run fault checks</button>
+<button id="release" disabled>Release held IndexedDB transaction</button>
+<pre id="results" style="white-space:pre-wrap;max-height:220px;overflow:auto" aria-live="polite">Ready</pre>
+<div id="diagnostics-ui" style="height:600px"></div>
+<script type="module" src="./storage-worker-observability.tsx"></script>
+</body></html>

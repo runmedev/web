@@ -54,10 +54,10 @@ export class StorageOwnerHost {
   private credentialBoundary: string | undefined
   private available = false
   private scanning: Promise<unknown> | undefined
-  private readonly instanceId = crypto.randomUUID()
   private readonly startedAt = Date.now()
   private initialization: StorageOwnerDiagnostics['initialization'] = 'pending'
   private activeRequests = new Set<{
+    requestId: string
     method: string
     startedAt: number
     stage: string
@@ -78,7 +78,8 @@ export class StorageOwnerHost {
     private readonly store: LocalNotebooks,
     private readonly shutdown?: () => void,
     private readonly authorize?: (request: OwnerRequest) => Promise<void>,
-    private readonly release?: StorageOwnerDiagnostics['release']
+    private readonly release?: StorageOwnerDiagnostics['release'],
+    private readonly instanceId: string = crypto.randomUUID()
   ) {
     void Promise.resolve(store.ready).then(
       () => {
@@ -109,6 +110,7 @@ export class StorageOwnerHost {
     const oldestRequests: StorageOwnerDiagnostics['oldestRequests'] = []
     for (const request of this.activeRequests) {
       oldestRequests.push({
+        requestId: request.requestId,
         method: request.method,
         elapsedMs: Date.now() - request.startedAt,
         stage: request.stage,
@@ -470,6 +472,7 @@ export class StorageOwnerHost {
       return
     }
     const active = {
+      requestId: request.id,
       method: [
         ...STORAGE_METHODS,
         'hello',
@@ -486,6 +489,17 @@ export class StorageOwnerHost {
       stageStartedAt: Date.now(),
     }
     this.activeRequests.add(active)
+    const logAttrs = () => ({
+      scope: 'storage.owner.rpc',
+      requestId: request.id,
+      method: active.method,
+      stage: active.stage,
+      elapsedMs: Date.now() - active.startedAt,
+    })
+    appLogger.debug('Storage request received', { attrs: logAttrs() })
+    const slowTimer = setTimeout(() => {
+      appLogger.warn('Storage request still waiting', { attrs: logAttrs() })
+    }, 5000)
     try {
       if (request.version !== STORAGE_OWNER_VERSION)
         throw new Error(
@@ -684,13 +698,21 @@ export class StorageOwnerHost {
         }
       }
       port.postMessage({ type: 'result', id: request.id, value })
+      appLogger.debug('Storage request completed', { attrs: logAttrs() })
     } catch (error) {
+      appLogger.warn('Storage request failed', {
+        attrs: {
+          ...logAttrs(),
+          errorName: error instanceof Error ? error.name : 'UnknownError',
+        },
+      })
       port.postMessage({
         type: 'result',
         id: request.id,
         error: encodeStorageError(error),
       })
     } finally {
+      clearTimeout(slowTimer)
       this.activeRequests.delete(active)
     }
   }

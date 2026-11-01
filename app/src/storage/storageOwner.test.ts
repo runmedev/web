@@ -52,6 +52,18 @@ function setup() {
 }
 
 describe('SharedWorker message boundary', () => {
+  it('uses the bootstrap identity in runtime diagnostics', () => {
+    const { store } = setup()
+    const host = new StorageOwnerHost(
+      store as unknown as LocalNotebooks,
+      undefined,
+      undefined,
+      undefined,
+      'bootstrap-worker'
+    )
+    expect(host.diagnostics().instanceId).toBe('bootstrap-worker')
+  })
+
   it('negotiates across RPC versions without authorization or storage effects', async () => {
     const { store } = setup()
     const authorize = vi.fn(async () => {
@@ -418,6 +430,7 @@ it('answers diagnostics outside initialization and reports waiting requests with
   expect(diagnostics.initialization).toBe('pending')
   expect(diagnostics.oldestRequests).toEqual([
     {
+      requestId: expect.any(String),
       method: 'save',
       elapsedMs: expect.any(Number),
       stage: 'initializing',

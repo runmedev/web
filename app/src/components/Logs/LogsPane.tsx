@@ -2,6 +2,7 @@ import { useEffect, useState } from "react";
 
 import { loggingRuntime, type LogEvent, type LogLevel } from "../../lib/logging/runtime";
 import { showToast } from "../../lib/toast";
+import StorageWorkerLogs from "./StorageWorkerLogs";
 
 const DEFAULT_LEVEL: LogLevel = "debug";
 const DEFAULT_LIMIT = 200;
@@ -33,7 +34,7 @@ function formatAttrs(event: LogEvent): string | null {
  * output/problems concept. It subscribes to the logging runtime and
  * re-renders whenever new records are added.
  */
-export default function LogsPane() {
+function ApplicationLogsPane() {
   const [minLevel, setMinLevel] = useState<LogLevel>(DEFAULT_LEVEL);
   const [events, setEvents] = useState<LogEvent[]>(() =>
     loggingRuntime.list({ minLevel: DEFAULT_LEVEL, limit: DEFAULT_LIMIT }),
@@ -123,4 +124,68 @@ export default function LogsPane() {
       </div>
     </div>
   );
+}
+
+/** Separate views keep worker reads independent from tab-local subscriptions. */
+export default function LogsPane() {
+  const [view, setView] = useState<'application' | 'worker'>('application')
+  return (
+    <div
+      id="logs-root"
+      className="flex h-full min-h-0 flex-col bg-[#11121a] text-slate-200"
+    >
+      <div
+        id="logs-view-tabs"
+        role="tablist"
+        aria-label="Log source"
+        onKeyDown={(event) => {
+          if (!['ArrowLeft', 'ArrowRight', 'Home', 'End'].includes(event.key)) return
+          event.preventDefault()
+          const next = event.key === 'Home' ? 'application' : event.key === 'End' ? 'worker' : view === 'application' ? 'worker' : 'application'
+          setView(next)
+          document.getElementById(next === 'application' ? 'application-log-tab' : 'worker-log-tab')?.focus()
+        }}
+        className="flex gap-3 border-b border-white/10 px-3 py-2 text-sm"
+      >
+        <button
+          id="application-log-tab"
+          type="button"
+          role="tab"
+          aria-controls="log-source-panel"
+          aria-selected={view === 'application'}
+          tabIndex={view === 'application' ? 0 : -1}
+          className="rounded px-2 py-1 aria-selected:bg-white/10 aria-selected:font-semibold focus-visible:outline"
+          onClick={() => setView('application')}
+        >
+          Application
+        </button>
+        <button
+          id="worker-log-tab"
+          type="button"
+          role="tab"
+          aria-controls="log-source-panel"
+          aria-selected={view === 'worker'}
+          tabIndex={view === 'worker' ? 0 : -1}
+          className="rounded px-2 py-1 aria-selected:bg-white/10 aria-selected:font-semibold focus-visible:outline"
+          onClick={() => setView('worker')}
+        >
+          Storage worker
+        </button>
+      </div>
+      <div
+        id="log-source-panel"
+        role="tabpanel"
+        aria-labelledby={
+          view === 'application' ? 'application-log-tab' : 'worker-log-tab'
+        }
+        className="min-h-0 flex-1"
+      >
+        {view === 'application' ? (
+          <ApplicationLogsPane />
+        ) : (
+          <StorageWorkerLogs />
+        )}
+      </div>
+    </div>
+  )
 }

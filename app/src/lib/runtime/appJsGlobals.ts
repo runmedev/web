@@ -16,6 +16,10 @@ import {
 } from '../../storage/fs'
 import { LOCAL_FOLDER_URI } from '../../storage/local'
 import { NotebookStoreItemType } from '../../storage/notebook'
+import {
+  storageWorkersApi,
+  workerLogsApi,
+} from '../../storage/workerDiagnostics'
 import { getAuthData } from '../../token'
 import { agentEndpointManager } from '../agentEndpointManager'
 import { createAgentsApi } from '../agents/runtime'
@@ -1306,7 +1310,11 @@ export function createAppJsGlobals({
   }
 
   return {
-    runme: runmeApi,
+    runme: {
+      ...runmeApi,
+      storageWorkers: storageWorkersApi,
+      logs: workerLogsApi,
+    },
     ui: renderedMarkdownUi,
     tour: {
       show: (request: TourStepRequest) => showTourStep(request),
