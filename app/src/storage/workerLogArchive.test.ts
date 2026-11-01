@@ -310,3 +310,41 @@ it('expires recognized old diagnostic files while preserving unknown files', asy
     'new-worker',
   ])
 })
+
+it.each(['root', 'directory'] as const)(
+  'does not start further native reads after a late %s lookup',
+  async (stage) => {
+    const { root, archive } = fixture()
+    await archive.write([event(1)])
+    const diagnostics = await root.getDirectoryHandle('runme-diagnostics')
+    let finish!: (value: MemoryDirectory) => void
+    const pending = new Promise<MemoryDirectory>((resolve) => {
+      finish = resolve
+    })
+    const nextRead = vi.spyOn(
+      stage === 'root' ? root : diagnostics,
+      'getDirectoryHandle'
+    )
+    if (stage === 'directory')
+      vi.spyOn(root, 'getDirectoryHandle').mockReturnValueOnce(pending)
+    vi.stubGlobal('navigator', {
+      storage: {
+        getDirectory: () =>
+          stage === 'root' ? pending : Promise.resolve(root),
+      },
+    })
+    vi.useFakeTimers()
+    const result = readWorkerArchive(
+      (reader, check) => reader.list(check),
+      100
+    ).catch((e) => e.message)
+    await vi.advanceTimersByTimeAsync(101)
+    expect(await result).toContain('timed out')
+    finish(stage === 'root' ? root : diagnostics)
+    await vi.advanceTimersByTimeAsync(0)
+    expect(nextRead).not.toHaveBeenCalled()
+    expect(await readWorkerArchive(async () => 'slot released')).toBe(
+      'slot released'
+    )
+  }
+)

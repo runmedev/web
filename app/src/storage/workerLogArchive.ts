@@ -35,11 +35,18 @@ type RootProvider = () => Promise<FileSystemDirectoryHandle>
 /** Use only the diagnostics subtree. Reads never create directories or stores. */
 async function directory(
   root: RootProvider,
-  create: boolean
+  create: boolean,
+  check = () => {}
 ): Promise<Directory> {
+  check()
   let current = await root()
-  for (const name of path)
+  check()
+  for (const name of path) {
     current = await current.getDirectoryHandle(name, { create })
+    // A native read can settle after its caller's deadline. Do not start the
+    // next read in that case, or a second stall could retain the slot forever.
+    check()
+  }
   return current as Directory
 }
 
@@ -62,6 +69,7 @@ async function scan(
     if ((error as Error).name === 'NotFoundError') return []
     throw error
   }
+  check()
   for await (const [instanceId, handle] of entries) {
     check()
     if (++visited > MAX_SCAN) throw new Error('DiagnosticScanLimit')
@@ -200,7 +208,7 @@ export class WorkerLogArchive {
   async list(check = () => {}) {
     let root: Directory
     try {
-      root = await directory(this.root, false)
+      root = await directory(this.root, false, check)
     } catch (error) {
       if ((error as Error).name === 'NotFoundError') return []
       throw error
@@ -237,7 +245,7 @@ export class WorkerLogArchive {
     if (!safeName.test(instanceId)) throw new Error('InvalidDiagnosticInstance')
     let root: Directory
     try {
-      root = await directory(this.root, false)
+      root = await directory(this.root, false, check)
     } catch (error) {
       if ((error as Error).name === 'NotFoundError')
         return { ...pageWorkerLogs([], query), corruptChunks: 0 }

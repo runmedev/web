@@ -48,14 +48,12 @@ function page(instanceId: string, message = 'Saved worker event') {
   }
 }
 beforeEach(() => {
-  mocks.list
-    .mockReset()
-    .mockResolvedValue({
-      workers: [],
-      persisted: [{ instanceId: 'old-one' }, { instanceId: 'old-two' }],
-      discoveryComplete: false,
-      errors: [],
-    })
+  mocks.list.mockReset().mockResolvedValue({
+    workers: [],
+    persisted: [{ instanceId: 'old-one' }, { instanceId: 'old-two' }],
+    discoveryComplete: false,
+    errors: [],
+  })
   mocks.read
     .mockReset()
     .mockImplementation(async ({ instanceId }) => page(instanceId))
@@ -117,4 +115,53 @@ it('clears a recovered read error without hiding discovery failures', async () =
   expect(await screen.findByText('Saved worker event')).toBeTruthy()
   expect(screen.queryByText(/Worker logs are unavailable/)).toBeNull()
   expect(screen.getByText('Discovery incomplete')).toBeTruthy()
+})
+
+it('resumes Follow from its last page and resets only for new filters', async () => {
+  mocks.read.mockImplementation(async ({ instanceId, afterSequence }) => {
+    const sequence = afterSequence + 1
+    const next = page(instanceId, `Event ${sequence}`)
+    next.events[0].sequence = sequence
+    return {
+      ...next,
+      nextSequence: sequence,
+      latestSequence: sequence,
+      hasMore: true,
+    }
+  })
+  render(<StorageWorkerLogs />)
+  await screen.findByText('Event 1')
+  vi.useFakeTimers()
+  try {
+    await act(async () =>
+      fireEvent.click(screen.getByRole('checkbox', { name: 'Follow' }))
+    )
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(2000)
+    })
+    expect(mocks.read).toHaveBeenLastCalledWith(
+      expect.objectContaining({ afterSequence: 2 })
+    )
+    await act(async () =>
+      fireEvent.click(screen.getByRole('checkbox', { name: 'Follow' }))
+    )
+    expect(mocks.read).toHaveBeenLastCalledWith(
+      expect.objectContaining({ afterSequence: 3 })
+    )
+    await act(async () =>
+      fireEvent.click(screen.getByRole('checkbox', { name: 'Follow' }))
+    )
+    expect(mocks.read).toHaveBeenLastCalledWith(
+      expect.objectContaining({ afterSequence: 4 })
+    )
+    await act(async () =>
+      fireEvent.click(screen.getByRole('button', { name: 'Apply filters' }))
+    )
+    expect(mocks.read).toHaveBeenLastCalledWith(
+      expect.objectContaining({ afterSequence: 0 })
+    )
+  } finally {
+    cleanup()
+    vi.useRealTimers()
+  }
 })

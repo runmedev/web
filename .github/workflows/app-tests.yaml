@@ -137,6 +137,9 @@ jobs:
       - name: Run storage and workload authentication regression tests
         run: pnpm -C app exec vitest run src/storage src/lib/outputReference.test.ts src/components/Actions/OutputReferenceCell.test.tsx src/lib/storageRecoveryDrafts.test.ts src/components/StorageRecoveryBanner.test.tsx src/auth/runnerAuth.test.ts src/lib/runtime/runnerAuthTools.test.ts src/contexts/GoogleAuthContext.workload.test.tsx src/components/DriveSyncStatusTab.test.tsx --maxWorkers=2 --minWorkers=1
 
+      - name: Run independent worker diagnostics UI and tool regressions
+        run: pnpm -C app exec vitest run src/components/Logs src/lib/runtime/storageWorkerTools.test.ts src/components/WebMcp/WebMcpToolRegistrationHost.test.tsx src/lib/runtime/codeModeExecutor.test.ts --maxWorkers=2 --minWorkers=1
+
       - name: Install agent-browser
         shell: bash
         run: |

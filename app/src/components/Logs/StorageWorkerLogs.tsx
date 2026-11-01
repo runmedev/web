@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react'
+import { useEffect, useRef, useState } from 'react'
 import {
   getStorageWorkerStatus,
   listStorageWorkerSessions,
@@ -29,6 +29,9 @@ export default function StorageWorkerLogs() {
   const [filters, setFilters] = useState({ scope: '', requestId: '' })
   const [follow, setFollow] = useState(false)
   const [cursor, setCursor] = useState(0)
+  // Follow changes restart the effect, but must not rewind already-read pages.
+  // Only changing the selection/filters or an explicit refresh resets progress.
+  const progress = useRef(0)
   const [events, setEvents] = useState<WorkerLogEvent[]>([])
   const [page, setPage] = useState<Page>()
   const [status, setStatus] = useState<WorkerStatus>()
@@ -73,7 +76,7 @@ export default function StorageWorkerLogs() {
       setLoading(false)
       return
     }
-    let afterSequence = cursor
+    let afterSequence = progress.current
     /** Sequential follow keeps at most one page request active per view. */
     const load = async () => {
       setLoading(true)
@@ -102,6 +105,7 @@ export default function StorageWorkerLogs() {
             .slice(-500)
         )
         afterSequence = next.nextSequence
+        progress.current = next.nextSequence
       } else
         setReadError(
           'Worker logs are unavailable. Retry without clearing browser data.'
@@ -143,6 +147,7 @@ export default function StorageWorkerLogs() {
     ]),
   ]
   const reset = () => {
+    progress.current = 0
     setCursor(0)
     setEvents([])
     setPage(undefined)
