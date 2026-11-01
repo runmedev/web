@@ -8,12 +8,16 @@ import { FilesystemNotebookStore } from './fs'
 import LocalNotebooks from './local'
 import { OwnerCommitQueue } from './ownerCommitQueue'
 import { StorageOwnerHost } from './storageOwnerHost'
+import { traceStorage } from './storageTrace'
 
 /** Construct storage only under the wrapper's lifetime lock. */
-export async function startStorageOwner(identity?: {
-  releaseId: string
-  epoch: number
-}) {
+export async function startStorageOwner(
+  identity?: {
+    releaseId: string
+    epoch: number
+  },
+  instanceId?: string
+) {
   // eslint-disable-next-line prefer-const
   let host: StorageOwnerHost
   const drive = new DriveNotebookStore((options) => host.accessToken(options))
@@ -50,7 +54,8 @@ export async function startStorageOwner(identity?: {
           authorizeReleaseRequest(identity, request)
         }
       : undefined,
-    identity ? { ...identity, capabilities: RELEASE_CAPABILITIES } : undefined
+    identity ? { ...identity, capabilities: RELEASE_CAPABILITIES } : undefined,
+    instanceId
   )
   const timer = setInterval(
     () =>
@@ -63,10 +68,12 @@ export async function startStorageOwner(identity?: {
   )
 
   try {
-    await store.ready
+    await traceStorage('local-notebooks-ready', () => store.ready)
   } catch (error) {
     clearInterval(timer)
-    await store.drainForStorageRestart()
+    await traceStorage('failed-startup-drain', () =>
+      store.drainForStorageRestart()
+    )
     store.close()
     closeReleaseDatabases()
     throw error

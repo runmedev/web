@@ -64,6 +64,15 @@ function serializeHostError(error: unknown): string | SerializedHostError {
 }
 
 const DEFAULT_SANDBOX_ALLOWED_METHODS = [
+  'runme.storageWorkers.list',
+  'runme.storageWorkers.listSessions',
+  'runme.logs.listWorkerSessions',
+  'runme.logs.getWorkerStatus',
+  'runme.logs.readWorkerLogs',
+  'runme.storageWorkers.status',
+  'runme.storageWorkers.readLogs',
+  'runme.storageWorkers.restart',
+  'runme.storageWorkers.help',
   'agents.monitor',
   'agents.get',
   'agents.pause',
@@ -389,6 +398,19 @@ export function buildSandboxSrcDoc(options: {
         };
 
         const runme = {
+          storageWorkers: {
+            list: (options) => hostCall("runme.storageWorkers.list", [options]),
+            listSessions: (options) => hostCall("runme.storageWorkers.listSessions", [options]),
+            status: (options) => hostCall("runme.storageWorkers.status", [options]),
+            readLogs: (options) => hostCall("runme.storageWorkers.readLogs", [options]),
+            restart: (options) => hostCall("runme.storageWorkers.restart", [options]),
+            help: () => hostCall("runme.storageWorkers.help", []),
+          },
+          logs: {
+            listWorkerSessions: (options) => hostCall("runme.logs.listWorkerSessions", [options]),
+            getWorkerStatus: (options) => hostCall("runme.logs.getWorkerStatus", [options]),
+            readWorkerLogs: (options) => hostCall("runme.logs.readWorkerLogs", [options]),
+          },
           clear: (target) => hostCall("runme.clear", [target]),
           clearOutputs: (target) => hostCall("runme.clearOutputs", [target]),
           runAll: (target) => hostCall("runme.runAll", [target]),

@@ -272,7 +272,7 @@ describe('WebMcpToolRegistrationHost', () => {
 
     render(<WebMcpToolRegistrationHost />)
 
-    expect(registerTool).toHaveBeenCalledTimes(16)
+    expect(registerTool).toHaveBeenCalledTimes(19)
   })
 
   it('prefers the current document.modelContext API', () => {
@@ -289,7 +289,7 @@ describe('WebMcpToolRegistrationHost', () => {
 
     render(<WebMcpToolRegistrationHost />)
 
-    expect(documentRegisterTool).toHaveBeenCalledTimes(16)
+    expect(documentRegisterTool).toHaveBeenCalledTimes(19)
     expect(navigatorRegisterTool).not.toHaveBeenCalled()
   })
 
@@ -350,7 +350,7 @@ describe('WebMcpToolRegistrationHost', () => {
 
     const rendered = render(<WebMcpToolRegistrationHost />)
 
-    expect(registerTool).toHaveBeenCalledTimes(16)
+    expect(registerTool).toHaveBeenCalledTimes(19)
     expect(
       registered.some(({ tool }) => tool.name === 'listNotebookComments')
     ).toBe(false)

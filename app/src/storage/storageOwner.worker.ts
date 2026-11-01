@@ -1,8 +1,11 @@
-import { appLogger } from '../lib/logging/runtime'
+import { appLogger, loggingRuntime } from '../lib/logging/runtime'
 import { OWNER_LOCK } from '../releases/control'
 import { releaseDatabaseDiagnostics } from '../releases/releaseDiagnostics'
 import { readOwnerTarget } from '../releases/releasePreferences'
+import { traceStorage } from './storageTrace'
 import { installStorageWorkerControl } from './storageWorkerControl'
+import { WorkerLogBuffer } from './workerLog'
+import { WorkerLogWriter } from './workerLogArchive'
 
 const scope = globalThis as unknown as {
   onconnect: (event: MessageEvent) => void
@@ -15,6 +18,16 @@ const epoch = releaseId
   ? Number((globalThis as unknown as { name: string }).name.split('-').pop())
   : 0
 const instanceId = crypto.randomUUID()
+const logWriter = new WorkerLogWriter()
+const logs = new WorkerLogBuffer(
+  loggingRuntime,
+  {
+    instanceId,
+    releaseId,
+    epoch,
+  },
+  (event) => logWriter.append(event)
+)
 const startedAt = Date.now()
 let phase = 'waiting-for-lock'
 let phaseStartedAt = startedAt
@@ -42,7 +55,10 @@ installStorageWorkerControl({
     uptimeMs: Date.now() - startedAt,
     diagnostics: runtime?.diagnostics(),
     releaseDatabase: releaseDatabaseDiagnostics(),
+    logProtocol: 1,
+    logPersistence: logWriter.status(),
   }),
+  logs: (query) => logs.read(query),
   phase: setPhase,
   drain: async () => {
     stopping = true
@@ -50,13 +66,30 @@ installStorageWorkerControl({
     // Startup may nevertheless be opening stores: wait for it to settle before
     // graceful close. Force-close remains available on this independent channel.
     if (!runtime) await runtimeReady
-    await runtime?.drain()
+    await traceStorage('graceful-storage-drain', async () => runtime?.drain())
+    await flushLogs()
   },
   close: () => {
     stopping = true
+    logWriter.close()
     scope.close()
   },
 })
+setPhase('waiting-for-lock')
+/** Logging must never keep notebook shutdown waiting on an unavailable disk. */
+async function flushLogs(): Promise<void> {
+  let timer: ReturnType<typeof setTimeout> | undefined
+  try {
+    await Promise.race([
+      logWriter.flush(),
+      new Promise<void>((resolve) => {
+        timer = setTimeout(resolve, 500)
+      }),
+    ])
+  } finally {
+    clearTimeout(timer)
+  }
+}
 let finishRuntime!: () => void
 const runtimeReady = new Promise<void>((resolve) => {
   finishRuntime = resolve
@@ -76,7 +109,9 @@ scope.onconnect = (event) => {
  */
 async function assertSelected(): Promise<void> {
   if (!releaseId) return
-  const selected = await readOwnerTarget()
+  const selected = await traceStorage('read-storage-target', () =>
+    readOwnerTarget()
+  )
   if (selected?.manifest.releaseId !== releaseId || selected.epoch !== epoch)
     throw new Error('Storage candidate is no longer selected')
 }
@@ -92,10 +127,16 @@ async function start(): Promise<void> {
     setPhase('checking-storage-target')
     await assertSelected()
     setPhase('importing-runtime')
-    const { startStorageOwner } = await import('./storageOwnerRuntime')
+    const { startStorageOwner } = await traceStorage(
+      'import-storage-runtime',
+      () => import('./storageOwnerRuntime')
+    )
     setPhase('initializing-storage')
-    runtime = await startStorageOwner(
-      releaseId ? { releaseId, epoch } : undefined
+    runtime = await traceStorage('initialize-storage-runtime', () =>
+      startStorageOwner(
+        releaseId ? { releaseId, epoch } : undefined,
+        instanceId
+      )
     )
     finishRuntime()
     try {
@@ -124,7 +165,7 @@ async function start(): Promise<void> {
     }
   })
 }
-void start().catch((error) => {
+void start().catch(async (error) => {
   finishRuntime()
   setPhase('failed')
   appLogger.error('Storage owner startup failed', {
@@ -134,9 +175,12 @@ void start().catch((error) => {
       releaseId,
       epoch,
       error: String(error),
+      errorName: error instanceof Error ? error.name : 'Error',
     },
   })
   for (const port of ports)
     port.postMessage({ type: 'release-owner-error', error: String(error) })
+  await flushLogs()
+  logWriter.close()
   scope.close()
 })

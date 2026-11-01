@@ -93,13 +93,20 @@ export class StorageOwnerClient {
       }
       void this.receive(event.data)
     }
-    port.onmessageerror = () =>
+    port.onmessageerror = () => {
+      appLogger.error('Storage worker message decoding failed', {
+        attrs: { scope: 'storage.owner.connection', phase: 'message-error' },
+      })
       this.close(
         new Error(
           'Storage worker message failed. Local saves may have committed; reconnect storage to recover.'
         )
       )
+    }
     port.start()
+    appLogger.debug('Storage worker port attached', {
+      attrs: { scope: 'storage.owner.connection', phase: 'port-attached' },
+    })
     this.unregisterDiagnostics = storageRecovery.registerDiagnostics(() =>
       this.diagnose()
     )
@@ -400,6 +407,14 @@ export function createSharedNotebookStore(
   function connect(selected: Active | undefined = release) {
     const release = selected
     let ownerInstance: string | undefined
+    appLogger.info('Storage worker connection started', {
+      attrs: {
+        scope: 'storage.owner.connection',
+        phase: 'constructing-worker',
+        releaseId: release?.manifest.releaseId,
+        epoch: release?.epoch,
+      },
+    })
     const worker = release
       ? new SharedWorker(
           `${releasePrefix(release.manifest.releaseId)}${release.manifest.owner.entry}`,
@@ -516,6 +531,15 @@ export function createSharedNotebookStore(
         }
       }
       ownerInstance = handshake.instanceId
+      appLogger.info('Storage worker handshake completed', {
+        attrs: {
+          scope: 'storage.owner.connection',
+          phase: 'connected',
+          instanceId: ownerInstance,
+          releaseId: release?.manifest.releaseId,
+          epoch: release?.epoch,
+        },
+      })
       return handshake
     })
     void ready.catch(async (error) => {
@@ -546,6 +570,14 @@ export function createSharedNotebookStore(
     })
     client.onChange = notifyChange
     worker.onerror = (event) => {
+      appLogger.error('Storage worker error event', {
+        attrs: {
+          scope: 'storage.owner.connection',
+          phase: 'worker-error',
+          releaseId: release?.manifest.releaseId,
+          epoch: release?.epoch,
+        },
+      })
       if (connection.client === client) needsConnection = true
       client.close(
         new Error(

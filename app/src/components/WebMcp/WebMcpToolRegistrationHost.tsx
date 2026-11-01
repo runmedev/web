@@ -85,6 +85,7 @@ import {
 } from '../../lib/runtime/driveWorkspaceTools'
 import { appState } from '../../lib/runtime/AppState'
 import { runnerAuthTools } from '../../lib/runtime/runnerAuthTools'
+import { storageWorkerTools } from '../../lib/runtime/storageWorkerTools'
 
 function getModelContext(
   waitForOperations: () => Promise<void>
@@ -193,6 +194,8 @@ export default function WebMcpToolRegistrationHost() {
     }
 
     try {
+      for (const tool of storageWorkerTools())
+        registerTool(tool, { signal: registrationController.signal })
       for (const tool of runnerAuthTools())
         registerTool(tool, { signal: registrationController.signal })
       registerTool(
@@ -574,6 +577,7 @@ export default function WebMcpToolRegistrationHost() {
             attrs: {
               scope: 'webmcp',
               toolNames: [
+                ...storageWorkerTools().map((tool) => tool.name),
                 EXECUTE_CODE_TOOL_NAME,
                 GET_EXECUTE_CODE_OPERATION_TOOL_NAME,
                 CANCEL_EXECUTE_CODE_OPERATION_TOOL_NAME,
@@ -619,6 +623,7 @@ export default function WebMcpToolRegistrationHost() {
         attrs: {
           scope: 'webmcp',
           toolNames: [
+            ...storageWorkerTools().map((tool) => tool.name),
             EXECUTE_CODE_TOOL_NAME,
             GET_EXECUTE_CODE_OPERATION_TOOL_NAME,
             CANCEL_EXECUTE_CODE_OPERATION_TOOL_NAME,
