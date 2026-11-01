@@ -7,7 +7,10 @@ const { showToastMock } = vi.hoisted(() => ({
   showToastMock: vi.fn(),
 }))
 
-afterEach(() => { delete window.runmeVersions })
+afterEach(() => {
+  delete window.runmeVersions
+  delete window.runmeRelease
+})
 
 type PanelKey =
   | 'explorer'
@@ -529,6 +532,26 @@ describe('SidePanelToolbar drive status button', () => {
       title: 'Version Information',
     })
     expect(setCurrentDocMock).toHaveBeenCalledWith('app://version')
+  })
+
+  it('takes version UI ownership before storage is ready without reporting healthy startup', () => {
+    const ready = vi.fn()
+    const release = vi.fn()
+    const registerVersionUi = vi.fn(() => release)
+    window.runmeRelease = { ready } as unknown as NonNullable<typeof window.runmeRelease>
+    window.runmeVersions = {
+      attention: () => undefined,
+      registerVersionUi,
+    } as unknown as NonNullable<typeof window.runmeVersions>
+    const { unmount } = render(<SidePanelToolbar />)
+
+    expect(screen.getByRole('button', { name: 'Open Version Information' })).toBeTruthy()
+    expect(registerVersionUi).toHaveBeenCalledWith({ attention: true })
+    expect(ready).not.toHaveBeenCalled()
+    expect(window.runmeRelease.prepare).toBeUndefined()
+    expect(window.runmeRelease.prepareReload).toBeUndefined()
+    unmount()
+    expect(release).toHaveBeenCalledOnce()
   })
 
   it('marks version attention on the information icon and clears it without reading storage', async () => {

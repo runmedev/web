@@ -22,6 +22,7 @@ import {
   verifyCache,
 } from './control'
 import { loaderController } from './loaderController'
+import { hideLauncherPanel } from './launcherPanelVisibility'
 import { type ReleaseAttention, releaseAttention } from './releaseAttention'
 import { holdReleaseCache } from './releaseCacheLease'
 import { resolvePublishedRelease } from './releaseCatalog'
@@ -211,17 +212,21 @@ function button(label: string, action: () => unknown): void {
 function freeze(): void {
   const root = document.getElementById('root')
   if (root) root.inert = true
+  updatePanelVisibility()
 }
 
-/** App readiness does not imply version controls exist: a newer launcher can
- * host an older app. Hide fallback controls only after an explicit UI handoff.
+/** A mounted app shell can own version controls before notebook storage is
+ * ready. Healthy-startup reporting stays separate from this explicit UI handoff.
  */
 function updatePanelVisibility(): void {
-  panel.hidden =
-    appReady &&
-    versionUiUsers > 0 &&
-    !recovery &&
-    (attentionUiUsers > 0 || (!transitioning && !tabUpdateAvailable))
+  panel.hidden = hideLauncherPanel({
+    versionUiUsers,
+    attentionUiUsers,
+    recovery,
+    frozen: document.getElementById('root')?.inert === true,
+    transitioning,
+    tabUpdateAvailable,
+  })
 }
 
 /** A held tab lock is proof of liveness, including suspended tabs. No heartbeat
@@ -510,6 +515,7 @@ async function reloadThisTab(): Promise<void> {
     reloadingTab = false
     const root = document.getElementById('root')
     if (root) root.inert = false
+    updatePanelVisibility()
     throw error
   }
 }

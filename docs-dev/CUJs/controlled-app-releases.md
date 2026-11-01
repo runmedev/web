@@ -18,13 +18,18 @@ Acceptance:
   the app to open and report incomplete offline readiness. Retrying after fonts
   become available completes the offline cache without activating another release.
   Repeated app-readiness notifications do not restart completed font caching.
-- The floating launcher disappears after startup only when the loaded app
-  explicitly registers its version controls. Older clients retain the fallback
+- The floating launcher disappears when the mounted app shell explicitly
+  registers its version controls, independently of notebook storage readiness.
+  A stalled storage handshake retains the storage recovery banner without
+  duplicating version controls in an overlay. UI registration must not signal
+  healthy startup or bypass editor-preservation checks. Older clients retain the fallback
   controls. With a current app, the left Information icon opens version controls
   inside the Version Information document. A badge and descriptive tooltip on the
   Information icon signal a downloaded update, an outdated tab, or a version
   problem. Apps supporting this affordance keep the overlay hidden during
   updates and handoffs; actions and status remain in Version Information.
+  A frozen app, unmounted toolbar, or standalone recovery page retains the
+  independent fallback controls.
 - Startup diagnostics expose timestamped stage, duration, and waiting/failure
   events before the app starts. The trace is bounded, stays in memory, and does
   not include notebook data, credentials, or URL query parameters.
