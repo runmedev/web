@@ -12,6 +12,34 @@ export type AgentConnectionOptions = {
   getHeaders?: () => HeadersInit | Promise<HeadersInit>
 }
 
+/** Safe diagnostics expose status and correlation ID, never upstream bodies or headers. */
+export class AgentRequestError extends Error {
+  constructor(
+    readonly status: number,
+    readonly requestId: string | null
+  ) {
+    super(
+      `Agents API returned HTTP ${status}. Check access and connection configuration.${requestId ? ` Request ID: ${requestId}` : ''}`
+    )
+  }
+}
+
+/** A backoff must stop immediately when the widget is paused or reconnected. */
+function retryDelay(signal: AbortSignal) {
+  return new Promise<void>((resolve, reject) => {
+    const abort = () => {
+      clearTimeout(timer)
+      reject(signal.reason)
+    }
+    const timer = setTimeout(() => {
+      signal.removeEventListener('abort', abort)
+      resolve()
+    }, 500)
+    signal.addEventListener('abort', abort, { once: true })
+    if (signal.aborted) abort()
+  })
+}
+
 /** Decode SSE incrementally, including CRLF, multiline data and split UTF-8. */
 export async function* readAgentEvents(
   body: ReadableStream<Uint8Array>
@@ -102,13 +130,49 @@ export function createAgentTransport(
     )
     // Do not echo upstream response bodies: gateways can include credentials.
     if (!response.ok)
-      throw new Error(
-        `Agents API returned HTTP ${response.status}. Check access and connection configuration.`
+      throw new AgentRequestError(
+        response.status,
+        response.headers.get('x-request-id')
       )
     return response
   }
-  const json = async <T>(path: string, signal: AbortSignal): Promise<T> =>
-    (await request(path, signal)).json()
+  // Only read requests retry. Each attempt has a deadline covering headers AND body.
+  const json = async <T>(path: string, signal: AbortSignal): Promise<T> => {
+    for (let attempt = 0; ; attempt++) {
+      signal.throwIfAborted()
+      const controller = new AbortController()
+      const abort = () => controller.abort(signal.reason)
+      signal.addEventListener('abort', abort, { once: true })
+      const timer = setTimeout(
+        () =>
+          controller.abort(
+            new DOMException('Agents API read timed out.', 'TimeoutError')
+          ),
+        20_000
+      )
+      try {
+        return await (await request(path, controller.signal)).json()
+      } catch (error) {
+        signal.throwIfAborted()
+        const failure = controller.signal.aborted
+          ? controller.signal.reason
+          : error
+        if (
+          attempt ||
+          !(
+            failure instanceof TypeError ||
+            failure?.name === 'TimeoutError' ||
+            (failure instanceof AgentRequestError && failure.status >= 500)
+          )
+        )
+          throw failure
+      } finally {
+        clearTimeout(timer)
+        signal.removeEventListener('abort', abort)
+      }
+      await retryDelay(signal)
+    }
+  }
   return {
     // Update saved configuration only; existing sessions retain their instructions.
     updateAgent: async (id, parameters, signal) => {
@@ -165,11 +229,22 @@ export function createAgentTransport(
         signal
       )
     },
-    turns: (id, signal) =>
-      json<AgentPage<AgentObject>>(
-        `${encodeURIComponent(id)}/turns?order=desc&limit=100`,
+    turnItems: (id, turnId, limit, after, signal) => {
+      const query = new URLSearchParams({ order: 'desc', limit: String(limit) })
+      if (after) query.set('after', after)
+      return json<AgentPage<AgentItem>>(
+        `${encodeURIComponent(id)}/turns/${encodeURIComponent(turnId)}/items?${query}`,
         signal
-      ),
+      )
+    },
+    turns: (id, signal, after) => {
+      const query = new URLSearchParams({ order: 'desc', limit: '100' })
+      if (after) query.set('after', after)
+      return json<AgentPage<AgentObject>>(
+        `${encodeURIComponent(id)}/turns?${query}`,
+        signal
+      )
+    },
     stream: async (id, signal) => {
       const controller = new AbortController()
       const abort = () => controller.abort()

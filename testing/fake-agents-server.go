@@ -155,6 +155,16 @@ func serveAgentDemo(w http.ResponseWriter, r *http.Request) {
 			limit = 50
 		}
 		start := 125 + len(demoMessages)
+		end := 0
+		// Each root turn owns a distinct history range. The monitor must cross
+		// both item and turn page boundaries to reach the earliest messages.
+		if strings.Contains(r.URL.Path, "/turns/turn_live/items") {
+			end = 120
+		} else if strings.Contains(r.URL.Path, "/turns/turn_previous/items") {
+			start, end = 120, 60
+		} else if strings.Contains(r.URL.Path, "/turns/turn_first/items") {
+			start = 60
+		}
 		if after := r.URL.Query().Get("after"); after != "" {
 			if after == "msg_live" {
 				start = 125
@@ -164,7 +174,7 @@ func serveAgentDemo(w http.ResponseWriter, r *http.Request) {
 			}
 		}
 		data := []map[string]any{}
-		for i := start; i > 0 && len(data) < limit; i-- {
+		for i := start; i > end && len(data) < limit; i-- {
 			if saved, ok := demoMessages[i]; ok {
 				data = append(data, saved)
 				continue
@@ -180,9 +190,16 @@ func serveAgentDemo(w http.ResponseWriter, r *http.Request) {
 		if len(data) > 0 {
 			last = data[len(data)-1]["id"]
 		}
-		json.NewEncoder(w).Encode(map[string]any{"data": data, "has_more": start-len(data) > 0, "last_id": last})
+		json.NewEncoder(w).Encode(map[string]any{"data": data, "has_more": start-len(data) > end, "last_id": last})
 	case strings.HasSuffix(r.URL.Path, "/turns"):
-		json.NewEncoder(w).Encode(map[string]any{"data": []map[string]any{{"id": "turn_live", "subagent_id": nil, "status": "in_progress", "created_at": 1}}, "has_more": false, "last_id": "turn_live"})
+		id, status, more, created := "turn_live", "in_progress", true, 3
+		switch r.URL.Query().Get("after") {
+		case "turn_live":
+			id, status, created = "turn_previous", "completed", 2
+		case "turn_previous":
+			id, status, more, created = "turn_first", "completed", false, 1
+		}
+		json.NewEncoder(w).Encode(map[string]any{"data": []map[string]any{{"id": id, "subagent_id": nil, "status": status, "created_at": created}}, "has_more": more, "last_id": id})
 	default:
 		json.NewEncoder(w).Encode(map[string]any{"id": "sess_demo", "status": "in_progress", "required_actions": []any{}})
 	}

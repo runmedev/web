@@ -54,13 +54,15 @@ const widget = agents.monitor(localStorage.getItem('session_id'), { pageSize: 50
 
 **Edit** shows the source and **Render** shows the widget, without running the cell again. Editing keeps observation active. Press Run to apply changed source. The JS cell finishes immediately; the separate root-turn status tracks agent completion.
 
-**Older** and **Newer** page through saved items, with at most the configured page size visible. **Latest** returns to the live window. New output never replaces an older page while you read it. Scroll to the live bottom to follow incoming output automatically.
+Scroll up in the conversation to load earlier items automatically. History loads one root turn at a time and continues across turn boundaries, using the configured page size for each request. Earlier items are prepended without moving the text you are reading. **Latest** scrolls to the bottom and resumes following incoming output. Loaded history remains available in this widget until reconnect or reload.
+
+History errors do not close a working live connection. Use **Retry history** to retry a failed read. HTTP failures include a request ID when the API exposes one; read requests have a 20-second deadline per attempt and retry transient failures once.
 
 **Pause monitoring** stops this widget's requests, not the agent. **Resume monitoring** reloads saved state and reconnects. A closed stream displays Disconnected; it does not imply completion. Session status, root-turn status, and connection status are separate. Child-turn completion does not complete the root turn.
 
 Saved widget outputs contain only a session ID, widget ID, version, and page size. Reopening a notebook requires Connect. Credentials and live messages are not serialized into the widget output. Required actions are shown for inspection; submit tool results or cancellation through your agent client.
 
-Runtime controls use the descriptor returned by `agents.monitor`: `agents.get(widget.id)`, `agents.pause(widget.id)`, `await agents.resume(widget.id)`, `await agents.older(widget.id)`, `await agents.newer(widget.id)`, and `agents.latest(widget.id)`. `agents.help()` lists the commands.
+Runtime controls use the descriptor returned by `agents.monitor`: `agents.get(widget.id)`, `agents.pause(widget.id)`, `await agents.resume(widget.id)`, `await agents.older(widget.id)`, `await agents.newer(widget.id)`, and `agents.latest(widget.id)`. `agents.older(widget.id)` appends the next history batch; `agents.newer(widget.id)` is a compatibility alias for Latest. `await agents.retryHistory(widget.id)` retries history without reconnecting. `agents.help()` lists the commands.
 
 ## Send a message
 

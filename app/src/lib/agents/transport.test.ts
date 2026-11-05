@@ -2,7 +2,10 @@ import { afterEach, describe, expect, it, vi } from 'vitest'
 
 import { createAgentTransport, readAgentEvents } from './transport'
 
-afterEach(() => vi.unstubAllGlobals())
+afterEach(() => {
+  vi.unstubAllGlobals()
+  vi.useRealTimers()
+})
 describe('agent transport', () => {
   it('encodes saved agent IDs, does not retry updates, and suppresses upstream error bodies', async () => {
     const fetch = vi.fn(
@@ -216,5 +219,83 @@ describe('agent transport', () => {
         new AbortController().signal
       )
     ).rejects.toThrow('HTTP 401')
+  })
+  it('uses per-turn items and paginates the turn collection with encoded IDs', async () => {
+    const fetch = vi.fn(
+      async () =>
+        new Response(
+          JSON.stringify({ data: [], has_more: false, last_id: null })
+        )
+    )
+    vi.stubGlobal('fetch', fetch)
+    const api = createAgentTransport({ baseUrl: 'https://api.openai.com/v1' })
+    const signal = new AbortController().signal
+    await api.turnItems('sess/1', 'turn/2', 25, 'item&3', signal)
+    await api.turns('sess/1', signal, 'turn&4')
+    expect(
+      (fetch.mock.calls as unknown as [string][]).map((call) => call[0])
+    ).toEqual([
+      'https://api.openai.com/v1/agents/sessions/sess%2F1/turns/turn%2F2/items?order=desc&limit=25&after=item%263',
+      'https://api.openai.com/v1/agents/sessions/sess%2F1/turns?order=desc&limit=100&after=turn%264',
+    ])
+  })
+  it('retries a transient read only once and exposes its request ID, never its body', async () => {
+    vi.useFakeTimers()
+    const fetch = vi.fn(
+      async () =>
+        new Response('secret diagnostic', {
+          status: 500,
+          headers: { 'x-request-id': 'req_fixture' },
+        })
+    )
+    vi.stubGlobal('fetch', fetch)
+    const api = createAgentTransport({ baseUrl: 'https://api.openai.com/v1' })
+    const pending = expect(
+      api.turnItems('s', 't', 1, undefined, new AbortController().signal)
+    ).rejects.toThrow(
+      'HTTP 500. Check access and connection configuration. Request ID: req_fixture'
+    )
+    await vi.advanceTimersByTimeAsync(500)
+    await pending
+    expect(fetch).toHaveBeenCalledTimes(2)
+  })
+  it('cancels read retry backoff immediately on pause', async () => {
+    vi.useFakeTimers()
+    const fetch = vi.fn(async () => new Response('', { status: 503 }))
+    vi.stubGlobal('fetch', fetch)
+    const api = createAgentTransport({ baseUrl: 'https://api.openai.com/v1' })
+    const controller = new AbortController()
+    const pending = expect(api.session('s', controller.signal)).rejects.toThrow(
+      'paused'
+    )
+    await vi.advanceTimersByTimeAsync(1)
+    controller.abort(new Error('paused'))
+    await pending
+    await vi.advanceTimersByTimeAsync(500)
+    expect(fetch).toHaveBeenCalledTimes(1)
+  })
+  it('bounds reads including response bodies by a per-attempt deadline', async () => {
+    vi.useFakeTimers()
+    const fetch = vi.fn((_url: string, options: RequestInit) =>
+      Promise.resolve({
+        ok: true,
+        json: () =>
+          new Promise((_resolve, reject) =>
+            options.signal!.addEventListener(
+              'abort',
+              () => reject(options.signal!.reason),
+              { once: true }
+            )
+          ),
+      })
+    )
+    vi.stubGlobal('fetch', fetch)
+    const api = createAgentTransport({ baseUrl: 'https://api.openai.com/v1' })
+    const pending = expect(
+      api.session('s', new AbortController().signal)
+    ).rejects.toThrow('timed out')
+    await vi.advanceTimersByTimeAsync(40_500)
+    await pending
+    expect(fetch).toHaveBeenCalledTimes(2)
   })
 })
