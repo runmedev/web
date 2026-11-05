@@ -4,10 +4,12 @@ import (
 	"bytes"
 	"context"
 	"crypto/sha256"
+	"encoding/base64"
 	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"fmt"
+	"hash/crc32"
 	"io"
 	"os"
 	"path/filepath"
@@ -307,22 +309,28 @@ func verifyBuildArchive(ctx context.Context, inputs buildInputs, releaseID strin
 		return false, errors.New("archive missing required assets")
 	}
 	manifestHash := sha256.Sum256(data)
-	assets := append(append([]archiveAsset{}, manifest.Assets...), archiveAsset{Path: archiveManifestName, SHA256: hex.EncodeToString(manifestHash[:]), Bytes: int64(len(data))})
-	for _, asset := range assets {
+	manifestCRC := crc32.New(crc32.MakeTable(crc32.Castagnoli))
+	_, _ = manifestCRC.Write(data)
+	assets := append(append([]archiveAsset{}, manifest.Assets...), archiveAsset{Path: archiveManifestName, SHA256: hex.EncodeToString(manifestHash[:]), Bytes: int64(len(data)), CRC32C: base64.StdEncoding.EncodeToString(manifestCRC.Sum(nil))})
+	err = processAssets(ctx, assets, os.Stdout, "verify archive", func(ctx context.Context, asset archiveAsset) error {
 		location := destinationURL(inputs.Bucket, prefix+asset.Path)
 		if strings.HasPrefix(inputs.Bucket, "gs://") {
 			if err := verifyGCSArchiveAsset(ctx, location, asset); err != nil {
-				return false, err
+				return err
 			}
 		} else {
 			actual, err := hashArchiveFile(location, asset.Path)
 			if err != nil {
-				return false, err
+				return err
 			}
 			if actual != asset {
-				return false, fmt.Errorf("immutable object differs: %s", location)
+				return fmt.Errorf("immutable object differs: %s", location)
 			}
 		}
+		return nil
+	})
+	if err != nil {
+		return false, err
 	}
 	return true, nil
 }
