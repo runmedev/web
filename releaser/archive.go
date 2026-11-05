@@ -1,20 +1,21 @@
 package main
 
 import (
-	"bytes"
 	"context"
 	"crypto/sha256"
+	"encoding/base64"
 	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"fmt"
+	"hash/crc32"
 	"io"
 	"io/fs"
 	"os"
-	"os/exec"
 	"path/filepath"
 	"regexp"
 	"sort"
+	"strconv"
 	"strings"
 
 	"github.com/spf13/cobra"
@@ -44,6 +45,7 @@ type archiveAsset struct {
 	Path   string `json:"path"`
 	SHA256 string `json:"sha256"`
 	Bytes  int64  `json:"bytes"`
+	CRC32C string `json:"crc32c,omitempty"`
 }
 
 type archiveConfig struct {
@@ -133,17 +135,25 @@ func runArchive(ctx context.Context, cfg archiveConfig, out io.Writer) error {
 		return err
 	}
 	prefix := "version/" + manifest.ReleaseID + "/"
-	assets := append(append([]archiveAsset{}, manifest.Assets...), manifestAsset)
-	for _, asset := range assets {
+	if cfg.dryRun {
+		for _, asset := range append(append([]archiveAsset{}, manifest.Assets...), manifestAsset) {
+			if err := ctx.Err(); err != nil {
+				return err
+			}
+			fmt.Fprintf(out, "would archive %s sha256=%s bytes=%d\n", destinationURL(cfg.bucket, prefix+asset.Path), asset.SHA256, asset.Bytes)
+		}
+	} else {
+		if err := processAssets(ctx, manifest.Assets, out, "archive", func(ctx context.Context, asset archiveAsset) error {
+			return publishArchiveAsset(ctx, cfg.bucket, prefix, staging, asset)
+		}); err != nil {
+			return err
+		}
+		// The manifest remains the completion marker and must never race assets.
 		if err := ctx.Err(); err != nil {
 			return err
 		}
-		if cfg.dryRun {
-			fmt.Fprintf(out, "would archive %s sha256=%s bytes=%d\n", destinationURL(cfg.bucket, prefix+asset.Path), asset.SHA256, asset.Bytes)
-			continue
-		}
-		if err := publishArchiveAsset(ctx, cfg.bucket, prefix, staging, asset); err != nil {
-			return fmt.Errorf("archive %s: %w", asset.Path, err)
+		if err := publishArchiveAsset(ctx, cfg.bucket, prefix, staging, manifestAsset); err != nil {
+			return fmt.Errorf("archive %s: %w", manifestAsset.Path, err)
 		}
 	}
 	fmt.Fprintf(out, "release archive %s (activation unavailable; no channel changed)\n", manifest.ReleaseID)
@@ -235,8 +245,9 @@ func hashArchiveFile(path, rel string) (archiveAsset, error) {
 	}
 	defer f.Close()
 	h := sha256.New()
-	n, err := io.Copy(h, f)
-	return archiveAsset{Path: rel, SHA256: hex.EncodeToString(h.Sum(nil)), Bytes: n}, err
+	crc := crc32.New(crc32.MakeTable(crc32.Castagnoli))
+	n, err := io.Copy(io.MultiWriter(h, crc), f)
+	return archiveAsset{Path: rel, SHA256: hex.EncodeToString(h.Sum(nil)), Bytes: n, CRC32C: base64.StdEncoding.EncodeToString(crc.Sum(nil))}, err
 }
 
 // publishArchiveAsset uses create-only writes and verifies persisted bytes even
@@ -294,10 +305,13 @@ func publishLocalArchiveFile(source, destination string) error {
 	return nil
 }
 
-// verifyGCSArchiveAsset reads the persisted generation, then its bytes. The
-// generation-qualified URL avoids combining metadata and content from two
-// generations if an external writer violates the archive's immutability.
+// verifyGCSArchiveAsset compares the server-computed checksum and size with
+// the frozen local inventory. One metadata response describes one generation;
+// no asset body is downloaded and no caller-supplied checksum metadata is trusted.
 func verifyGCSArchiveAsset(ctx context.Context, destination string, asset archiveAsset) error {
+	if !validCRC32C(asset.CRC32C) {
+		return fmt.Errorf("archive asset %s lacks a valid CRC32C checksum; rebuild this legacy archive", asset.Path)
+	}
 	metadata, err := runCmdOutput(ctx, "", nil, "gcloud", "storage", "objects", "describe", destination, "--raw", "--format=json")
 	if err != nil {
 		return err
@@ -306,6 +320,8 @@ func verifyGCSArchiveAsset(ctx context.Context, destination string, asset archiv
 		Generation   string `json:"generation"`
 		CacheControl string `json:"cacheControl"`
 		ContentType  string `json:"contentType"`
+		Size         string `json:"size"`
+		CRC32C       string `json:"crc32c"`
 	}
 	if err := json.Unmarshal(metadata, &object); err != nil {
 		return err
@@ -316,29 +332,15 @@ func verifyGCSArchiveAsset(ctx context.Context, destination string, asset archiv
 	if (asset.Path == archiveManifestName || asset.Path == "release.json") && object.ContentType != "application/json" {
 		return fmt.Errorf("unexpected manifest content type at %s", destination)
 	}
-	h := sha256.New()
-	counter := &countingWriter{writer: h}
-	cmd := exec.CommandContext(ctx, "gcloud", "storage", "cat", destination+"#"+object.Generation)
-	cmd.Stdout = counter
-	var stderr bytes.Buffer
-	cmd.Stderr = &stderr
-	if err := cmd.Run(); err != nil {
-		return fmt.Errorf("verify archive object: %w: %s", err, strings.TrimSpace(stderr.String()))
-	}
-	if counter.bytes != asset.Bytes || hex.EncodeToString(h.Sum(nil)) != asset.SHA256 {
+	size, err := strconv.ParseInt(object.Size, 10, 64)
+	if err != nil || size != asset.Bytes || object.CRC32C != asset.CRC32C {
 		return fmt.Errorf("immutable object differs: %s", destination)
 	}
 	return nil
 }
 
-// countingWriter checks persisted length and digest in one bounded-memory pass.
-type countingWriter struct {
-	writer io.Writer
-	bytes  int64
-}
-
-func (w *countingWriter) Write(p []byte) (int, error) {
-	n, err := w.writer.Write(p)
-	w.bytes += int64(n)
-	return n, err
+// GCS encodes its four-byte Castagnoli CRC in big-endian base64.
+func validCRC32C(value string) bool {
+	data, err := base64.StdEncoding.DecodeString(value)
+	return err == nil && len(data) == 4 && base64.StdEncoding.EncodeToString(data) == value
 }

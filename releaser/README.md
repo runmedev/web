@@ -216,3 +216,16 @@ published; no build runs after acceptance. Publication rejects archives without
 a matching acceptance receipt. Existing verified releases remain declarative
 no-ops. The initial contract permits only the same storage schema; this suite
 does not qualify historical releases with different schemas for rollback.
+
+Archive uploads and archive verification use up to eight concurrent asset workers.
+Progress counts and elapsed time are printed every 15 seconds. An asset failure
+cancels outstanding work and prevents publication of the completion manifest;
+channel promotion still follows successful archive verification. The manifest is
+uploaded separately after all assets complete. `gcloud storage cp` already checks
+transfer integrity. Remote verification compares GCS's server-computed CRC32C and
+size metadata against the frozen local inventory; it never downloads asset bodies.
+SHA-256 remains in the inventory for release identity and browser integrity checks.
+CRC32C is computed alongside SHA-256 in a single local read. Existing objects on
+retry receive the same metadata validation. Archives without expected CRC32C
+checksums cannot be verified remotely and require a rebuild; their metadata is
+never treated as proof of its own correctness.

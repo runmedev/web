@@ -28,7 +28,9 @@ permissions:
   checks: read
 
 concurrency:
-  group: releaser-production
+  # PR validation writes only to a temporary local bucket. It must not wait
+  # behind production reconciliation or replace a queued production run.
+  group: ${{ github.event_name == 'pull_request' && format('releaser-pr-{0}', github.event.pull_request.number) || 'releaser-production' }}
   cancel-in-progress: false
 
 jobs:

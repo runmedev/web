@@ -10,6 +10,7 @@ import (
 	"io"
 	"os"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"sync"
 	"testing"
@@ -274,13 +275,21 @@ func fakeArchiveGcloud(root string, args []string) error {
 		if os.Getenv("RUNME_ARCHIVE_TEST_BAD_METADATA") != "" {
 			cache = "no-cache"
 		}
-		return json.NewEncoder(os.Stdout).Encode(map[string]string{"generation": "1", "cacheControl": cache, "contentType": "application/json"})
+		asset, err := hashArchiveFile(remotePath(args[3]), "")
+		if err != nil {
+			return err
+		}
+		metadata := map[string]string{"generation": "1", "cacheControl": cache, "contentType": "application/json", "size": strconv.FormatInt(asset.Bytes, 10), "crc32c": asset.CRC32C}
+		if field := os.Getenv("RUNME_ARCHIVE_TEST_BAD_FIELD"); field != "" {
+			metadata[field] = os.Getenv("RUNME_ARCHIVE_TEST_BAD_VALUE")
+		}
+		return json.NewEncoder(os.Stdout).Encode(metadata)
 	case "cat":
 		if os.Getenv("RUNME_ARCHIVE_TEST_DENIED") != "" {
 			return fmt.Errorf("403 permission denied")
 		}
-		if !strings.HasSuffix(args[2], "#1") && !strings.HasSuffix(args[2], "/"+archiveManifestName) {
-			return fmt.Errorf("expected generation-qualified read")
+		if !strings.HasSuffix(args[2], "/"+archiveManifestName) {
+			return fmt.Errorf("asset body downloads are forbidden")
 		}
 		f, err := os.Open(remotePath(args[2]))
 		if err != nil {
@@ -341,5 +350,46 @@ func TestGCSArchiveRejectsMetadataBeforeManifest(t *testing.T) {
 	matches, _ := filepath.Glob(filepath.Join(root, "test-bucket/version/*", archiveManifestName))
 	if len(matches) != 0 {
 		t.Fatal("manifest published before object validation")
+	}
+}
+
+// Use a known Castagnoli vector so the fake and implementation cannot agree on
+// the wrong CRC polynomial or byte order unnoticed.
+func TestArchiveCRC32CEncoding(t *testing.T) {
+	root := t.TempDir()
+	writeArchiveFixture(t, root, "vector", "123456789")
+	asset, err := hashArchiveFile(filepath.Join(root, "vector"), "vector")
+	if err != nil || asset.CRC32C != "4waSgw==" {
+		t.Fatalf("got %+v, %v", asset, err)
+	}
+}
+
+// Metadata validation must fail closed for missing or incorrect size/checksum.
+// The fake rejects all asset-body reads, including on successful retries.
+func TestGCSArchiveChecksServerMetadata(t *testing.T) {
+	for _, tc := range []struct{ field, value string }{
+		{"crc32c", ""}, {"crc32c", "AAAAAA=="}, {"crc32c", "malformed"},
+		{"size", ""}, {"size", "-1"}, {"size", "99999"},
+	} {
+		t.Run(tc.field+"="+tc.value, func(t *testing.T) {
+			root := setupArchiveGcloud(t)
+			t.Setenv("RUNME_ARCHIVE_TEST_BAD_FIELD", tc.field)
+			t.Setenv("RUNME_ARCHIVE_TEST_BAD_VALUE", tc.value)
+			err := runArchive(context.Background(), archiveConfig{dist: archiveFixture(t), bucket: "gs://test"}, io.Discard)
+			if err == nil {
+				t.Fatal("accepted invalid metadata")
+			}
+			matches, _ := filepath.Glob(filepath.Join(root, "test/version/*", archiveManifestName))
+			if len(matches) != 0 {
+				t.Fatal("published manifest after failed verification")
+			}
+		})
+	}
+}
+
+func TestGCSArchiveRejectsMissingExpectedChecksum(t *testing.T) {
+	err := verifyGCSArchiveAsset(context.Background(), "gs://unused/asset", archiveAsset{Path: "asset"})
+	if err == nil || !strings.Contains(err.Error(), "rebuild this legacy archive") {
+		t.Fatalf("got %v", err)
 	}
 }
