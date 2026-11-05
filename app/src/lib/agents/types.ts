@@ -51,7 +51,18 @@ export interface AgentTransport {
     after: string | undefined,
     signal: AbortSignal
   ): Promise<AgentPage<AgentItem>>
-  turns(id: string, signal: AbortSignal): Promise<AgentPage<AgentObject>>
+  turnItems(
+    id: string,
+    turnId: string,
+    limit: number,
+    after: string | undefined,
+    signal: AbortSignal
+  ): Promise<AgentPage<AgentItem>>
+  turns(
+    id: string,
+    signal: AbortSignal,
+    after?: string
+  ): Promise<AgentPage<AgentObject>>
   stream(id: string, signal: AbortSignal): Promise<AgentStream>
 }
 export const AGENT_MONITOR_MIME = 'application/vnd.runme.agent-monitor+json'

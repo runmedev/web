@@ -20,6 +20,8 @@ export function callAgentsBridge(
       return api.resume(id)
     case 'agents.older':
       return api.older(id)
+    case 'agents.retryHistory':
+      return api.retryHistory(id)
     case 'agents.newer':
       return api.newer(id)
     case 'agents.latest':

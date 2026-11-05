@@ -1,4 +1,12 @@
-import { useEffect, useId, useMemo, useRef, useSyncExternalStore } from 'react'
+import {
+  useCallback,
+  useEffect,
+  useId,
+  useLayoutEffect,
+  useMemo,
+  useRef,
+  useSyncExternalStore,
+} from 'react'
 import { PaperAirplaneIcon } from '@heroicons/react/24/outline'
 import ReactMarkdown from 'react-markdown'
 import remarkGfm from 'remark-gfm'
@@ -102,12 +110,70 @@ function Monitor({ descriptor }: { descriptor: AgentMonitorDescriptor }) {
   const composerId = useId()
   const input = useRef<HTMLTextAreaElement>(null)
   useEffect(() => mountAgentMonitor(monitor), [monitor])
+  const anchor = useRef<{ key: string; offset: number } | null>(null)
+  const previousTop = useRef(0)
+  const legacyKeys = useRef(new WeakMap<AgentItem, string>())
+  const nextLegacyKey = useRef(0)
+  // Stable wrapper keys keep expanded tools and the reading anchor intact on prepend.
+  const itemKey = (item: AgentItem) => {
+    if (item.id) return item.id
+    let key = legacyKeys.current.get(item)
+    if (!key) {
+      key = 'legacy-' + nextLegacyKey.current++
+      legacyKeys.current.set(item, key)
+    }
+    return key
+  }
+  const captureAnchor = useCallback(() => {
+    const element = viewport.current
+    if (!element) return
+    const top = element.getBoundingClientRect().top
+    const visible = Array.from(
+      element.querySelectorAll<HTMLElement>('[data-agent-item-key]')
+    ).find((child) => child.getBoundingClientRect().bottom > top)
+    anchor.current = visible
+      ? {
+          key: visible.dataset.agentItemKey!,
+          offset: visible.getBoundingClientRect().top - top,
+        }
+      : null
+  }, [])
+  const loadOlder = useCallback(() => {
+    const current = monitor.getSnapshot()
+    if (current.loadingPage || current.historyError || !current.hasOlder) return
+    follow.current = false
+    monitor.setFollowing(false)
+    captureAnchor()
+    void monitor.older()
+  }, [monitor, captureAnchor])
+  // Prepending changes scrollHeight. Restore the same visible item before paint,
+  // including when a live message grows while the reader is inspecting history.
+  useLayoutEffect(() => {
+    const element = viewport.current
+    if (!element) return
+    if (!state.historical) follow.current = true
+    if (follow.current) element.scrollTop = element.scrollHeight
+    else if (anchor.current) {
+      const saved = anchor.current
+      const child = Array.from(
+        element.querySelectorAll<HTMLElement>('[data-agent-item-key]')
+      ).find((node) => node.dataset.agentItemKey === saved.key)
+      if (child)
+        element.scrollTop +=
+          child.getBoundingClientRect().top -
+          element.getBoundingClientRect().top -
+          saved.offset
+    }
+    previousTop.current = element.scrollTop
+    captureAnchor()
+  }, [state.items, state.historical, captureAnchor])
+  // Continue through empty turns while the user remains at the top. Initial
+  // connection stays at the latest output; wheel/keyboard scrollback also works
+  // when the first batch is too short to produce a scrollbar.
   useEffect(() => {
-    if (!viewport.current) return
-    if (state.historical) viewport.current.scrollTop = 0
-    else if (follow.current)
-      viewport.current.scrollTop = viewport.current.scrollHeight
-  }, [state.items, state.historical])
+    if (!follow.current && viewport.current && viewport.current.scrollTop < 96)
+      loadOlder()
+  }, [state.items, loadOlder])
   const latest = () => {
     follow.current = true
     monitor.latest()
@@ -167,59 +233,86 @@ function Monitor({ descriptor }: { descriptor: AgentMonitorDescriptor }) {
         <Details title="Session error" value={state.session.error} />
       )}
       <nav
-        aria-label="Agent history pages"
+        aria-label="Agent history"
         className="flex flex-wrap items-center gap-2 border-y py-2 text-sm"
       >
-        <button
-          className="rounded border px-3 py-1 disabled:opacity-40"
-          disabled={!state.hasOlder || state.loadingPage}
-          onClick={() => void monitor.older()}
-        >
-          Older
-        </button>
-        <button
-          className="rounded border px-3 py-1 disabled:opacity-40"
-          disabled={!state.hasNewer || state.loadingPage}
-          onClick={() => void monitor.newer()}
-        >
-          Newer
-        </button>
         <button className="rounded border px-3 py-1" onClick={latest}>
           Latest{state.newActivity ? ` (${state.newActivity} updates)` : ''}
         </button>
         <span className="text-xs text-nb-text-muted">
           {state.loadingPage
-            ? 'Loading…'
-            : state.historical
-              ? `${state.items.length} earlier items`
-              : `Latest ${state.items.length} items`}
+            ? 'Loading earlier items…'
+            : state.hasOlder
+              ? 'Scroll up to load earlier items'
+              : 'History loaded'}
         </span>
       </nav>
+      {state.historyError && (
+        <div
+          data-testid="agent-history-error"
+          role="alert"
+          className="my-2 text-sm text-red-600"
+        >
+          History unavailable: {state.historyError}{' '}
+          <button
+            disabled={state.loadingPage || state.connection !== 'live'}
+            className="underline"
+            onClick={() => void monitor.retryHistory()}
+          >
+            Retry history
+          </button>
+        </div>
+      )}
       <div
         ref={viewport}
         data-testid="agent-monitor-timeline"
         aria-label="Agent messages and tools"
         tabIndex={0}
         className="max-h-[32rem] min-h-24 overflow-auto"
+        style={{ overflowAnchor: 'none' }}
+        onWheel={(event) => {
+          if (
+            event.deltaY < 0 &&
+            viewport.current &&
+            viewport.current.scrollTop < 96
+          )
+            loadOlder()
+        }}
+        onKeyDown={(event) => {
+          if (
+            ['ArrowUp', 'PageUp', 'Home'].includes(event.key) &&
+            viewport.current &&
+            viewport.current.scrollTop < 96
+          )
+            loadOlder()
+        }}
         onScroll={() => {
           const element = viewport.current
-          if (element)
-            follow.current =
-              element.scrollHeight - element.scrollTop - element.clientHeight <
-              48
+          if (!element) return
+          const upward = element.scrollTop < previousTop.current
+          follow.current =
+            element.scrollHeight - element.scrollTop - element.clientHeight < 48
+          previousTop.current = element.scrollTop
+          captureAnchor()
+          monitor.setFollowing(follow.current)
+          if (upward && element.scrollTop < 96) loadOlder()
         }}
       >
         {!state.items.length && (
           <p className="py-6 text-sm text-nb-text-muted">
-            {state.connection === 'connecting'
-              ? 'Loading session history…'
-              : state.session
-                ? 'No saved items yet.'
-                : 'Run this cell or Connect to load session history.'}
+            {state.historyError
+              ? 'Saved history could not be loaded. Live updates will still appear here.'
+              : state.connection === 'connecting'
+                ? 'Loading session history…'
+                : state.session
+                  ? 'No saved items yet.'
+                  : 'Run this cell or Connect to load session history.'}
           </p>
         )}
-        {state.items.map((item, index) => (
-          <AgentItemView key={item.id ?? `legacy-${index}`} item={item} />
+        {state.items.map((item) => (
+          <div key={itemKey(item)} data-agent-item-key={itemKey(item)}>
+            <AgentItemView item={item} />
+          </div>
         ))}
       </div>
       <form

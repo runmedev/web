@@ -39,6 +39,7 @@ describe('agent monitor rendering', () => {
       createSession: async () => ({ id: 'sess_composer' }),
       sendMessage,
       session: async () => ({ status: 'idle' }),
+      turnItems: async () => ({ data: [], has_more: false, last_id: null }),
       items: async () => ({ data: [], has_more: false, last_id: null }),
       turns: async () => ({ data: [], has_more: false, last_id: null }),
       stream: async () => ({
@@ -199,7 +200,7 @@ describe('agent monitor rendering', () => {
       )
     )
     expect(screen.queryByRole('alert')).toBeNull()
-    expect(fetchMock).toHaveBeenCalledTimes(4)
+    expect(fetchMock).toHaveBeenCalledTimes(3)
     expect(
       new Headers(fetchMock.mock.calls[0][1]?.headers).get('Authorization')
     ).toBe('Bearer widget-test-secret')
@@ -211,5 +212,111 @@ describe('agent monitor rendering', () => {
   it('isolates malformed saved descriptors', () => {
     render(<AgentMonitorOutput value='{"version":2}' />)
     expect(screen.getByRole('alert').textContent).toContain('Unsupported')
+  })
+  it('loads earlier items on scroll and preserves the visible anchor while live output arrives', async () => {
+    const descriptor = {
+      version: 1 as const,
+      id: 'scroll',
+      sessionId: 'sess_scroll',
+      pageSize: 2,
+    }
+    const item = (id: string) => ({
+      id,
+      type: 'message',
+      role: 'assistant',
+      status: 'completed',
+      content: [{ type: 'output_text', text: id }],
+    })
+    const turnItems = vi.fn(async (_id, _turn, _limit, after) => ({
+      data: (after ? ['z', 'y'] : ['b', 'a']).map(item),
+      has_more: !after,
+      last_id: after ? 'y' : 'a',
+    }))
+    const model = new AgentMonitor(descriptor, () => ({
+      updateAgent: async () => ({}),
+      createSession: async () => ({ id: 's' }),
+      sendMessage: async () => {},
+      session: async () => ({ status: 'idle' }),
+      items: async () => {
+        throw new Error('must use turn items')
+      },
+      turnItems,
+      turns: async () => ({
+        data: [{ id: 't', subagent_id: null }],
+        has_more: false,
+        last_id: 't',
+      }),
+      stream: async () => ({
+        close() {},
+        events: {
+          [Symbol.asyncIterator]: () => ({ next: () => new Promise(() => {}) }),
+        },
+      }),
+    }))
+    vi.spyOn(runtime, 'resolveAgentMonitor').mockReturnValue(model)
+    render(<AgentMonitorOutput value={JSON.stringify(descriptor)} />)
+    const viewport = screen.getByTestId('agent-monitor-timeline')
+    let top = 0
+    const count = () =>
+      viewport.querySelectorAll('[data-agent-item-key]').length
+    Object.defineProperties(viewport, {
+      clientHeight: { get: () => 100 },
+      scrollHeight: { get: () => count() * 100 },
+      scrollTop: {
+        get: () => top,
+        set: (value: number) => {
+          top = Math.max(0, Math.min(value, count() * 100 - 100))
+        },
+      },
+    })
+    vi.spyOn(HTMLElement.prototype, 'getBoundingClientRect').mockImplementation(
+      function (this: HTMLElement) {
+        const index = Array.from(
+          viewport.querySelectorAll('[data-agent-item-key]')
+        ).indexOf(this)
+        const y = this === viewport ? 0 : index * 100 - top
+        return {
+          top: y,
+          bottom: y + 100,
+          height: 100,
+          left: 0,
+          right: 300,
+          width: 300,
+          x: 0,
+          y,
+          toJSON() {},
+        } as DOMRect
+      }
+    )
+    await act(async () => model.connect())
+    expect(top).toBe(100)
+    expect(screen.queryByRole('button', { name: /^Older$/ })).toBeNull()
+    viewport.scrollTop = 20
+    fireEvent.scroll(viewport)
+    await waitFor(() => expect(count()).toBe(4))
+    expect(top).toBe(220)
+    expect(
+      viewport
+        .querySelector('[data-agent-item-key="a"]')
+        ?.getBoundingClientRect().top
+    ).toBe(-20)
+    expect(turnItems).toHaveBeenLastCalledWith(
+      'sess_scroll',
+      't',
+      2,
+      'a',
+      expect.any(AbortSignal)
+    )
+    act(() =>
+      model.applyEvent({
+        type: 'agent.session.turn.item.added',
+        item: item('c'),
+      })
+    )
+    expect(top).toBe(220)
+    fireEvent.click(screen.getByRole('button', { name: /^Latest/ }))
+    expect(top).toBe(400)
+    expect(count()).toBe(5)
+    act(() => model.pause())
   })
 })

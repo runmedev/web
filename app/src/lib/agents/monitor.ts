@@ -1,9 +1,9 @@
+import { newHistoryCursor, readHistory } from './history'
 import type {
   AgentEvent,
   AgentItem,
   AgentMonitorDescriptor,
   AgentObject,
-  AgentPage,
   AgentStream,
   AgentTransport,
 } from './types'
@@ -20,6 +20,7 @@ export type MonitorSnapshot = {
   newActivity: number
   loadingPage: boolean
   error: string | null
+  historyError: string | null
   draft: string
   sending: boolean
   sendError: string | null
@@ -38,7 +39,7 @@ const object = (value: unknown): AgentObject | null =>
 const message = (error: unknown) =>
   error instanceof Error ? error.message : 'Agent monitor request failed.'
 
-/** Owns one monitor's bounded live window, history cursor stack and stream lifecycle. */
+/** Owns a continuous timeline. History grows only through user-driven reads and live events. */
 export class AgentMonitor {
   private snapshot: MonitorSnapshot = {
     connection: 'disconnected',
@@ -52,6 +53,7 @@ export class AgentMonitor {
     newActivity: 0,
     loadingPage: false,
     error: null,
+    historyError: null,
     draft: '',
     sending: false,
     sendError: null,
@@ -62,10 +64,14 @@ export class AgentMonitor {
   private stream?: AgentStream
   private pageController?: AbortController
   private live: AgentItem[] = []
-  private liveHasMore = false
-  private liveCursor: string | null = null
-  private historyCursor: string | null = null
-  private cursors: Array<string | undefined> = []
+  private history = newHistoryCursor()
+  private historyReady = false
+  private refreshTurns = new Set<string>()
+  private refreshRunning = false
+  private failedRefresh: string[] | null = null
+  // An incremental refresh reads back to this saved boundary. Streamed IDs alone
+  // are insufficient: early input/tool items may never have appeared in the stream.
+  private savedBoundaries = new Map<string, string>()
   private seen = new Set<string>()
   private finalParts = new Set<string>()
   private restoredFinalIds = new Set<string>()
@@ -149,6 +155,7 @@ export class AgentMonitor {
     this.pageController?.abort()
     clearTimeout(this.refreshTimer)
     this.refreshTimer = undefined
+    this.refreshTurns.clear()
     this.update({ connection: 'paused', loadingPage: false })
   }
 
@@ -194,24 +201,49 @@ export class AgentMonitor {
             )
         } catch (error) {
           if (!signal.aborted) {
-            this.update({ connection: 'disconnected', error: message(error) })
+            this.update({
+              connection: 'disconnected',
+              loadingPage: false,
+              error: message(error),
+            })
             controller.abort()
             stream?.close()
           }
         }
       })()
-      const [session, page, turns] = await Promise.all([
+      const [sessionResult, historyResult] = await Promise.allSettled([
         transport.session(this.descriptor.sessionId, signal),
-        transport.items(
+        readHistory(
+          transport,
           this.descriptor.sessionId,
           this.descriptor.pageSize,
-          undefined,
+          newHistoryCursor(),
           signal
         ),
-        transport.turns(this.descriptor.sessionId, signal),
       ])
       if (signal.aborted) return
-      this.installLive(page)
+      const session =
+        sessionResult.status === 'fulfilled'
+          ? sessionResult.value
+          : this.snapshot.session
+      if (historyResult.status === 'fulfilled') {
+        const result = historyResult.value
+        this.live = [...result.data].reverse()
+        this.savedBoundaries.clear()
+        const boundary = result.data.at(-1)
+        if (boundary?.turn_id && boundary.id)
+          this.savedBoundaries.set(boundary.turn_id, boundary.id)
+        this.history = result.next
+        this.historyReady = true
+        this.update({
+          items: this.live,
+          hasOlder: result.hasMore,
+          turn: result.latestTurn ?? null,
+          historyError: null,
+        })
+      } else {
+        this.update({ historyError: message(historyResult.reason) })
+      }
       this.restoredFinalIds = new Set(
         this.live
           .filter((item) => item.id && finalStatuses.has(item.status ?? ''))
@@ -219,17 +251,21 @@ export class AgentMonitor {
       )
       this.update({
         session,
-        turn: turns.data.find((turn) => turn.subagent_id === null) ?? null,
         connection: 'live',
+        historical: false,
+        newActivity: 0,
+        ...(sessionResult.status === 'rejected'
+          ? { error: message(sessionResult.reason) }
+          : {}),
       })
       const events = buffered ?? []
       buffered = null
       for (const event of events) {
-        if (signal.aborted || session.status === 'failed') break
+        if (signal.aborted || session?.status === 'failed') break
         this.applyEvent(event, true)
       }
       if (
-        session.status === 'failed' ||
+        session?.status === 'failed' ||
         this.snapshot.session?.status === 'failed'
       ) {
         controller.abort()
@@ -249,29 +285,148 @@ export class AgentMonitor {
     }
   }
 
-  /** History is never implicitly merged with a live window: pages stay bounded. */
-  private installLive(page: AgentPage<AgentItem>) {
-    this.live = [...page.data].reverse().slice(-this.descriptor.pageSize)
-    this.liveCursor = page.last_id
-    this.liveHasMore = page.has_more
-    if (!this.snapshot.historical)
-      this.update({ items: this.live, hasOlder: page.has_more })
-  }
-
-  /** Refresh saved statuses after terminal turn events without replaying old deltas. */
-  private scheduleRefresh() {
-    if (this.refreshTimer || this.controller?.signal.aborted) return
+  /** Refresh saved results without closing the stream or invalidating a pending send. */
+  private scheduleRefresh(turnId?: string) {
+    this.refreshTurns.add(turnId ?? '')
+    if (
+      this.refreshTimer ||
+      this.refreshRunning ||
+      this.controller?.signal.aborted
+    )
+      return
     this.refreshTimer = setTimeout(() => {
       this.refreshTimer = undefined
-      // Reconnecting aborts the observation signal shared by an active send.
-      // Let delivery settle first so a status refresh cannot interrupt its response.
-      if (this.snapshot.sending) {
-        this.scheduleRefresh()
-        return
-      }
-      // Full reconnect applies the documented stream-before-snapshot recovery sequence.
-      void this.connect()
+      void this.refreshSaved()
     }, 500)
+  }
+
+  /** Only affected turns are read; live updates arriving during a read take precedence. */
+  private async refreshSaved() {
+    const signal = this.controller?.signal
+    if (!signal || signal.aborted) return
+    this.refreshRunning = true
+    const ids = [...this.refreshTurns]
+    this.refreshTurns.clear()
+    try {
+      const api = this.transport()
+      if (ids.includes('')) {
+        const turns = await api.turns(this.descriptor.sessionId, signal)
+        const turn = turns.data.find((value) => value.subagent_id === null)
+        if (typeof turn?.id === 'string') {
+          ids.push(turn.id)
+          const previous = this.snapshot.turn
+          if (
+            !signal.aborted &&
+            (!previous ||
+              (previous.id === turn.id
+                ? !finalStatuses.has(String(previous.status)) ||
+                  finalStatuses.has(String(turn.status))
+                : Number(turn.created_at ?? 0) >=
+                  Number(previous.created_at ?? 0)))
+          )
+            this.update({ turn })
+        }
+      }
+      for (const id of new Set(ids.filter(Boolean))) {
+        if (
+          id !== this.snapshot.turn?.id &&
+          !this.live.some((item) => item.turn_id === id)
+        )
+          continue
+        const boundary = this.savedBoundaries.get(id)
+        const data: AgentItem[] = []
+        const cursors = new Set<string>()
+        let after: string | undefined
+        let nextBoundary: string | undefined
+        // Reconcile only this turn, back to the previous saved page. A new turn
+        // is read to its beginning so a long streamed response cannot hide its prompt.
+        for (;;) {
+          signal.throwIfAborted()
+          const page = await api.turnItems(
+            this.descriptor.sessionId,
+            id,
+            this.descriptor.pageSize,
+            after,
+            signal
+          )
+          if (signal.aborted) return
+          nextBoundary ??= page.data.at(-1)?.id ?? undefined
+          data.push(...page.data)
+          if (
+            !page.has_more ||
+            (boundary && page.data.some((item) => item.id === boundary))
+          )
+            break
+          if (!page.last_id || cursors.has(page.last_id))
+            throw new Error(
+              'History returned a non-advancing pagination cursor.'
+            )
+          after = page.last_id
+          cursors.add(after)
+        }
+        if (signal.aborted) return
+        if (nextBoundary) this.savedBoundaries.set(id, nextBoundary)
+        // Insert missing saved items relative to their known neighbors in the turn.
+        // Never replay text deltas on top of the saved final version.
+        const saved = [...data]
+          .reverse()
+          .map((item) => ({ ...item, turn_id: id }))
+        this.live = [...this.live]
+        for (let i = 0; i < saved.length; i++) {
+          const item = saved[i]
+          if (
+            !item.id &&
+            this.live.some(
+              (value) =>
+                !value.id && JSON.stringify(value) === JSON.stringify(item)
+            )
+          )
+            continue
+          const existing = item.id
+            ? this.live.findIndex((value) => value.id === item.id)
+            : -1
+          if (existing >= 0) {
+            if (
+              finalStatuses.has(item.status ?? '') &&
+              !finalStatuses.has(this.live[existing].status ?? '')
+            )
+              this.live[existing] = item
+            continue
+          }
+          const following = saved
+            .slice(i + 1)
+            .find(
+              (value) =>
+                value.id && this.live.some((entry) => entry.id === value.id)
+            )
+          const position = following
+            ? this.live.findIndex((value) => value.id === following.id)
+            : -1
+          if (position >= 0) this.live.splice(position, 0, item)
+          else {
+            const last = this.live.map((value) => value.turn_id).lastIndexOf(id)
+            this.live.splice(last >= 0 ? last + 1 : this.live.length, 0, item)
+          }
+        }
+        this.live = [...this.live]
+        this.update({ items: this.live })
+      }
+      if (!signal.aborted && this.failedRefresh) {
+        this.failedRefresh = null
+        this.update({ historyError: null })
+      }
+    } catch (error) {
+      if (!signal.aborted) {
+        this.failedRefresh = ids
+        this.update({ historyError: message(error) })
+      }
+    } finally {
+      this.refreshRunning = false
+      // A reconnect can queue work while the previous observation is aborting.
+      // Drain that work using the current observation, not the stale signal.
+      if (!this.controller?.signal.aborted && this.refreshTurns.size)
+        this.scheduleRefresh([...this.refreshTurns][0])
+    }
   }
 
   /** Reduce known events; retain unfamiliar events in the bounded activity log. */
@@ -304,7 +459,7 @@ export class AgentMonitor {
         this.update({ turn })
       }
       if (!replay && finalStatuses.has(String(turn.status)))
-        this.scheduleRefresh()
+        this.scheduleRefresh(typeof turn.id === 'string' ? turn.id : undefined)
     }
     if (!replay && event.type === 'agent.session.requires_action' && !session)
       this.scheduleRefresh()
@@ -326,7 +481,15 @@ export class AgentMonitor {
       return
     }
     if (event.subagent_id != null) return
-    const item = object(event.item) as AgentItem | null
+    const rawItem = object(event.item) as AgentItem | null
+    const item = rawItem
+      ? {
+          ...rawItem,
+          turn_id:
+            rawItem.turn_id ??
+            (typeof event.turn_id === 'string' ? event.turn_id : undefined),
+        }
+      : null
     if (event.type === 'agent.session.turn.item.added' && item) {
       if (!(replay && item.id && this.restoredFinalIds.has(item.id)))
         this.upsert(item)
@@ -383,79 +546,97 @@ export class AgentMonitor {
         return
       next[index] = item
     } else next.push(item)
-    if (next.length > this.descriptor.pageSize) this.liveHasMore = true
-    this.live = next.slice(-this.descriptor.pageSize)
-    // The oldest displayed item is the descending-order cursor after live eviction.
-    this.liveCursor = this.live[0]?.id ?? this.liveCursor
-    if (!this.snapshot.historical)
-      this.update({ items: this.live, hasOlder: this.liveHasMore })
+    this.live = next
+    this.update({ items: this.live })
   }
 
-  older = async () => {
-    if (this.snapshot.loadingPage || !this.snapshot.hasOlder) return
-    const cursor = this.snapshot.historical
-      ? this.historyCursor
-      : this.liveCursor
-    if (!cursor) {
-      this.update({
-        error: 'History has more items but no usable pagination cursor.',
-      })
-      return
-    }
-    await this.loadPage(cursor, [...this.cursors, cursor])
-  }
-  newer = async () => {
-    if (this.snapshot.loadingPage) return
-    if (this.cursors.length <= 1) {
-      this.latest()
-      return
-    }
-    const cursors = this.cursors.slice(0, -1)
-    await this.loadPage(cursors[cursors.length - 1], cursors)
-  }
-  latest = () => {
-    this.pageController?.abort()
-    this.cursors = []
+  /** The view reports whether it is following the bottom; data keeps updating either way. */
+  setFollowing = (following: boolean) => {
+    if (this.snapshot.historical === !following) return
     this.update({
-      historical: false,
-      items: this.live,
-      hasOlder: this.liveHasMore,
-      hasNewer: false,
-      newActivity: 0,
-      loadingPage: false,
+      historical: !following,
+      hasNewer: !following,
+      ...(following ? { newActivity: 0 } : {}),
     })
   }
 
-  private async loadPage(
-    after: string | undefined,
-    cursors: Array<string | undefined>
-  ) {
-    this.pageController?.abort()
+  /** Append earlier history to the same timeline; commit the cursor only after success. */
+  older = async () => {
+    if (
+      this.snapshot.loadingPage ||
+      (!this.snapshot.hasOlder && this.historyReady)
+    )
+      return
+    const observation = this.controller?.signal
+    if (
+      !observation ||
+      observation.aborted ||
+      this.snapshot.connection !== 'live'
+    )
+      return
     const controller = new AbortController()
     this.pageController = controller
-    this.update({ loadingPage: true, error: null })
+    const abort = () => controller.abort()
+    observation.addEventListener('abort', abort, { once: true })
+    this.update({ loadingPage: true, historyError: null })
     try {
-      const page = await this.transport().items(
+      const result = await readHistory(
+        this.transport(),
         this.descriptor.sessionId,
         this.descriptor.pageSize,
-        after,
+        this.history,
         controller.signal
       )
       if (controller.signal.aborted) return
-      if (page.has_more && (!page.last_id || page.last_id === after))
-        throw new Error('History returned a non-advancing pagination cursor.')
-      this.historyCursor = page.last_id
-      this.cursors = cursors
+      const ids = new Set(
+        this.live.filter((item) => item.id).map((item) => item.id)
+      )
+      // Retry can recover a final saved item whose stream stopped at a partial
+      // delta. Prefer that final record without overwriting newer live partials.
+      const recovered = new Map(
+        result.data
+          .filter((item) => item.id && finalStatuses.has(item.status ?? ''))
+          .map((item) => [item.id, item])
+      )
+      this.live = this.live.map((item) =>
+        !finalStatuses.has(item.status ?? '') && recovered.has(item.id)
+          ? recovered.get(item.id)!
+          : item
+      )
+      const older = [...result.data]
+        .reverse()
+        .filter((item) => !item.id || !ids.has(item.id))
+      this.live = [...older, ...this.live]
+      this.history = result.next
+      this.historyReady = true
       this.update({
-        items: [...page.data].reverse(),
-        historical: true,
-        hasOlder: page.has_more,
-        hasNewer: true,
+        items: this.live,
+        hasOlder: result.hasMore,
         loadingPage: false,
       })
     } catch (error) {
       if (!controller.signal.aborted)
-        this.update({ loadingPage: false, error: message(error) })
+        this.update({ loadingPage: false, historyError: message(error) })
+    } finally {
+      observation.removeEventListener('abort', abort)
     }
+  }
+
+  /** Retry a failed history load without disturbing the event stream. */
+  retryHistory = () => {
+    if (this.failedRefresh) {
+      this.failedRefresh.forEach((id) => this.scheduleRefresh(id))
+      return
+    }
+    if (!this.historyReady || this.snapshot.hasOlder) return this.older()
+    this.scheduleRefresh()
+  }
+
+  /** Compatibility for notebook callers; the continuous timeline no longer has newer pages. */
+  newer = async () => {
+    this.latest()
+  }
+  latest = () => {
+    this.setFollowing(true)
   }
 }
