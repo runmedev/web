@@ -732,6 +732,109 @@ describe("NotebookData.runCodeCell", () => {
     );
   });
 
+  it("reports a Jupyter execution as executing until the kernel replies", async () => {
+    const sockets: Array<{
+      sent: string[];
+      onopen: (() => void) | null;
+      onmessage: ((event: { data: string }) => void) | null;
+      close: () => void;
+    }> = [];
+    vi.stubGlobal(
+      "WebSocket",
+      class {
+        sent: string[] = [];
+        onopen: (() => void) | null = null;
+        onmessage: ((event: { data: string }) => void) | null = null;
+        onerror: (() => void) | null = null;
+        onclose: (() => void) | null = null;
+        constructor() {
+          sockets.push(this);
+        }
+        send(data: string) {
+          this.sent.push(data);
+        }
+        close() {}
+      },
+    );
+
+    const cell = create(parser_pb.CellSchema, {
+      refId: "cell-jupyter-executing",
+      kind: parser_pb.CellKind.CODE,
+      languageId: "jupyter",
+      outputs: [],
+      metadata: {
+        [RunmeMetadataKey.JupyterKernelID]: "kernel-1",
+        [RunmeMetadataKey.JupyterKernelName]: "analysis",
+      },
+      value: "print('hi')",
+    });
+    const model = new NotebookData({
+      notebook: create(parser_pb.NotebookSchema, { cells: [cell] }),
+      uri: "nb://test",
+      name: "test",
+      notebookStore: null,
+      loaded: true,
+    });
+    const cellData = model.getCell(cell.refId)!;
+
+    model.runCodeCell(cell);
+    // Jupyter runs never report a PID, so the model is the only signal.
+    expect(cellData.isExecuting()).toBe(true);
+    expect(
+      model.getCellSnapshot(cell.refId)?.metadata?.[RunmeMetadataKey.Pid],
+    ).toBeUndefined();
+
+    await waitForCondition(() => sockets.length > 0);
+    const socket = sockets[0];
+    socket.onopen?.();
+    const msgID = JSON.parse(socket.sent[0]).header.msg_id;
+    expect(cellData.isExecuting()).toBe(true);
+
+    socket.onmessage?.({
+      data: JSON.stringify({
+        msg_type: "execute_reply",
+        parent_header: { msg_id: msgID },
+        content: { status: "ok" },
+      }),
+    });
+    socket.onmessage?.({
+      data: JSON.stringify({
+        msg_type: "status",
+        parent_header: { msg_id: msgID },
+        content: { execution_state: "idle" },
+      }),
+    });
+
+    expect(
+      model.getCellSnapshot(cell.refId)?.metadata?.[RunmeMetadataKey.ExitCode],
+    ).toBe("0");
+    expect(cellData.isExecuting()).toBe(false);
+  });
+
+  it("does not report persisted running state as executing without a live run", () => {
+    const cell = create(parser_pb.CellSchema, {
+      refId: "cell-stale-running",
+      kind: parser_pb.CellKind.CODE,
+      languageId: "jupyter",
+      outputs: [],
+      metadata: {
+        [RunmeMetadataKey.LastRunID]: "run-before-reload",
+        [RunmeMetadataKey.ExecutionState]: RunmeExecutionState.Running,
+      },
+      value: "print('hi')",
+    });
+    const model = new NotebookData({
+      notebook: create(parser_pb.NotebookSchema, { cells: [cell] }),
+      uri: "nb://test",
+      name: "test",
+      notebookStore: null,
+      loaded: true,
+    });
+
+    expect(model.hasActiveExecution(cell.refId)).toBe(false);
+    expect(model.getCell(cell.refId)!.isExecuting()).toBe(false);
+  });
+
   it("blocks mutations and cancels active streams during lock release", async () => {
     const cell = create(parser_pb.CellSchema, {
       refId: "cell-cancel",
