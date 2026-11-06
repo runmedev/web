@@ -1,0 +1,25 @@
+{
+  "cells": [
+    {
+      "kind": 1,
+      "languageId": "markdown",
+      "value": "# Environment variables\n\nOpen **Environment** (the table icon) in the left navigation. Add `OPENAI_ORG_ID` and `OPENAI_PROJECT_ID` with your OpenAI organization and project IDs. Use **Edit** to change a value or **Delete** to remove it.\n\nValues are stored as strings under `runme.env.<NAME>` in this site's browser localStorage. They persist across reloads but are not synced with notebooks or Drive. Use **Refresh variables** after changing them in a cell. These are plain-text configuration values; use **Key Vault** for secrets. Run the cell below with **JS → browser**; sandbox JS and Python runners cannot directly read host browser storage.",
+      "refId": "environment-introduction",
+      "metadata": {}
+    },
+    {
+      "kind": 2,
+      "languageId": "javascript",
+      "value": "const headers = {\n  'OpenAI-Organization': localStorage.getItem('runme.env.OPENAI_ORG_ID'),\n  'OpenAI-Project': localStorage.getItem('runme.env.OPENAI_PROJECT_ID'),\n}\nif (!headers['OpenAI-Organization'] || !headers['OpenAI-Project']) {\n  throw new Error('Set OPENAI_ORG_ID and OPENAI_PROJECT_ID in Environment first.')\n}\nconsole.log(headers)",
+      "refId": "environment-openai-headers",
+      "metadata": { "runme.dev/runnerName": "appkernel-js" }
+    },
+    {
+      "kind": 1,
+      "languageId": "markdown",
+      "value": "Use these headers alongside your authorization header when making API requests. Environment does not automatically send variables to any API. Clearing this site's browser data deletes the variables; other Runme origins use separate storage.",
+      "refId": "environment-usage",
+      "metadata": {}
+    }
+  ]
+}
