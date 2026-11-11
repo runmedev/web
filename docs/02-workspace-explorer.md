@@ -33,7 +33,8 @@ It can show:
   notebook in a folder,
 - rename a notebook,
 - remove a mounted folder,
-- copy a notebook share link.
+- copy a notebook share link,
+- list the Google Drive revisions of a Drive-backed notebook.
 
 ## Canonical App Console entry points
 
@@ -53,6 +54,23 @@ explorer.removeFolder(uri)
 - `Local Notebooks` is always expected as a baseline workspace root.
 - Folder expansion is lazy; children are fetched when the folder opens.
 - Drive links may enqueue coordination work before a notebook becomes editable.
+
+## Explorer actions that run App Console snippets
+
+Some explorer menu items are shortcuts for App Console code. Choosing one opens
+the App Console, adds the snippet as a new history cell, and runs it. Your
+unsent draft in the console is left as it was, and you can copy the cell back
+into the draft to edit and re-run it.
+
+- **List Drive Revisions** (context menu of a Drive-backed file) runs:
+
+  ```js
+  await notebooks.open('local://file/<id>')
+  await notebookDiff.listDriveRevisions({ uri: 'local://file/<id>' })
+  ```
+
+  Pass a revision `id` from the result to `notebookDiff.diffDriveRevision(...)`
+  to compare it with the local copy.
 
 ## Key facts
 
