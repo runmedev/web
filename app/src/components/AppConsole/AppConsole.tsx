@@ -13,6 +13,8 @@ import { useWorkspace } from '../../contexts/WorkspaceContext'
 import { appState } from '../../lib/runtime/AppState'
 import { getAppConsoleData } from '../../lib/appConsole/appConsoleController'
 import { useAppConsoleSnapshot } from '../../lib/appConsole/useAppConsoleSnapshot'
+import type { AppConsoleExecutionHandle } from '../../lib/appConsole/AppConsoleData'
+import { appLogger } from '../../lib/logging/runtime'
 import { createAppJsGlobals } from '../../lib/runtime/appJsGlobals'
 import { JSKernel } from '../../lib/runtime/jsKernel'
 import {
@@ -406,6 +408,109 @@ export default function AppConsole({
     [appConsoleData, updateHistoryBrowseState]
   )
 
+  // Runs an execution already registered in the model (as the draft cell or as
+  // an external history cell) and records its outcome there.
+  const runExecution = useCallback(
+    async (execution: AppConsoleExecutionHandle) => {
+      const globals = createAppJsGlobals({
+        runme,
+        sendOutput: (data) =>
+          appConsoleData.appendStdout(execution.cellId, data),
+        resolveNotebookStore,
+        ensureFilesystemStore,
+        workspace: {
+          getItems,
+          addItem,
+          removeItem,
+        },
+        openNotebook: async (uri) => {
+          const result = await openNotebook(uri)
+          return result.localUri
+        },
+        focusNotebook: async (uri) => {
+          const notebook = getNotebookData(uri)
+          if (!notebook) {
+            throw new Error(
+              `Notebook ${uri} is not open. Call notebooks.open(reference) before notebooks.focus(reference).`
+            )
+          }
+          showDocument(uri, {
+            title: notebook.getName(),
+          })
+          setCurrentDoc(uri)
+        },
+        resolveNotebook: resolveNotebookData,
+        refreshNotebook: refreshReadOnlyNotebook,
+        requestNotebookWriteAccess: requestWriteAccess,
+        listNotebooks: () =>
+          openNotebooks.reduce<NotebookDataLike[]>((items, notebook) => {
+            const resolved = getNotebookData(notebook.uri)
+            if (resolved) {
+              items.push(resolved)
+            }
+            return items
+          }, []),
+        ensureAccessToken,
+        runnerSync: {
+          onUpdated: (runner) => {
+            updateRunner(
+              new Runner({
+                name: runner.name,
+                endpoint: runner.endpoint,
+                reconnect: runner.reconnect,
+                interceptors: [],
+              })
+            )
+          },
+          onDeleted: deleteRunner,
+          onDefaultSet: setDefaultRunner,
+        },
+      })
+
+      const kernel = new JSKernel({
+        globals,
+        hooks: {
+          onStdout: (data) =>
+            appConsoleData.appendStdout(execution.cellId, data),
+          onStderr: (data) =>
+            appConsoleData.appendStderr(execution.cellId, data),
+        },
+      })
+
+      try {
+        const { exitCode, result } = await kernel.run(execution.source)
+        appConsoleData.completeExecution(execution.cellId, {
+          exitCode,
+          result,
+        })
+      } catch (error) {
+        appConsoleData.failExecution(execution.cellId, {
+          message: String(error),
+        })
+      }
+    },
+    [
+      addItem,
+      appConsoleData,
+      deleteRunner,
+      ensureFilesystemStore,
+      getItems,
+      getNotebookData,
+      openNotebook,
+      openNotebooks,
+      refreshReadOnlyNotebook,
+      requestWriteAccess,
+      removeItem,
+      resolveNotebookData,
+      resolveNotebookStore,
+      runme,
+      setCurrentDoc,
+      showDocument,
+      setDefaultRunner,
+      updateRunner,
+    ]
+  )
+
   const executeCurrentCell = useCallback(async () => {
     const execution = appConsoleData.startDraftExecution()
     if (!execution) {
@@ -417,106 +522,51 @@ export default function AppConsole({
       draftBuffer: '',
     })
 
-    const globals = createAppJsGlobals({
-      runme,
-      sendOutput: (data) => appConsoleData.appendStdout(execution.cellId, data),
-      resolveNotebookStore,
-      ensureFilesystemStore,
-      workspace: {
-        getItems,
-        addItem,
-        removeItem,
-      },
-      openNotebook: async (uri) => {
-        const result = await openNotebook(uri)
-        return result.localUri
-      },
-      focusNotebook: async (uri) => {
-        const notebook = getNotebookData(uri)
-        if (!notebook) {
-          throw new Error(
-            `Notebook ${uri} is not open. Call notebooks.open(reference) before notebooks.focus(reference).`
-          )
-        }
-        showDocument(uri, {
-          title: notebook.getName(),
-        })
-        setCurrentDoc(uri)
-      },
-      resolveNotebook: resolveNotebookData,
-      refreshNotebook: refreshReadOnlyNotebook,
-      requestNotebookWriteAccess: requestWriteAccess,
-      listNotebooks: () =>
-        openNotebooks.reduce<NotebookDataLike[]>((items, notebook) => {
-          const resolved = getNotebookData(notebook.uri)
-          if (resolved) {
-            items.push(resolved)
+    await runExecution(execution)
+    const nextDraft = appConsoleData.getSnapshot().cells.at(-1)
+    pendingFocusCellIdRef.current =
+      nextDraft?.status === 'draft' ? nextDraft.id : null
+  }, [appConsoleData, runExecution, updateHistoryBrowseState])
+
+  // Drain run requests queued by `AppConsoleData.requestRun` (for example from
+  // Explorer menu items). The latest `runExecution` is read through a ref so the
+  // subscription is made once and never re-created when context values change.
+  const runExecutionRef = useRef(runExecution)
+  useEffect(() => {
+    runExecutionRef.current = runExecution
+  }, [runExecution])
+
+  useEffect(() => {
+    const drainRunRequests = async () => {
+      const sources = appConsoleData.takePendingRunRequests()
+      if (sources.length === 0) {
+        return
+      }
+      try {
+        // Insert into restored history rather than into the temporary history
+        // that starting an execution before hydration would switch to.
+        await appConsoleData.hydrate()
+        for (const source of sources) {
+          const execution = appConsoleData.startExternalExecution(source)
+          if (execution) {
+            void runExecutionRef.current(execution)
           }
-          return items
-        }, []),
-      ensureAccessToken,
-      runnerSync: {
-        onUpdated: (runner) => {
-          updateRunner(
-            new Runner({
-              name: runner.name,
-              endpoint: runner.endpoint,
-              reconnect: runner.reconnect,
-              interceptors: [],
-            })
-          )
-        },
-        onDeleted: deleteRunner,
-        onDefaultSet: setDefaultRunner,
-      },
-    })
-
-    const kernel = new JSKernel({
-      globals,
-      hooks: {
-        onStdout: (data) => appConsoleData.appendStdout(execution.cellId, data),
-        onStderr: (data) => appConsoleData.appendStderr(execution.cellId, data),
-      },
-    })
-
-    try {
-      const { exitCode, result } = await kernel.run(execution.source)
-      appConsoleData.completeExecution(execution.cellId, {
-        exitCode,
-        result,
-      })
-      const nextDraft = appConsoleData.getSnapshot().cells.at(-1)
-      pendingFocusCellIdRef.current =
-        nextDraft?.status === 'draft' ? nextDraft.id : null
-    } catch (error) {
-      appConsoleData.failExecution(execution.cellId, {
-        message: String(error),
-      })
-      const nextDraft = appConsoleData.getSnapshot().cells.at(-1)
-      pendingFocusCellIdRef.current =
-        nextDraft?.status === 'draft' ? nextDraft.id : null
+        }
+      } catch (error) {
+        appLogger.error('Failed to run App Console request', {
+          attrs: {
+            scope: 'app_console.run_request',
+            error: String(error),
+          },
+        })
+      }
     }
-  }, [
-    addItem,
-    appConsoleData,
-    deleteRunner,
-    ensureFilesystemStore,
-    getItems,
-    getNotebookData,
-    openNotebook,
-    openNotebooks,
-    refreshReadOnlyNotebook,
-    requestWriteAccess,
-    removeItem,
-    resolveNotebookData,
-    resolveNotebookStore,
-    runme,
-    setCurrentDoc,
-    showDocument,
-    setDefaultRunner,
-    updateHistoryBrowseState,
-    updateRunner,
-  ])
+
+    void drainRunRequests()
+    return appConsoleData.subscribeToRunRequests(() => {
+      void drainRunRequests()
+    })
+  }, [appConsoleData])
 
   const registerDraftEditor = useCallback(
     (editor: any, monaco: any) => {

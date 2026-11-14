@@ -2,6 +2,7 @@
 import { act, fireEvent, render, screen, waitFor } from '@testing-library/react'
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 
+import { buildListDriveRevisionsSnippet } from '../../lib/appConsole/snippets'
 import { appLogger } from '../../lib/logging/runtime'
 import { NotebookStoreItemType } from '../../storage/notebook'
 import { DriveCreateNotCommittedError } from '../../storage/drive'
@@ -31,6 +32,7 @@ const mocks = vi.hoisted(() => ({
     sync: vi.fn(),
   },
   openNotebookUpstreamDiff: vi.fn(),
+  createAndRun: vi.fn(),
   dragHandle: vi.fn(),
   treeEdit: vi.fn(),
   treeProps: null as any,
@@ -145,6 +147,10 @@ vi.mock('../../lib/toast', () => ({
   showToast: vi.fn(),
 }))
 
+vi.mock('../../lib/appConsole/useAppConsoleRunner', () => ({
+  useAppConsoleRunner: () => ({ createAndRun: mocks.createAndRun }),
+}))
+
 vi.mock('../../lib/notebookDiff/conflict', () => ({
   openNotebookUpstreamDiff: mocks.openNotebookUpstreamDiff,
 }))
@@ -232,6 +238,7 @@ describe('WorkspaceExplorer current document handling', () => {
     })
     mocks.store.sync.mockReset()
     mocks.openNotebookUpstreamDiff.mockReset()
+    mocks.createAndRun.mockReset()
     mocks.dragHandle.mockReset()
     mocks.openNotebookUpstreamDiff.mockResolvedValue(undefined)
     mocks.treeEdit.mockReset()
@@ -1841,5 +1848,90 @@ describe('WorkspaceExplorer current document handling', () => {
         'local://file/untitled'
       )
     })
+  })
+
+  it('runs a Drive revisions snippet in the App Console from a Drive-backed file context menu', async () => {
+    mocks.workspaceItems = ['local://folder/drive']
+    mocks.store.getMetadata.mockImplementation(async (uri: string) => {
+      if (uri === 'local://folder/drive') {
+        return {
+          uri,
+          name: 'Drive Root',
+          type: NotebookStoreItemType.Folder,
+          children: ['local://file/untitled'],
+          remoteUri: 'https://drive.google.com/drive/folders/drive-root',
+          parents: [],
+        }
+      }
+      if (uri === 'local://file/untitled') {
+        return {
+          uri,
+          name: 'untitled.json',
+          type: NotebookStoreItemType.File,
+          children: [],
+          remoteUri: 'https://drive.google.com/file/d/file123/view',
+          parents: ['local://folder/drive'],
+        }
+      }
+      return null
+    })
+
+    render(<WorkspaceExplorer />)
+
+    await screen.findByText('Drive Root')
+    fireEvent.click(screen.getAllByRole('button', { name: 'Collapse folder' })[0])
+    await waitFor(() => {
+      expect(screen.getByText('untitled.json')).toBeTruthy()
+    })
+
+    fireEvent.contextMenu(screen.getByText('untitled.json'))
+    fireEvent.click(
+      await screen.findByRole('button', { name: 'List Drive Revisions' })
+    )
+
+    expect(mocks.createAndRun).toHaveBeenCalledTimes(1)
+    expect(mocks.createAndRun).toHaveBeenCalledWith(
+      buildListDriveRevisionsSnippet('local://file/untitled')
+    )
+  })
+
+  it('hides the Drive revisions action for files without a Drive source', async () => {
+    mocks.workspaceItems = ['local://folder/local']
+    mocks.store.getMetadata.mockImplementation(async (uri: string) => {
+      if (uri === 'local://folder/local') {
+        return {
+          uri,
+          name: 'Local Root',
+          type: NotebookStoreItemType.Folder,
+          children: ['local://file/plain'],
+          parents: [],
+        }
+      }
+      if (uri === 'local://file/plain') {
+        return {
+          uri,
+          name: 'plain.json',
+          type: NotebookStoreItemType.File,
+          children: [],
+          parents: ['local://folder/local'],
+        }
+      }
+      return null
+    })
+
+    render(<WorkspaceExplorer />)
+
+    await screen.findByText('Local Root')
+    fireEvent.click(screen.getAllByRole('button', { name: 'Collapse folder' })[0])
+    await waitFor(() => {
+      expect(screen.getByText('plain.json')).toBeTruthy()
+    })
+
+    fireEvent.contextMenu(screen.getByText('plain.json'))
+    await screen.findByRole('button', { name: 'Rename' })
+
+    expect(
+      screen.queryByRole('button', { name: 'List Drive Revisions' })
+    ).toBeNull()
   })
 })
