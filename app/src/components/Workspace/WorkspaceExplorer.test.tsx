@@ -334,7 +334,7 @@ describe('WorkspaceExplorer current document handling', () => {
     expect(sync.disabled).toBe(false)
   })
 
-  it('keeps an explicitly mounted nested folder visible as a root', async () => {
+  it('shows both appearances of a nested mount and targets the clicked row for rename', async () => {
     mocks.workspaceItems = [
       'local://folder/local',
       'local://folder/root',
@@ -363,6 +363,7 @@ describe('WorkspaceExplorer current document handling', () => {
         return {
           uri,
           name: 'Nested mount',
+          remoteUri: 'https://drive.google.com/drive/folders/nested',
           type: NotebookStoreItemType.Folder,
           children: [],
           parents: ['local://folder/root'],
@@ -385,6 +386,14 @@ describe('WorkspaceExplorer current document handling', () => {
     expect(root.children[0].uri).toBe(shortcut.uri)
     expect(root.children[0].id).toBe(JSON.stringify([root.uri, shortcut.uri]))
     expect(shortcut.id).toBe(JSON.stringify([shortcut.uri]))
+
+    const [nestedLabel, shortcutLabel] = screen.getAllByText('Nested mount')
+    fireEvent.contextMenu(nestedLabel)
+    expect(screen.queryByRole('button', { name: 'Remove "Nested mount"' })).toBeNull()
+    fireEvent.click(screen.getByRole('button', { name: 'Rename' }))
+    await waitFor(() => expect(mocks.treeEdit).toHaveBeenCalledWith(root.children[0].id))
+    fireEvent.contextMenu(shortcutLabel)
+    expect(screen.getByRole('button', { name: 'Remove "Nested mount"' })).toBeTruthy()
   })
 
   it('retains and logs workspace roots whose local metadata is missing', async () => {
