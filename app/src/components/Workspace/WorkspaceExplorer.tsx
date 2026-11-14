@@ -21,7 +21,9 @@ import useResizeObserver from "use-resize-observer";
 
 import { GoogleDrivePickerButton } from "./GoogleDrivePickerButton";
 import {
-  filterMountedWorkspaceFolderChildren,
+  workspaceRowId,
+  workspaceRows,
+  type WorkspaceRow,
   type WorkspaceFolderCandidate,
 } from "./workspaceTree";
 import { useWorkspace } from "../../contexts/WorkspaceContext";
@@ -79,6 +81,8 @@ import {
 } from "../../storage/excalidraw";
 
 interface ContextMenuState {
+  rowId: string;
+  parentRowId: string;
   uri: string;
   name: string;
   type: TreeNodeType;
@@ -90,7 +94,6 @@ interface ContextMenuState {
 type TreeNodeType = NotebookStoreItemType | "placeholder";
 
 type TreeNode = {
-  id: string;
   uri: string;
   name: string;
   type: TreeNodeType;
@@ -101,7 +104,6 @@ type TreeNode = {
 
 function createPlaceholderNode(uri: string, label: string): TreeNode {
   return {
-    id: `${uri}::placeholder::${label}`,
     uri,
     name: label,
     type: "placeholder",
@@ -177,7 +179,6 @@ function createFolderNode(
   options?: { remoteUri?: string; parentUri?: string },
 ): TreeNode {
   return {
-    id: uri,
     uri,
     name,
     type: NotebookStoreItemType.Folder,
@@ -196,7 +197,6 @@ function createFileNode(
   options?: { parentUri?: string },
 ): TreeNode {
   return {
-    id: item.uri,
     uri: item.uri,
     name: item.name,
     type: NotebookStoreItemType.File,
@@ -358,7 +358,7 @@ function EditableTreeNode({
   node,
   style,
 }: {
-  node: NodeApi<TreeNode, unknown>;
+  node: NodeApi<WorkspaceRow<TreeNode>>;
   style: CSSProperties;
 }) {
   const inputRef = useRef<HTMLInputElement>(null);
@@ -459,19 +459,20 @@ export function WorkspaceExplorer() {
     [],
   );
 
-  const treeRef = useRef<TreeApi<TreeNode> | undefined>(undefined);
+  const treeRef = useRef<TreeApi<WorkspaceRow<TreeNode>> | undefined>(undefined);
   const { ref: containerRef, width = 0, height = 0 } = useResizeObserver<HTMLDivElement>();
 
   const [treeNodes, setTreeNodes] = useState<TreeNode[]>([]);
   // The scheduler reads current tree state through refs without restarting its timer.
-  const treeNodesRef = useRef(treeNodes);
-  treeNodesRef.current = treeNodes;
+  const rows = useMemo(() => workspaceRows(treeNodes), [treeNodes]);
+  const rowsRef = useRef(rows);
+  rowsRef.current = rows;
   const listingRequests = useRef(new Map<string, number>());
   const syncing = useSyncExternalStore(explorerSync.subscribe, explorerSync.getSnapshot);
   const contextMenuRef = useRef<HTMLDivElement>(null);
   const [contextMenu, setContextMenu] = useState<ContextMenuState | null>(null);
   const [errorMessage, setErrorMessage] = useState<string | null>(null);
-  const [pendingEditId, setPendingEditId] = useState<string | null>(null);
+  const [pendingEdit, setPendingEdit] = useState<string | { uri: string } | null>(null);
 
   const workspaceUris = useMemo(() => getItems(), [getItems]);
   // Menu actions and wrapped labels determine its height. Measure the rendered
@@ -743,23 +744,27 @@ export function WorkspaceExplorer() {
   ]);
 
   useEffect(() => {
-    if (!pendingEditId) {
+    if (!pendingEdit) {
       return;
     }
     const tree = treeRef.current;
     if (!tree) {
       return;
     }
-    const node = tree.get(pendingEditId);
+    const node = typeof pendingEdit === "string"
+      ? tree.get(pendingEdit)
+      : tree.visibleNodes.find((row) =>
+          row.data.type !== "placeholder" && row.data.uri === pendingEdit.uri
+        );
     if (!node) {
       return;
     }
     node.openParents();
     node.parent?.open();
-    void tree.edit(pendingEditId).finally(() => {
-      setPendingEditId(null);
+    void tree.edit(node.id).finally(() => {
+      setPendingEdit(null);
     });
-  }, [pendingEditId, treeNodes]);
+  }, [pendingEdit, treeNodes]);
 
   useEffect(() => {
     if (!store || typeof window === "undefined") {
@@ -889,21 +894,9 @@ export function WorkspaceExplorer() {
           }
         }
 
-        const visibleChildNodes = filterMountedWorkspaceFolderChildren(
-          childNodes,
-          new Set(workspaceUris),
-        );
-        const nodes =
-          visibleChildNodes.length > 0
-            ? visibleChildNodes
-            : [
-                createPlaceholderNode(
-                  uri,
-                  childNodes.length > 0
-                    ? "Mounted folders are shown as roots"
-                    : "Folder is empty",
-                ),
-              ];
+        const nodes = childNodes.length
+          ? childNodes
+          : [createPlaceholderNode(uri, "Folder is empty")];
 
         if (listingRequests.current.get(uri) !== request) return;
         setTreeNodes((prev) =>
@@ -947,7 +940,7 @@ export function WorkspaceExplorer() {
         );
       }
     },
-    [fsStore, store, workspaceUris],
+    [fsStore, store],
   );
 
   const refreshFolder = useCallback(async (
@@ -969,14 +962,14 @@ export function WorkspaceExplorer() {
     return explorerSync.connect({
       folders: () => {
         const uris: string[] = [];
-        const visit = (nodes: TreeNode[], roots = false) => {
+        const visit = (nodes: WorkspaceRow<TreeNode>[], roots = false) => {
           for (const node of nodes) {
             if (node.type !== NotebookStoreItemType.Folder) continue;
             if (roots || treeRef.current?.get(node.id)?.isOpen) uris.push(node.uri);
             if (treeRef.current?.get(node.id)?.isOpen) visit(node.children ?? []);
           }
         };
-        visit(treeNodesRef.current, true);
+        visit(rowsRef.current, true);
         return uris;
       },
       refresh: (uri) => refreshFolderRef.current(uri),
@@ -1041,7 +1034,7 @@ export function WorkspaceExplorer() {
   );
 
   const handleCreateExcalidrawDocument = useCallback(
-    async (folderUri: string) => {
+    async (folderUri: string, folderRowId: string) => {
       if (!store) {
         return;
       }
@@ -1058,7 +1051,7 @@ export function WorkspaceExplorer() {
             "Excalidraw diagrams can only be created in Google Drive folders.",
           );
         }
-        treeRef.current?.open(folderUri);
+        treeRef.current?.open(folderRowId);
         const timestamp = formatShortTimestamp(new Date());
         const name = `untitled-${timestamp}.excalidraw`;
         const created = await store.createContent(
@@ -1068,7 +1061,7 @@ export function WorkspaceExplorer() {
           EXCALIDRAW_MIME_TYPE,
         );
         await fetchChildren(folderUri);
-        setPendingEditId(created.uri);
+        setPendingEdit(workspaceRowId(folderRowId, created.uri));
         setErrorMessage(null);
         showToast({
           message: remoteFolderUri
@@ -1096,6 +1089,7 @@ export function WorkspaceExplorer() {
   const handleCreateDocument = useCallback(
     async (
       folderUri: string,
+      folderRowId: string,
       format: NotebookFileFormat = 'runme-operation-log'
     ) => {
       const targetStore = storeForUri(folderUri, store, fsStore)
@@ -1103,7 +1097,7 @@ export function WorkspaceExplorer() {
         return;
       }
       try {
-        treeRef.current?.open(folderUri)
+        treeRef.current?.open(folderRowId)
         const timestamp = formatShortTimestamp(new Date())
         const name = `untitled-${timestamp}${notebookFileExtension(format)}`
         const newItem = await targetStore.create(folderUri, name)
@@ -1123,7 +1117,7 @@ export function WorkspaceExplorer() {
           }
         }
         await fetchChildren(folderUri);
-        setPendingEditId(newItem.uri);
+        setPendingEdit(workspaceRowId(folderRowId, newItem.uri));
         setErrorMessage(null);
       } catch (error) {
         console.error('Failed to create notebook', error)
@@ -1139,19 +1133,19 @@ export function WorkspaceExplorer() {
   );
 
   const handleCreateDriveFolder = useCallback(
-    async (folderUri: string) => {
+    async (folderUri: string, folderRowId: string) => {
       if (!store) {
         return;
       }
 
       try {
-        treeRef.current?.open(folderUri);
+        treeRef.current?.open(folderRowId);
         const newFolder = await store.createFolder(
           folderUri,
           DEFAULT_DRIVE_FOLDER_NAME,
         );
         await fetchChildren(folderUri);
-        setPendingEditId(newFolder.uri);
+        setPendingEdit(workspaceRowId(folderRowId, newFolder.uri));
         setErrorMessage(null);
         showToast({ message: "Google Drive folder created", tone: "success" });
       } catch (error) {
@@ -1218,7 +1212,7 @@ export function WorkspaceExplorer() {
           )
         }
 
-        treeRef.current?.open(menu.parentUri)
+        treeRef.current?.open(menu.parentRowId)
         await fetchChildren(menu.parentUri)
         setErrorMessage(null)
         showToast({
@@ -1243,17 +1237,21 @@ export function WorkspaceExplorer() {
     [ensureAccessToken, fetchChildren, fsStore, store]
   )
 
-  const handleStartRename = useCallback((uri: string) => {
+  const handleStartRename = useCallback((rowId: string) => {
     setContextMenu(null);
-    setPendingEditId(uri);
+    setPendingEdit(rowId);
   }, []);
 
   useEffect(() => {
-    appState.setWorkspaceRenameHandler(handleStartRename);
+    appState.setWorkspaceRenameHandler((uri) => {
+      // Console callers know the URI and may request rename before the row loads.
+      setContextMenu(null);
+      setPendingEdit({ uri });
+    });
     return () => {
       appState.setWorkspaceRenameHandler(null);
     };
-  }, [handleStartRename]);
+  }, []);
 
 function formatShortTimestamp(date: Date): string {
   const pad = (value: number) => value.toString().padStart(2, "0");
@@ -1266,7 +1264,7 @@ function formatShortTimestamp(date: Date): string {
 }
 
   const renderNode = useCallback(
-    ({ node, style, dragHandle }: NodeRendererProps<TreeNode>) => {
+    ({ node, style, dragHandle }: NodeRendererProps<WorkspaceRow<TreeNode>>) => {
       if (node.isEditing) {
         return <EditableTreeNode node={node} style={style} />;
       }
@@ -1281,6 +1279,8 @@ function formatShortTimestamp(date: Date): string {
           return;
         }
         setContextMenu({
+          rowId: node.id,
+          parentRowId: node.parent?.id ?? "",
           uri: data.uri,
           name: data.name,
           type: data.type,
@@ -1402,7 +1402,7 @@ function formatShortTimestamp(date: Date): string {
     }: {
       id: string;
       name: string;
-      node: NodeApi<TreeNode, unknown>;
+      node: NodeApi<WorkspaceRow<TreeNode>>;
     }) => {
       void id;
       const target = node.data;
@@ -1463,13 +1463,12 @@ function formatShortTimestamp(date: Date): string {
         const parentUri = node.parent?.data.uri;
         if (parentUri) {
           await fetchChildren(parentUri);
-        } else {
-          setTreeNodes((prev) =>
-            updateNodeMetadata(prev, target.uri, { name: nextName }),
-          );
         }
+        setTreeNodes((prev) =>
+          updateNodeMetadata(prev, target.uri, { name: renamedItem.name }),
+        );
         setErrorMessage(null);
-        setPendingEditId(null);
+        setPendingEdit(null);
       } catch (error) {
         const message = renameErrorMessage(error);
         appLogger.error("Failed to rename workspace item", {
@@ -1494,8 +1493,8 @@ function formatShortTimestamp(date: Date): string {
       dragNodes,
       parentNode,
     }: {
-      dragNodes: NodeApi<TreeNode>[];
-      parentNode: NodeApi<TreeNode> | null;
+      dragNodes: NodeApi<WorkspaceRow<TreeNode>>[];
+      parentNode: NodeApi<WorkspaceRow<TreeNode>> | null;
     }) => {
       if (
         !store ||
@@ -1507,7 +1506,9 @@ function formatShortTimestamp(date: Date): string {
       }
 
       const destinationUri = parentNode.data.uri;
-      const movableNodes = dragNodes.filter(
+      // Multi-selection can contain two appearances of the same Drive item.
+      const uniqueNodes = new Map(dragNodes.map((node) => [node.data.uri, node]));
+      const movableNodes = Array.from(uniqueNodes.values()).filter(
         (node) =>
           isMovableDriveNode(node.data) &&
           node.data.parentUri !== destinationUri,
@@ -1534,7 +1535,7 @@ function formatShortTimestamp(date: Date): string {
             parentUri: destinationUri,
           });
         }
-        treeRef.current?.open(destinationUri);
+        treeRef.current?.open(parentNode.id);
         setErrorMessage(null);
         showToast({
           message:
@@ -1806,7 +1807,7 @@ function formatShortTimestamp(date: Date): string {
         >
           <Tree
             ref={treeRef}
-            data={treeNodes}
+            data={rows}
             openByDefault={false}
             width={Math.max(0, width)}
             height={height}
@@ -1892,7 +1893,7 @@ function formatShortTimestamp(date: Date): string {
                 onMouseDown={(event) => event.stopPropagation()}
                 onClick={(event) => {
                   event.stopPropagation();
-                  handleStartRename(contextMenu.uri);
+                  handleStartRename(contextMenu.rowId);
                 }}
               >
                 Rename
@@ -1922,7 +1923,7 @@ function formatShortTimestamp(date: Date): string {
                   event.stopPropagation();
                   setContextMenu(null);
                   if (contextMenu.parentUri) {
-                    void handleCreateDocument(contextMenu.parentUri)
+                    void handleCreateDocument(contextMenu.parentUri, contextMenu.parentRowId)
                   } else {
                     console.warn(
                       "Cannot create document: no parent folder for",
@@ -1943,6 +1944,7 @@ function formatShortTimestamp(date: Date): string {
                   if (contextMenu.parentUri) {
                     void handleCreateDocument(
                       contextMenu.parentUri,
+                      contextMenu.parentRowId,
                       'ipynb'
                     )
                   }
@@ -1960,6 +1962,7 @@ function formatShortTimestamp(date: Date): string {
                   if (contextMenu.parentUri) {
                     void handleCreateExcalidrawDocument(
                       contextMenu.parentUri,
+                      contextMenu.parentRowId,
                     );
                   } else {
                     console.warn(
@@ -1981,6 +1984,7 @@ function formatShortTimestamp(date: Date): string {
                   if (contextMenu.parentUri) {
                     void handleCreateDocument(
                       contextMenu.parentUri,
+                      contextMenu.parentRowId,
                       'runme-json'
                     )
                   }
@@ -2093,7 +2097,7 @@ function formatShortTimestamp(date: Date): string {
                   onMouseDown={(event) => event.stopPropagation()}
                   onClick={(event) => {
                     event.stopPropagation();
-                    handleStartRename(contextMenu.uri);
+                    handleStartRename(contextMenu.rowId);
                   }}
                 >
                   Rename
@@ -2106,7 +2110,7 @@ function formatShortTimestamp(date: Date): string {
                 onClick={(event) => {
                   event.stopPropagation()
                   setContextMenu(null)
-                  void handleCreateDocument(contextMenu.uri)
+                  void handleCreateDocument(contextMenu.uri, contextMenu.rowId)
                 }}
               >
                 New Notebook (.runme)
@@ -2120,6 +2124,7 @@ function formatShortTimestamp(date: Date): string {
                   setContextMenu(null)
                   void handleCreateDocument(
                     contextMenu.uri,
+                    contextMenu.rowId,
                     'ipynb'
                   )
                 }}
@@ -2136,6 +2141,7 @@ function formatShortTimestamp(date: Date): string {
                     setContextMenu(null);
                     void handleCreateExcalidrawDocument(
                       contextMenu.uri,
+                    contextMenu.rowId,
                     );
                   }}
                 >
@@ -2150,7 +2156,7 @@ function formatShortTimestamp(date: Date): string {
                   onClick={(event) => {
                     event.stopPropagation();
                     setContextMenu(null);
-                    void handleCreateDriveFolder(contextMenu.uri);
+                    void handleCreateDriveFolder(contextMenu.uri, contextMenu.rowId);
                   }}
                 >
                   New Google Drive Folder
@@ -2165,6 +2171,7 @@ function formatShortTimestamp(date: Date): string {
                   setContextMenu(null)
                   void handleCreateDocument(
                     contextMenu.uri,
+                    contextMenu.rowId,
                     'runme-json'
                   )
                 }}
@@ -2185,7 +2192,7 @@ function formatShortTimestamp(date: Date): string {
                   Copy Share Link
                 </button>
               )}
-              {contextMenu.uri !== LOCAL_FOLDER_URI && (
+              {!contextMenu.parentUri && contextMenu.uri !== LOCAL_FOLDER_URI && (
                 <button
                   type="button"
                   className="ctx-menu-item text-red-600"

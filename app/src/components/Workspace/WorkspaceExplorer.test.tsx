@@ -44,7 +44,8 @@ vi.mock('react-arborist', async () => {
     mocks.treeProps = props
     React.useImperativeHandle(ref, () => ({
       get: (id: string) => ({
-        data: { uri: id, type: 'folder' },
+        id,
+        data: { uri: JSON.parse(id).at(-1), type: 'folder' },
         isOpen: true,
         openParents: vi.fn(),
         parent: { open: vi.fn() },
@@ -56,6 +57,7 @@ vi.mock('react-arborist', async () => {
     const renderItems = (items: any[], parent: any = null): React.ReactNode =>
       (items ?? []).map((item: any) => {
         const node = {
+          id: item.id,
           data: item,
           isEditing: false,
           isOpen: true,
@@ -272,7 +274,7 @@ describe('WorkspaceExplorer current document handling', () => {
     const sync = screen.getByRole('button', { name: 'Sync folders' })
     fireEvent.click(sync)
     await screen.findByText('old.runme')
-    act(() => mocks.treeProps.onToggle('local://folder/child'))
+    act(() => mocks.treeProps.onToggle(JSON.stringify(['local://folder/root', 'local://folder/child'])))
     await screen.findByText('grandchild.runme')
     files = ['local://file/new']
     renamed = true
@@ -309,7 +311,7 @@ describe('WorkspaceExplorer current document handling', () => {
     }))
     render(<WorkspaceExplorer />)
     await screen.findByText('Cached Drive folder')
-    act(() => mocks.treeProps.onToggle('local://folder/root'))
+    act(() => mocks.treeProps.onToggle(JSON.stringify(['local://folder/root'])))
     await screen.findByText('cached.runme')
     expect(mocks.store.sync).toHaveBeenCalledWith('local://folder/root', { recursive: false })
     await act(async () => rejectSync(new Error('Drive authorization expired')))
@@ -332,7 +334,7 @@ describe('WorkspaceExplorer current document handling', () => {
     expect(sync.disabled).toBe(false)
   })
 
-  it('keeps an explicitly mounted nested folder visible as a root', async () => {
+  it('shows both appearances of a nested mount and targets the clicked row for rename', async () => {
     mocks.workspaceItems = [
       'local://folder/local',
       'local://folder/root',
@@ -361,6 +363,7 @@ describe('WorkspaceExplorer current document handling', () => {
         return {
           uri,
           name: 'Nested mount',
+          remoteUri: 'https://drive.google.com/drive/folders/nested',
           type: NotebookStoreItemType.Folder,
           children: [],
           parents: ['local://folder/root'],
@@ -376,10 +379,21 @@ describe('WorkspaceExplorer current document handling', () => {
     expect(screen.getAllByText('Nested mount')).toHaveLength(1)
 
     act(() => {
-      mocks.treeProps.onToggle('local://folder/root')
+      mocks.treeProps.onToggle(JSON.stringify(['local://folder/root']))
     })
-    await screen.findByText('Mounted folders are shown as roots')
-    expect(screen.getAllByText('Nested mount')).toHaveLength(1)
+    await waitFor(() => expect(screen.getAllByText('Nested mount')).toHaveLength(2))
+    const [, root, shortcut] = mocks.treeProps.data
+    expect(root.children[0].uri).toBe(shortcut.uri)
+    expect(root.children[0].id).toBe(JSON.stringify([root.uri, shortcut.uri]))
+    expect(shortcut.id).toBe(JSON.stringify([shortcut.uri]))
+
+    const [nestedLabel, shortcutLabel] = screen.getAllByText('Nested mount')
+    fireEvent.contextMenu(nestedLabel)
+    expect(screen.queryByRole('button', { name: 'Remove "Nested mount"' })).toBeNull()
+    fireEvent.click(screen.getByRole('button', { name: 'Rename' }))
+    await waitFor(() => expect(mocks.treeEdit).toHaveBeenCalledWith(root.children[0].id))
+    fireEvent.contextMenu(shortcutLabel)
+    expect(screen.getByRole('button', { name: 'Remove "Nested mount"' })).toBeTruthy()
   })
 
   it('retains and logs workspace roots whose local metadata is missing', async () => {
@@ -494,7 +508,7 @@ describe('WorkspaceExplorer current document handling', () => {
 
     blockFolderLoad = true
     act(() => {
-      mocks.treeProps.onToggle('local://folder/drive')
+      mocks.treeProps.onToggle(JSON.stringify(['local://folder/drive']))
     })
     await waitFor(() => expect(folderLoadStarted).toHaveBeenCalled())
 
@@ -579,7 +593,7 @@ describe('WorkspaceExplorer current document handling', () => {
 
     blockFolderLoad = true
     act(() => {
-      mocks.treeProps.onToggle('local://folder/drive')
+      mocks.treeProps.onToggle(JSON.stringify(['local://folder/drive']))
     })
     await waitFor(() => expect(folderLoadStarted).toHaveBeenCalled())
 
@@ -644,7 +658,7 @@ describe('WorkspaceExplorer current document handling', () => {
     })
     expect(window.prompt).not.toHaveBeenCalled()
     await waitFor(() => {
-      expect(mocks.treeEdit).toHaveBeenCalledWith('local://folder/new')
+      expect(mocks.treeEdit).toHaveBeenCalledWith(JSON.stringify(['local://folder/drive', 'local://folder/new']))
     })
   })
 
@@ -1214,7 +1228,7 @@ describe('WorkspaceExplorer current document handling', () => {
       )
     })
     await waitFor(() => {
-      expect(mocks.treeEdit).toHaveBeenCalledWith('local://file/ipynb')
+      expect(mocks.treeEdit).toHaveBeenCalledWith(JSON.stringify(['local://folder/drive', 'local://file/ipynb']))
     })
   })
 
@@ -1278,7 +1292,7 @@ describe('WorkspaceExplorer current document handling', () => {
     )
 
     await waitFor(() => {
-      expect(mocks.treeEdit).toHaveBeenCalledWith('local://folder/drive')
+      expect(mocks.treeEdit).toHaveBeenCalledWith(JSON.stringify(['local://folder/drive']))
     })
   })
 
@@ -1766,13 +1780,14 @@ describe('WorkspaceExplorer current document handling', () => {
     await act(async () => {
       await mocks.treeProps.onMove({
         dragIds: ['local://file/notebook'],
-        dragNodes: [dragNode],
+        dragNodes: [dragNode, { ...dragNode, id: 'another-row' }],
         parentId: 'local://folder/reports',
         parentNode: destinationNode,
         index: 0,
       })
     })
 
+    expect(mocks.store.move).toHaveBeenCalledTimes(1)
     expect(mocks.store.move).toHaveBeenCalledWith(
       'local://file/notebook',
       'local://folder/reports'
