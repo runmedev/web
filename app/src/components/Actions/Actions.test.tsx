@@ -948,7 +948,9 @@ describe('Actions tabs', () => {
     })
     expect(screen.queryByText('Google Drive comment threads')).toBeNull()
 
-    const reply = screen.getByPlaceholderText('Reply or add others with @')
+    const reply = await screen.findByPlaceholderText(
+      'Reply or add others with @'
+    )
     fireEvent.change(reply, { target: { value: 'Operation-log reply' } })
     fireEvent.click(screen.getByRole('button', { name: 'Reply' }))
     await waitFor(() => {
