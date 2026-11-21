@@ -207,7 +207,7 @@ try {
   await inputPage.keyboard.insertText('# Changed after opening comment draft')
   await submit('Markdown selection comment')
   await inputPage.waitForFunction(
-    `document.body.textContent.includes('Outdated anchor')`
+    `document.body.textContent.includes('has changed since you commented')`
   )
   browser(
     'screenshot',
@@ -298,7 +298,7 @@ try {
   check(
     'Later Markdown edit does not retarget the comment',
     await evaluate(
-      `return document.body.textContent.includes('Changed after opening comment draft') && document.body.textContent.includes('Outdated anchor');`
+      `return document.body.textContent.includes('Changed after opening comment draft') && document.body.textContent.includes('has changed since you commented');`
     )
   )
   browser(

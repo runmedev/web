@@ -105,7 +105,7 @@ describe('NotebookCommentsPanel', () => {
       onReply,
     })
     expect(screen.getAllByText('Native feedback')).toHaveLength(1)
-    expect(screen.getByText('Outdated anchors / Deleted cells')).toBeTruthy()
+    expect(screen.getByText('Earlier versions')).toBeTruthy()
     expect(screen.getByText('View original selection')).toBeTruthy()
     const input = screen.getByPlaceholderText('Reply or add others with @')
     fireEvent.change(input, { target: { value: 'Please clarify' } })

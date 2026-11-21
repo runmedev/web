@@ -412,7 +412,7 @@ export function NotebookCommentsPanel({
                     (itemIndex === 0 ||
                       !isUnlocatedItem(panelItems[itemIndex - 1]!)) && (
                       <h3 className="mb-2 font-medium">
-                        Outdated anchors / Deleted cells
+                        Earlier versions
                       </h3>
                     )}
                   {item.threads.map((thread) => (
@@ -705,7 +705,7 @@ function CommentMessage({
         ? [historicalQuote(entry)]
         : []
     })
-    .join('')
+    .join(' … ')
   return (
     <div
       className={separated ? 'border-t border-nb-border pt-3' : ''}
