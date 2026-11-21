@@ -23,6 +23,12 @@ export function readInstructionsForAIAgents(origin: string): string {
 
 This Runme instance is served from ${runmeOrigin}.
 
+## Preserve the user's rendered view
+
+Assume the user is reading or interacting with Runme while you work. Change their view only when they explicitly ask for that visible action. Preserve their active notebook, cell, scroll position, selection, focus, open panels, and source or rendered mode.
+
+Read, edit, execute, and verify against the target notebook URI in the background. Report results or a notebook link in chat. If a task requires changing the user's view and they have not requested that change, ask first.
+
 ## Use WebMCP
 
 - Inspect existing in-app browser tabs before opening another tab.
@@ -30,7 +36,7 @@ This Runme instance is served from ${runmeOrigin}.
 - Claim the selected tab and use its page-provided WebMCP tools for notebook reads, edits, and execution.
 - Use the \`ExecuteCode\` WebMCP tool to run AppKernel JavaScript. Print values explicitly with \`console.log(...)\`.
 - Read notebooks with \`notebooks.get({ uri: notebookUri })\` and access cells through \`doc.notebook.cells\`. There is no \`notebooks.read\` method. Call \`await notebooks.help()\` before generating notebook code when the API is uncertain.
-- When the user identifies a Google Drive folder by name, call the direct read-only \`searchDriveItems\` tool with \`itemType: "folder"\`. If exactly one intended result remains, pass its ID or URI to \`mountDriveFolder\`; do not guess among duplicate names. Use \`listDriveFolder\` to inspect a known candidate without mounting it.
+- When the user identifies a Google Drive folder by name, call the direct read-only \`searchDriveItems\` tool with \`itemType: "folder"\`. Mount the matching folder with \`mountDriveFolder\` only when the user asks to add it to the workspace; do not guess among duplicate names. Use \`listDriveFolder\` to inspect a known candidate without mounting it.
 - When the user explicitly requests a new notebook in Google Drive, call the direct \`createDriveNotebook\` WebMCP tool. It creates the Drive file and its Runme mirror as one retry-safe operation without a local staging notebook.
 - Use the \`comments\` library inside \`ExecuteCode\` for notebook comments and anchors. It writes \`.runme\` comments to the operation log and Drive-backed comments through Drive; Runme does not expose a comment-specific WebMCP tool.
 - Use the \`ui\` library inside \`ExecuteCode\` to create rendered Markdown selections and open Runme's selection context menu. Do not invent CSS selectors or dispatch arbitrary DOM events.
@@ -67,7 +73,7 @@ while result.status is queued, running, or cancel_requested:
 
 ## Use tour mode for UI guidance
 
-When a user asks how to perform a task in the Runme interface, where a control is, or what a visible control does, use tour mode whenever a registered target can answer the question. Do not respond with prose alone when the relevant control can be highlighted.
+Answer how-to and location questions in chat by default. Start a tour or highlight a control only when the user explicitly asks for on-screen guidance.
 
 1. Discover the supported semantic targets with \`ExecuteCode\`:
 
@@ -195,20 +201,17 @@ To identify the app build loaded in that tab, use \`console.log(await app.getVer
 - Reuse the existing outer Runme Browser tab and its WebMCP capability. Never create or navigate an extra browser tab, Google Drive tab, or hidden browser context to follow a supplied notebook reference.
 - Keep that outer Runme page in place. Do not navigate it to the notebook URL; pass the supplied reference to the Runme notebook API inside \`ExecuteCode\`.
 - Use \`await notebooks.open(reference)\` to load a notebook or start a Drive import. This adds the notebook to Runme without changing the notebook the user is viewing.
-- The words **open**, **show**, **view**, **display**, and **focus** are explicit requests to change the visible notebook. For every such request, call \`await notebooks.show(reference)\`; it opens or imports the reference and visibly focuses the resulting local notebook before returning.
-- Navigating the outer Browser tab to a Runme gateway URL does not prove that its inner notebook is visibly focused. Use \`notebooks.focus(...)\` and do not infer focus from the URL, a successful import, or a successful background read.
-- Do not focus a notebook for background reads, edits, or execution when the user did not ask to see or open it.
-- \`notebooks.focus(reference)\` selects an already-open local notebook and does not load it. A Drive reference must finish importing before it can be focused.
-- \`notebooks.show(reference)\` is the one-step visible-open helper. Avoid it for background reads, edits, and execution because the user may be interacting with another notebook.
+- If the user asks to see a notebook in Runme (for example, "open this notebook for me"), call \`await notebooks.show(reference)\`. It loads the notebook and focuses it. A request such as "open the report and summarize it" calls for a background read.
+- For a background read, use the URI returned by \`notebooks.open(reference)\`:
 
 \`\`\`js
 const opened = await notebooks.open(notebookUri)
-
-// Equivalent two-step form when visible focus should move:
-await notebooks.focus(opened.localUri || opened.opened)
-
-// Preferred one-step form for an explicit open/show/view request:
-await notebooks.show(notebookUri)
+if (opened.localUri) {
+  const doc = await notebooks.get({ uri: opened.localUri })
+  console.log(doc.notebook.cells)
+} else {
+  console.log(opened.status) // Drive import is still pending.
+}
 \`\`\`
 
 ## Enumerate runners through ExecuteCode
@@ -278,9 +281,7 @@ If the user's notebook reference is ambiguous, ask which notebook to use before 
 
 ## Exercise rendered Markdown selection
 
-Use the semantic \`ui\` sandbox library when a test or demonstration needs a
-real browser \`Selection\` over rendered Markdown. Bind the exact active
-notebook URI and canonical cell \`refId\`; never query the DOM or construct CSS
+Use the semantic \`ui\` sandbox library for a rendered selection in the user's session only when they request that visible interaction. Use an isolated test session for automated selection tests. Bind the exact active notebook URI and canonical cell \`refId\`; never query the DOM or construct CSS
 selectors yourself.
 
 \`\`\`js

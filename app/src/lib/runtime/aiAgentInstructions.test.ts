@@ -80,12 +80,8 @@ describe('readInstructionsForAIAgents', () => {
     expect(instructions).toContain('There is no `notebooks.read` method')
     expect(instructions).toContain('await notebooks.help()')
     expect(instructions).toContain('notebooks.open(reference)')
-    expect(instructions).toContain('notebooks.focus(opened.localUri')
     expect(instructions).toContain(
       'without changing the notebook the user is viewing'
-    )
-    expect(instructions).toContain(
-      '`notebooks.show(reference)` is the one-step visible-open helper'
     )
     expect(instructions).toContain('opaque canonical identifier')
     expect(instructions).toContain('IPYNB `cell.id`')
@@ -104,12 +100,12 @@ describe('readInstructionsForAIAgents', () => {
     expect(instructions).toContain('synchronized or remotely persisted')
   })
 
-  it('directs agents to use tour mode for UI guidance', () => {
+  it('reserves tour mode for requested on-screen guidance', () => {
     const instructions = readInstructionsForAIAgents('https://runme.example')
 
     expect(instructions).toContain('Use tour mode for UI guidance')
     expect(instructions).toContain(
-      'Do not respond with prose alone when the relevant control can be highlighted'
+      'Start a tour or highlight a control only when the user explicitly asks for on-screen guidance'
     )
     expect(instructions).toContain(
       'console.log(JSON.stringify(await tour.listTargets()))'
@@ -164,18 +160,13 @@ describe('readInstructionsForAIAgents', () => {
     )
     expect(instructions).toContain('do not search for the notebook by name')
     expect(instructions).toContain(
-      'The words **open**, **show**, **view**, **display**, and **focus** are explicit requests'
+      'Change their view only when they explicitly ask for that visible action'
     )
+    expect(instructions).toContain('call `await notebooks.show(reference)`')
     expect(instructions).toContain(
-      'call `await notebooks.show(reference)`'
+      '"open the report and summarize it" calls for a background read'
     )
-    expect(instructions).toContain(
-      'Navigating the outer Browser tab to a Runme gateway URL does not prove'
-    )
-    expect(instructions).toContain(
-      'Do not focus a notebook for background reads, edits, or execution'
-    )
-    expect(instructions).toContain('await notebooks.show(notebookUri)')
+    expect(instructions).toContain('notebooks.get({ uri: opened.localUri })')
   })
 
   it('enumerates runners through ExecuteCode instead of the DOM', () => {
