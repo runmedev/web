@@ -25,6 +25,7 @@ import {
   type MouseEvent,
 } from 'react'
 
+import OpenNotebookLink from './OpenNotebookLink'
 import NotebookOutlinePanel from './NotebookOutlinePanel'
 import WorkspaceExplorer from '../Workspace/WorkspaceExplorer'
 import DocumentationExplorer from '../Documentation/DocumentationExplorer'
@@ -516,6 +517,7 @@ export function SidePanelToolbar() {
           <Bars3BottomLeftIcon className="h-5 w-5" />
           <span className={tooltipBase}>Outline</span>
         </button>
+        <OpenNotebookLink />
         <button
           type="button"
           data-tour-id="left-nav.comments"

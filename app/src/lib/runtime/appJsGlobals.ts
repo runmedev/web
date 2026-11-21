@@ -355,8 +355,8 @@ function canonicalizeDriveUri(uri: string): string | null {
   }
   const item = parseDriveItem(uri)
   return item.type === NotebookStoreItemType.Folder
-    ? driveFolderUrl(item.id)
-    : driveFileUrl(item.id)
+    ? driveFolderUrl(item.id, item.resourceKey)
+    : driveFileUrl(item.id, item.resourceKey)
 }
 
 function deriveTitleFromUri(uri: string): string {
@@ -1102,6 +1102,9 @@ export function createAppJsGlobals({
       if (topic === 'attach') {
         return 'notebooks.attach(source, options: { target: { uri }, folderUri?, mode?, title?, altText?, expectedRevision?, operationId? }): Promise<{ uri, cell, resource, uploadedResource? }>. Attaches a Drive file, HTTPS URL, or browser File/Blob as a linked-resource cell.'
       }
+      if (topic === 'normalizeLink') {
+        return 'await notebooks.normalizeLink(text) returns the notebook URI from a pasted link.'
+      }
       if (topic === 'resolve') {
         return 'notebooks.resolve(reference?): Promise<NotebookReferenceInfo>. Accepts a local URI, Drive URL, Runme share URL, Markdown link, or notebook target and returns title, localUri, remoteUri, shareUrl, and markdownLink.'
       }
@@ -1130,6 +1133,7 @@ export function createAppJsGlobals({
         '- notebooks.appendCell({ target?, at?, kind, languageId?, value?, metadata?, execute?, reason? })',
         '- notebooks.embed(source, options?)',
         '- notebooks.attach(source, { target, folderUri?, mode?, title?, altText?, expectedRevision?, operationId? })',
+        '- notebooks.normalizeLink(text)',
         '- notebooks.resolve(reference?)',
         '- notebooks.open(reference?)',
         '- notebooks.focus(reference?)',
@@ -1181,6 +1185,7 @@ export function createAppJsGlobals({
     outputLink: outputLinkForRuntime,
     embed: embedImageForRuntime,
     attach: attachResourceForRuntime,
+    normalizeLink: normalizeNotebookReferenceUri,
     resolve: resolveNotebookReference,
     open: openNotebookReference,
     focus: focusNotebookReference,

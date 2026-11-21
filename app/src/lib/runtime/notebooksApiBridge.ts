@@ -7,6 +7,8 @@ import {
   makeJsonSafe,
 } from './runmeConsole'
 
+import { normalizeNotebookReferenceUri } from '../shareLinks'
+
 export type NotebooksApiBridgeRequest = {
   method: string
   args?: unknown[]
@@ -25,6 +27,7 @@ export const SANDBOX_NOTEBOOKS_API_METHODS = [
   'notebooks.execute',
   'notebooks.refresh',
   'notebooks.requestWriteAccess',
+  'notebooks.normalizeLink',
   'notebooks.resolve',
   'notebooks.open',
   'notebooks.focus',
@@ -140,6 +143,8 @@ export function createNotebooksApiBridgeServer({
               args[0] as Parameters<NotebooksApi['requestWriteAccess']>[0]
             )
           )
+        case 'notebooks.normalizeLink':
+          return normalizeNotebookReferenceUri(args[0] as string)
         case 'notebooks.resolve':
           return callJsonSafe(() =>
             requireReferenceMethod(notebooksApi, 'resolve')(args[0])
