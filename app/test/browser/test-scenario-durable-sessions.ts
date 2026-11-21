@@ -206,7 +206,7 @@ try {
   // Edit through Monaco and verify the existing autosave path still works.
   await page
     .locator('#markdown-cell-session-second')
-    .getByRole('button', { name: 'Edit Markdown' })
+    .getByRole('button', { name: 'Edit Markdown', exact: true })
     .click()
   const editor = page
     .locator('#markdown-action-session-second textarea')

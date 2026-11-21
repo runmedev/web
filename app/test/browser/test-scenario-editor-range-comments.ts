@@ -151,7 +151,7 @@ try {
 
   await inputPage
     .locator('#markdown-cell-editor-range-1')
-    .getByRole('button', { name: 'Edit Markdown' })
+    .getByRole('button', { name: 'Edit Markdown', exact: true })
     .click()
   await inputPage.locator(markdownInput).first().waitFor({ state: 'visible' })
   await inputPage.locator(markdownInput).focus()
@@ -331,10 +331,18 @@ try {
     (await inputPage.evaluate(() => window.getSelection()?.toString())) ===
       'Changed' && (await rendered.isVisible())
   )
+  // Starting a drag inside selected text drags the selection itself. Clear
+  // the word selection with a click before exercising a fresh drag.
+  await inputPage.mouse.click(box.x + box.width + 4, box.y)
   await inputPage.mouse.move(box.x + 1, box.y)
   await inputPage.mouse.down()
   await inputPage.mouse.move(box.x + box.width - 1, box.y, { steps: 12 })
   await inputPage.mouse.up()
+  check(
+    'Dragging across the word selects its rendered text',
+    (await inputPage.evaluate(() => window.getSelection()?.toString())) ===
+      'Changed'
+  )
   await inputPage.mouse.click(box.x + box.width / 2, box.y, { button: 'right' })
   check(
     'Right-click keeps the rendered selection visible to the browser',
@@ -351,7 +359,7 @@ try {
     .waitFor({ state: 'visible' })
   await inputPage
     .locator('#markdown-cell-editor-range-1')
-    .getByRole('button', { name: 'Edit Markdown' })
+    .getByRole('button', { name: 'Edit Markdown', exact: true })
     .click()
   await inputPage.locator(markdownInput).first().waitFor({ state: 'visible' })
   await inputPage
