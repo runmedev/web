@@ -508,29 +508,54 @@ beforeEach(() => {
 describe('Actions tabs', () => {
   it('toggles agent widget source and render modes without executing or unmounting output', () => {
     const cell = create(parser_pb.CellSchema, {
-      refId: 'widget-cell', kind: parser_pb.CellKind.CODE, languageId: 'javascript', value: 'agents.monitor("sess_test")',
-      outputs: [create(parser_pb.CellOutputSchema, { items: [create(parser_pb.CellOutputItemSchema, {
-        mime: 'application/vnd.runme.agent-monitor+json',
-        data: new TextEncoder().encode(JSON.stringify({version: 1, id: 'saved-widget', sessionId: 'sess_test', pageSize: 50})),
-      })] })],
+      refId: 'widget-cell',
+      kind: parser_pb.CellKind.CODE,
+      languageId: 'javascript',
+      value: 'agents.monitor("sess_test")',
+      outputs: [
+        create(parser_pb.CellOutputSchema, {
+          items: [
+            create(parser_pb.CellOutputItemSchema, {
+              mime: 'application/vnd.runme.agent-monitor+json',
+              data: new TextEncoder().encode(
+                JSON.stringify({
+                  version: 1,
+                  id: 'saved-widget',
+                  sessionId: 'sess_test',
+                  pageSize: 50,
+                })
+              ),
+            }),
+          ],
+        }),
+      ],
     })
     const stub = new StubCellData(cell)
     stub.getRunnerName = () => APPKERNEL_RUNNER_NAME
-    const view = render(<Action cellData={stub as unknown as CellData} docUri="local://file/widget" isFirst={false} />)
-    const editor = view.container.querySelector('[data-cell-focus-role="editor"]') as HTMLElement
-    const output = view.container.querySelector('#widget-output-widget-cell') as HTMLElement
+    const view = render(
+      <Action
+        cellData={stub as unknown as CellData}
+        docUri="local://file/widget"
+        isFirst={false}
+      />
+    )
+    const editor = view.container.querySelector(
+      '[data-cell-focus-role="editor"]'
+    ) as HTMLElement
+    const output = view.container.querySelector(
+      '#widget-output-widget-cell'
+    ) as HTMLElement
     expect(editor.hidden).toBe(true)
     const mounted = screen.getByTestId('agent-monitor')
-    fireEvent.click(screen.getByRole('button', {name: /^Edit$/}))
+    fireEvent.click(screen.getByRole('button', { name: /^Edit$/ }))
     expect(editor.hidden).toBe(false)
     expect(output.hidden).toBe(true)
     expect(screen.getByTestId('agent-monitor')).toBe(mounted)
-    fireEvent.click(screen.getByRole('button', {name: /^Render$/}))
+    fireEvent.click(screen.getByRole('button', { name: /^Render$/ }))
     expect(output.hidden).toBe(false)
     expect(stub.run).not.toHaveBeenCalled()
     view.unmount()
   })
-
 
   it.each([
     ['url', true, true, true],
@@ -542,28 +567,45 @@ describe('Actions tabs', () => {
     async (source, focus, explicitNavigation, shouldFocus) => {
       const statusUri = 'status://drive-link'
       if (explicitNavigation)
-        window.history.replaceState(null, '', '/?doc=https%3A%2F%2Fdrive.google.com%2Ffile%2Fd%2Fshared%2Fview')
+        window.history.replaceState(
+          null,
+          '',
+          '/?doc=https%3A%2F%2Fdrive.google.com%2Ffile%2Fd%2Fshared%2Fview'
+        )
       contextMocks.currentDoc = VERSION_INFO_DOCUMENT_URI
       contextMocks.workspaceDocuments = [
         { uri: VERSION_INFO_DOCUMENT_URI, title: 'Version Information' },
         { uri: statusUri, title: 'Drive Link Status' },
       ]
-      const snapshot = vi.spyOn(driveLinkCoordinator, 'getSnapshot').mockReturnValue({
-        intents: [{
-          id: 'new-link',
-          remoteUri: 'https://drive.google.com/file/d/shared/view',
-          action: 'open_shared_file', source, focus, status: 'waiting_for_auth',
-          createdAt: '2026-09-17T00:00:00Z',
-          updatedAt: '2026-09-17T00:00:00Z', retryCount: 0,
-        }],
-        authBlocked: true, lastErrorMessage: null,
-      })
+      const snapshot = vi
+        .spyOn(driveLinkCoordinator, 'getSnapshot')
+        .mockReturnValue({
+          intents: [
+            {
+              id: 'new-link',
+              remoteUri: 'https://drive.google.com/file/d/shared/view',
+              action: 'open_shared_file',
+              source,
+              focus,
+              status: 'waiting_for_auth',
+              createdAt: '2026-09-17T00:00:00Z',
+              updatedAt: '2026-09-17T00:00:00Z',
+              retryCount: 0,
+            },
+          ],
+          authBlocked: true,
+          lastErrorMessage: null,
+        })
       try {
         const view = render(<Actions />)
         const statusTab = screen.getByRole('tab', { name: 'Drive Link Status' })
-        const previousTab = screen.getByRole('tab', { name: 'Version Information' })
+        const previousTab = screen.getByRole('tab', {
+          name: 'Version Information',
+        })
         await waitFor(() =>
-          expect(statusTab.getAttribute('aria-selected')).toBe(String(shouldFocus))
+          expect(statusTab.getAttribute('aria-selected')).toBe(
+            String(shouldFocus)
+          )
         )
         // A pending intent must not override a subsequent deliberate tab switch.
         fireEvent.mouseDown(previousTab, { button: 0, ctrlKey: false })
@@ -1131,7 +1173,9 @@ describe('Actions tabs', () => {
         )
       } else {
         if (surface === 'markdown-source')
-          fireEvent.doubleClick(await screen.findByTestId('markdown-rendered'))
+          fireEvent.click(
+            await screen.findByRole('button', { name: 'Edit Markdown' })
+          )
         fireEvent.click(
           await screen.findByRole('button', {
             name: 'Mock editor selection comment',
@@ -2922,10 +2966,14 @@ describe('Actions tabs', () => {
 
   it('renders the Pin Release flow as its own workspace tab', () => {
     contextMocks.currentDoc = 'app://pin-release'
-    contextMocks.workspaceDocuments = [{ uri: 'app://pin-release', title: 'Pin Release' }]
+    contextMocks.workspaceDocuments = [
+      { uri: 'app://pin-release', title: 'Pin Release' },
+    ]
     render(<Actions />)
     expect(screen.getByRole('tab', { name: 'Pin Release' })).toBeTruthy()
-    expect(screen.getByRole('button', { name: /Choose another release/ })).toBeTruthy()
+    expect(
+      screen.getByRole('button', { name: /Choose another release/ })
+    ).toBeTruthy()
     expect(screen.queryByText('Recovery and rollback')).toBeNull()
   })
 
@@ -3871,6 +3919,29 @@ describe('Action component', () => {
     expect(screen.queryByRole('button', { name: 'Add Comment' })).toBeNull()
   })
 
+  it('starts a cell comment on an output reference', () => {
+    const cell = create(parser_pb.CellSchema, {
+      refId: 'reference-comment',
+      kind: parser_pb.CellKind.MARKUP,
+      languageId: 'runme-reference',
+      value: '<a href="#cell=x">Result</a>',
+    })
+    const onStartComment = vi.fn()
+    render(
+      <Action
+        cellData={new StubCellData(cell) as unknown as CellData}
+        isFirst={false}
+        commentsAvailable
+        onStartComment={onStartComment}
+      />
+    )
+    fireEvent.click(screen.getByRole('button', { name: 'Add comment' }))
+    expect(onStartComment).toHaveBeenCalledWith({
+      type: 'cell',
+      cellId: 'reference-comment',
+    })
+  })
+
   it('starts a rendered-selection comment from the markdown context menu', () => {
     const cell = create(parser_pb.CellSchema, {
       refId: 'cell-md-selection-context-comment',
@@ -3913,10 +3984,17 @@ describe('Action component', () => {
     selection.removeAllRanges()
     selection.addRange(range)
 
+    const rightMouseDown = createEvent.mouseDown(
+      screen.getByTestId('markdown-rendered'),
+      { button: 2 }
+    )
+    fireEvent(screen.getByTestId('markdown-rendered'), rightMouseDown)
+    expect(rightMouseDown.defaultPrevented).toBe(true)
     fireEvent.contextMenu(screen.getByTestId('markdown-rendered'), {
       clientX: 40,
       clientY: 20,
     })
+    expect(selection.toString()).toBe('migration guide')
     const commentSelection = screen.getByRole('button', {
       name: 'Comment on selected text',
     })

@@ -134,6 +134,13 @@ export function OutputReferenceCell({
               '<a href="#cell=…&amp;version=operation%3A…&amp;output_item=0.0">Result</a>'
             }
           />
+          <button
+            type="button"
+            className="mt-1 rounded-nb-sm border border-nb-border px-2 py-1 text-xs text-nb-text-muted hover:bg-nb-surface-2 focus-visible:outline focus-visible:outline-nb-accent"
+            onClick={() => setEditing(false)}
+          >
+            Show rendered output
+          </button>
           {children}
         </>
       ) : (

@@ -2,6 +2,51 @@ import type { LocatedAnchor } from '../lib/commentAnchorMapping'
 import { isLocated } from '../lib/commentAnchorMapping'
 import { useId } from 'react'
 
+/** Coalesce contiguous pieces of one selection while retaining distinct locations. */
+function groupAdjacentLocations(locations: LocatedAnchor[]): LocatedAnchor[] {
+  const groups: LocatedAnchor[] = []
+  for (const entry of locations) {
+    const previous = groups[groups.length - 1]
+    const a = previous?.anchor
+    const b = entry.anchor
+    if (
+      previous &&
+      a?.kind === 'cell' &&
+      b.kind === 'cell' &&
+      a.range &&
+      b.range &&
+      !previous.side &&
+      !entry.side &&
+      a.cell_id === b.cell_id &&
+      a.selection_surface === 'rendered-markdown' &&
+      b.selection_surface === 'rendered-markdown' &&
+      JSON.stringify(a.version) === JSON.stringify(b.version) &&
+      previous.source === entry.source &&
+      previous.location.status === entry.location.status &&
+      'start' in previous.location &&
+      'start' in entry.location &&
+      a.range.end_index <= b.range.start_index &&
+      b.range.start_index - a.range.end_index <= 16 &&
+      previous.source !== undefined &&
+      /^[\s*_`~\[\]()!#>-]*$/.test(
+        Array.from(previous.source)
+          .slice(a.range.end_index, b.range.start_index)
+          .join('')
+      ) &&
+      previous.location.end <= entry.location.start &&
+      entry.location.start - previous.location.end ===
+        b.range.start_index - a.range.end_index
+    ) {
+      groups[groups.length - 1] = {
+        ...previous,
+        anchor: { ...a, range: { ...a.range, end_index: b.range.end_index } },
+        location: { ...previous.location, end: entry.location.end },
+      }
+    } else groups.push(entry)
+  }
+  return groups
+}
+
 /** One conversation can expose several independent locations and historical contexts. */
 export function CommentAnchorLocations({
   locations,
@@ -17,7 +62,7 @@ export function CommentAnchorLocations({
       id={`comment-anchor-locations-${id}`}
       className="my-2 space-y-2 text-xs"
     >
-      {locations.map((entry, index) => {
+      {groupAdjacentLocations(locations).map((entry, index) => {
         const anchor = entry.anchor
         const version =
           anchor.version.kind === 'revision'

@@ -149,7 +149,10 @@ try {
   )
   await submit('Code selection comment')
 
-  await inputPage.locator('#markdown-rendered-editor-range-1').dblclick()
+  await inputPage
+    .locator('#markdown-cell-editor-range-1')
+    .getByRole('button', { name: 'Edit Markdown' })
+    .click()
   await inputPage.locator(markdownInput).first().waitFor({ state: 'visible' })
   await inputPage.locator(markdownInput).focus()
   for (const key of [
@@ -322,11 +325,22 @@ try {
     const rect = range.getBoundingClientRect()
     return { x: rect.x, y: rect.y + rect.height / 2, width: rect.width }
   })
+  await inputPage.mouse.dblclick(box.x + box.width / 2, box.y)
+  check(
+    'Double-click selects a rendered word without opening the editor',
+    (await inputPage.evaluate(() => window.getSelection()?.toString())) ===
+      'Changed' && (await rendered.isVisible())
+  )
   await inputPage.mouse.move(box.x + 1, box.y)
   await inputPage.mouse.down()
   await inputPage.mouse.move(box.x + box.width - 1, box.y, { steps: 12 })
   await inputPage.mouse.up()
   await inputPage.mouse.click(box.x + box.width / 2, box.y, { button: 'right' })
+  check(
+    'Right-click keeps the rendered selection visible to the browser',
+    (await inputPage.evaluate(() => window.getSelection()?.toString())) ===
+      'Changed'
+  )
   await inputPage
     .getByRole('button', { name: 'Comment on selected text', exact: true })
     .click()
@@ -335,7 +349,10 @@ try {
   await inputPage
     .getByText('Rendered heading selection comment', { exact: true })
     .waitFor({ state: 'visible' })
-  await rendered.dblclick()
+  await inputPage
+    .locator('#markdown-cell-editor-range-1')
+    .getByRole('button', { name: 'Edit Markdown' })
+    .click()
   await inputPage.locator(markdownInput).first().waitFor({ state: 'visible' })
   await inputPage
     .getByText('Rendered heading selection comment', { exact: true })

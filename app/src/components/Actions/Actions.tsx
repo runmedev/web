@@ -1665,7 +1665,16 @@ export function Action({
             <PlusIcon width={10} height={10} />
           </button>
         </div>
-        <div id={`reference-body-${cell.refId}`} className="min-w-0 flex-1">
+        <div
+          id={`reference-body-${cell.refId}`}
+          className="relative min-w-0 flex-1"
+        >
+          <CellCommentButton
+            count={commentCount}
+            available={commentsAvailable}
+            onClick={handleStartComment}
+            className={`absolute right-10 top-2 z-10 h-6 w-6 ${cellCommentVisibilityClass}`}
+          />
           <OutputReferenceCell
             cell={cell}
             store={store}
@@ -4537,7 +4546,8 @@ function renderWorkspaceDocument({
 
   if (isOidcStatusUri(document.uri)) return <OidcStatusTab />
 
-  if (document.uri === PIN_RELEASE_DOCUMENT_URI) return <ReleaseRecoveryControls />
+  if (document.uri === PIN_RELEASE_DOCUMENT_URI)
+    return <ReleaseRecoveryControls />
 
   if (isVersionInfoUri(document.uri)) {
     return <VersionInfoTab />
