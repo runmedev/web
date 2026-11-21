@@ -1,58 +1,61 @@
+import { renderedSelectionQuote } from '../lib/markdown/sourceCommentProjection'
 import type { LocatedAnchor } from '../lib/commentAnchorMapping'
 import { isLocated } from '../lib/commentAnchorMapping'
 import { useId } from 'react'
 
-/** Coalesce contiguous pieces of one selection while retaining distinct locations. */
-function groupAdjacentLocations(locations: LocatedAnchor[]): LocatedAnchor[] {
-  const groups: LocatedAnchor[] = []
+/** Older comments can contain several fragments for the same historical cell.
+ * Share one disclosure without inferring which fragments were selected together.
+ */
+function historicalGroups(locations: LocatedAnchor[]): LocatedAnchor[][] {
+  const groups: LocatedAnchor[][] = []
+  const outdated = new Map<string, LocatedAnchor[]>()
   for (const entry of locations) {
-    const previous = groups[groups.length - 1]
-    const a = previous?.anchor
-    const b = entry.anchor
+    const { anchor } = entry
     if (
-      previous &&
-      a?.kind === 'cell' &&
-      b.kind === 'cell' &&
-      a.range &&
-      b.range &&
-      !previous.side &&
-      !entry.side &&
-      a.cell_id === b.cell_id &&
-      a.selection_surface === 'rendered-markdown' &&
-      b.selection_surface === 'rendered-markdown' &&
-      JSON.stringify(a.version) === JSON.stringify(b.version) &&
-      previous.source === entry.source &&
-      previous.location.status === entry.location.status &&
-      'start' in previous.location &&
-      'start' in entry.location &&
-      a.range.end_index <= b.range.start_index &&
-      b.range.start_index - a.range.end_index <= 16 &&
-      previous.source !== undefined &&
-      /^[\s*_`~\[\]()!#>-]*$/.test(
-        Array.from(previous.source)
-          .slice(a.range.end_index, b.range.start_index)
-          .join('')
-      ) &&
-      previous.location.end <= entry.location.start &&
-      entry.location.start - previous.location.end ===
-        b.range.start_index - a.range.end_index
+      entry.location.status === 'outdated' &&
+      anchor.kind === 'cell' &&
+      anchor.range &&
+      !entry.side
     ) {
-      groups[groups.length - 1] = {
-        ...previous,
-        anchor: { ...a, range: { ...a.range, end_index: b.range.end_index } },
-        location: { ...previous.location, end: entry.location.end },
+      const key = JSON.stringify([
+        anchor.cell_id,
+        anchor.version.kind,
+        anchor.version.kind === 'revision'
+          ? anchor.version.revision_id
+          : anchor.version.op_id,
+      ])
+      const group = outdated.get(key)
+      if (group) group.push(entry)
+      else {
+        const group = [entry]
+        outdated.set(key, group)
+        groups.push(group)
       }
-    } else groups.push(entry)
+    } else groups.push([entry])
   }
   return groups
+}
+
+/** Resolve historical excerpts in the surface in which the selection was made. */
+export function historicalQuote({ anchor, source }: LocatedAnchor) {
+  if (source === undefined || anchor.kind !== 'cell' || !anchor.range)
+    return source
+  const { start_index, end_index } = anchor.range
+  if (anchor.selection_surface === 'rendered-markdown') {
+    const quote = renderedSelectionQuote(source, start_index, end_index)
+    if (quote !== undefined) return quote
+  }
+  return Array.from(source).slice(start_index, end_index).join('')
 }
 
 /** One conversation can expose several independent locations and historical contexts. */
 export function CommentAnchorLocations({
   locations,
   onSelect,
+  cellLabels,
 }: {
   locations: LocatedAnchor[]
+  cellLabels?: ReadonlyMap<string, string>
   onSelect?: (location: LocatedAnchor) => void
 }) {
   const id = useId()
@@ -62,20 +65,23 @@ export function CommentAnchorLocations({
       id={`comment-anchor-locations-${id}`}
       className="my-2 space-y-2 text-xs"
     >
-      {groupAdjacentLocations(locations).map((entry, index) => {
+      {historicalGroups(locations).map((group, index) => {
+        const entry = group[0]!
         const anchor = entry.anchor
         const version =
           anchor.version.kind === 'revision'
             ? anchor.version.revision_id
             : anchor.version.op_id
-        const quote =
-          entry.source === undefined
-            ? undefined
-            : anchor.kind === 'cell' && anchor.range
-              ? Array.from(entry.source)
-                  .slice(anchor.range.start_index, anchor.range.end_index)
-                  .join('')
-              : entry.source
+        const changedSelection =
+          anchor.kind === 'cell' &&
+          anchor.range &&
+          !entry.side &&
+          entry.location.status === 'outdated'
+        const cellLabel =
+          anchor.kind === 'cell'
+            ? (cellLabels?.get(anchor.cell_id) ??
+              `Cell ${anchor.cell_id.slice(0, 8)}`)
+            : ''
         const status =
           entry.location.status === 'deleted'
             ? 'Deleted cell'
@@ -91,40 +97,53 @@ export function CommentAnchorLocations({
             id={`comment-anchor-location-${id}-${index}`}
             key={`${index}-${entry.side}`}
           >
-            <button
-              type="button"
-              className="max-w-full break-words text-left text-nb-accent disabled:text-nb-text-muted"
-              title={
-                anchor.kind === 'cell' ? `Cell ${anchor.cell_id}` : undefined
-              }
-              disabled={
-                !onSelect ||
-                (!isLocated(entry.location) &&
-                  !(anchor.kind === 'cell' && anchor.output_item))
-              }
-              onClick={(event) => {
-                event.stopPropagation()
-                onSelect?.(entry)
-              }}
-            >
-              {entry.side
-                ? `${entry.side === 'base' ? 'Start' : 'End'} · `
-                : ''}
-              {anchor.kind === 'cell' && anchor.output_item
-                ? 'View saved output'
-                : status}
-              {anchor.kind === 'cell'
-                ? ` · Cell ${anchor.cell_id.slice(0, 8)}`
-                : ''}
-            </button>
-            <details>
+            {changedSelection ? (
+              <p>{cellLabel} has changed since you commented.</p>
+            ) : (
+              <button
+                type="button"
+                className="max-w-full break-words text-left text-nb-accent disabled:text-nb-text-muted"
+                title={
+                  anchor.kind === 'cell' ? `Cell ${anchor.cell_id}` : undefined
+                }
+                disabled={
+                  !onSelect ||
+                  (!isLocated(entry.location) &&
+                    !(anchor.kind === 'cell' && anchor.output_item))
+                }
+                onClick={(event) => {
+                  event.stopPropagation()
+                  onSelect?.(entry)
+                }}
+              >
+                {entry.side
+                  ? `${entry.side === 'base' ? 'Start' : 'End'} · `
+                  : ''}
+                {anchor.kind === 'cell' && anchor.output_item
+                  ? 'View saved output'
+                  : status}
+                {anchor.kind === 'cell'
+                  ? ` · Cell ${anchor.cell_id.slice(0, 8)}`
+                  : ''}
+              </button>
+            )}
+            <details onClick={(event) => event.stopPropagation()}>
               <summary className="cursor-pointer text-nb-text-muted">
-                Inspect historical context
+                {changedSelection
+                  ? group.length === 1
+                    ? 'View original selection'
+                    : 'View original passages'
+                  : 'Inspect historical context'}
               </summary>
               <p className="break-all">Revision: {version}</p>
-              <blockquote className="max-h-32 overflow-auto whitespace-pre-wrap border-l-2 border-nb-accent pl-2">
-                {quote ?? 'Historical source unavailable'}
-              </blockquote>
+              {group.map((fragment, fragmentIndex) => (
+                <blockquote
+                  key={fragmentIndex}
+                  className="max-h-32 overflow-auto whitespace-pre-wrap border-l-2 border-nb-accent pl-2"
+                >
+                  {historicalQuote(fragment) ?? 'Historical source unavailable'}
+                </blockquote>
+              ))}
               {entry.source !== undefined &&
                 anchor.kind === 'cell' &&
                 anchor.range && (

@@ -1,6 +1,9 @@
 import { useEffect, useMemo, useRef, useState } from 'react'
 import { commentAttributionLabel } from '../lib/commentAttribution'
-import { CommentAnchorLocations } from './CommentAnchorLocations'
+import {
+  CommentAnchorLocations,
+  historicalQuote,
+} from './CommentAnchorLocations'
 import { isLocated, type LocatedAnchor } from '../lib/commentAnchorMapping'
 
 import type {
@@ -416,6 +419,7 @@ export function NotebookCommentsPanel({
                     <CommentAnchorLocations
                       key={thread.comment.id}
                       locations={thread.locations ?? []}
+                      cellLabels={cellLabels}
                       onSelect={(entry) => {
                         if (entry.anchor.kind === 'cell') {
                           setActiveThreadKey(item.key)
@@ -689,21 +693,18 @@ function CommentMessage({
     ({ anchor }) => anchor.kind === 'cell' && anchor.range
   )
   const selectedQuote = thread.locations
-    ?.flatMap(({ anchor, source }) =>
-      firstRange?.anchor.kind === 'cell' &&
-      anchor.kind === 'cell' &&
-      anchor.range &&
-      anchor.cell_id === firstRange.anchor.cell_id &&
-      JSON.stringify(anchor.version) ===
-        JSON.stringify(firstRange.anchor.version) &&
-      source !== undefined
-        ? [
-            Array.from(source)
-              .slice(anchor.range.start_index, anchor.range.end_index)
-              .join(''),
-          ]
+    ?.flatMap((entry) => {
+      const { anchor, source } = entry
+      return firstRange?.anchor.kind === 'cell' &&
+        anchor.kind === 'cell' &&
+        anchor.range &&
+        anchor.cell_id === firstRange.anchor.cell_id &&
+        JSON.stringify(anchor.version) ===
+          JSON.stringify(firstRange.anchor.version) &&
+        source !== undefined
+        ? [historicalQuote(entry)]
         : []
-    )
+    })
     .join('')
   return (
     <div

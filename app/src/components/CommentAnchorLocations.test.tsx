@@ -1,5 +1,5 @@
 import { fireEvent, render, screen } from '@testing-library/react'
-import { describe, expect, it, vi } from 'vitest'
+import { describe, expect, it } from 'vitest'
 import { CommentAnchorLocations } from './CommentAnchorLocations'
 import type { LocatedAnchor } from '../lib/commentAnchorMapping'
 
@@ -19,28 +19,24 @@ function location(start: number, end: number, cell = 'cell-1'): LocatedAnchor {
 }
 
 describe('CommentAnchorLocations', () => {
-  it('combines adjacent pieces of a selection and navigates to the whole range', () => {
-    const select = vi.fn()
-    render(
-      <CommentAnchorLocations
-        locations={[location(0, 6), location(8, 13)]}
-        onSelect={select}
-      />
+  it('shows one historical disclosure for outdated fragments and keeps their excerpts', () => {
+    const locations = [location(0, 5), location(8, 13)].map((entry) => ({
+      ...entry,
+      location: { status: 'outdated' as const },
+    }))
+    render(<CommentAnchorLocations locations={locations} />)
+    expect(screen.getAllByText(/has changed since you commented/)).toHaveLength(
+      1
     )
-    const buttons = screen.getAllByRole('button', { name: /Located/ })
-    expect(buttons).toHaveLength(1)
-    fireEvent.click(buttons[0]!)
-    expect(select.mock.calls[0]![0].location).toEqual({
-      status: 'exact',
-      start: 0,
-      end: 13,
-    })
+    fireEvent.click(screen.getByText('View original passages'))
+    expect(screen.getByText('hello')).toBeTruthy()
+    expect(screen.getByText('world')).toBeTruthy()
   })
 
-  it('retains separate navigation for distant ranges and different cells', () => {
+  it('retains separate navigation for independent nearby ranges and different cells', () => {
     render(
       <CommentAnchorLocations
-        locations={[location(0, 5), location(18, 22), location(0, 5, 'cell-2')]}
+        locations={[location(0, 5), location(8, 13), location(0, 5, 'cell-2')]}
         onSelect={() => {}}
       />
     )

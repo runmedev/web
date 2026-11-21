@@ -47,6 +47,12 @@ history.
   available comments. Keep Monaco's context menu from also opening the outer
   cell menu.
 
+For a continuous selection in rendered Markdown, bind both endpoints to one
+source range. Reopening the comment highlights the full visible passage across
+links and formatting. Older comments can carry several outdated fragments.
+The panel groups them by historical cell and revision under one disclosure and
+keeps each excerpt available.
+
 ## Automated evidence
 
 `app/test/browser/test-scenario-editor-range-comments.ts` is registered in the

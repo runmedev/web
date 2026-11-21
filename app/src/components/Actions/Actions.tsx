@@ -25,7 +25,10 @@ import {
 import { create } from '@bufbuild/protobuf'
 import { useCommentAuthor } from '../../contexts/GoogleAuthContext'
 import { NotebookReviewFlow } from '../OperationLogSuggestions/NotebookReviewFlow'
-import { projectSourceCommentRange } from '../../lib/markdown/sourceCommentProjection'
+import {
+  projectSourceCommentRange,
+  renderedSelectionRange,
+} from '../../lib/markdown/sourceCommentProjection'
 import type { CommentSourceRange } from '../CommentedSourceRun'
 import { captureCommentSnapshot } from '../../lib/captureCommentSnapshot'
 import { Button, ScrollArea, Tabs, Text, Tooltip } from '@radix-ui/themes'
@@ -152,7 +155,7 @@ import {
   buildRenderedMarkdownProjection,
   scrollRenderedMarkdownRangeIntoView,
   sliceByCodePoint,
-  sourceRangesForProjectionRange,
+  sourceRangeForRenderedSelection,
   type RenderedMarkdownSelectionDraft,
 } from '../../lib/markdown/renderedMarkdownProjection'
 import type { Anchor } from '../../lib/operationLog/records'
@@ -2785,11 +2788,11 @@ function NotebookTabContent({
         commentCellIdentities.find((cell) => cell.refId === target.cellId)
           ?.value ?? ''
       const range = target.sourceRange
-        ? projectSourceCommentRange(
+        ? renderedSelectionRange(
             source,
             target.sourceRange.start,
             target.sourceRange.end
-          )[0]
+          )
         : target.range
       setActiveCommentRange(range ? { cellId: target.cellId, ...range } : null)
 
@@ -3480,16 +3483,16 @@ function NotebookTabContent({
           target.type === 'cell-text'
             ? buildRenderedMarkdownProjection(target.source)
             : undefined
-        const ranges =
+        const selectionRange =
           target.type === 'cell-text' && projection
-            ? sourceRangesForProjectionRange(
+            ? sourceRangeForRenderedSelection(
                 projection,
                 target.source,
                 target.selectors[0].start,
                 target.selectors[0].end
               )
             : target.type === 'cell-source'
-              ? [target.range]
+              ? target.range
               : undefined
         const binding = (async () => {
           if (
@@ -3513,7 +3516,7 @@ function NotebookTabContent({
                 position.start,
                 position.end
               ) !== quote.exact ||
-              !ranges?.length
+              !selectionRange
             )
               throw new Error(
                 'The rendered selection changed. Select the text again.'
@@ -3524,7 +3527,7 @@ function NotebookTabContent({
             snapshot_heads: heads,
             cellId: target.cellId,
             source,
-            ranges,
+            ranges: selectionRange ? [selectionRange] : undefined,
             selectionSurface:
               target.type === 'cell-source' ? 'source' : 'rendered-markdown',
           })

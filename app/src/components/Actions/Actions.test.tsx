@@ -1241,13 +1241,9 @@ describe('Actions tabs', () => {
       ).toBe(true)
       if (surface === 'rendered') {
         expect(view.anchors.map((a: any) => a.range)).toEqual([
-          { start_index: 7, end_index: 11, unit: 'unicode-code-point' },
-          { start_index: 12, end_index: 27, unit: 'unicode-code-point' },
+          { start_index: 7, end_index: 27, unit: 'unicode-code-point' },
         ])
-        expect(view.anchorSources.map((a: any) => a.source)).toEqual([
-          source,
-          source,
-        ])
+        expect(view.anchorSources.map((a: any) => a.source)).toEqual([source])
         expect(
           await screen.findByText('Commented revision: the migration guide')
         ).toBeTruthy()
