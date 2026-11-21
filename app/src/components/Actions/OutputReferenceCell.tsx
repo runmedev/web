@@ -14,17 +14,21 @@ export function OutputReferenceCell({
   readOnly,
   onChange,
   children,
+  onCommentOutput,
 }: {
   cell: parser_pb.Cell
   store: LocalNotebooks | null
   uri: string
   readOnly: boolean
   onChange: (value: string) => void
+  onCommentOutput?: (source: string) => void
   children?: ReactNode
 }) {
   const [editing, setEditing] = useState(!cell.value.trim())
   const [draft, setDraft] = useState(cell.value)
-  const [result, setResult] = useState<ResolvedOutputReference>()
+  const [result, setResult] = useState<
+    ResolvedOutputReference & { referenceSource: string }
+  >()
   const [error, setError] = useState('')
   const [loading, setLoading] = useState(true)
   const [showSource, setShowSource] = useState(false)
@@ -58,7 +62,7 @@ export function OutputReferenceCell({
         const resolved = await store.resolveOutputReference(uri, cell.value)
         if (!disposed) {
           resolvedOutput = resolved
-          setResult(resolvedOutput)
+          setResult({ ...resolvedOutput, referenceSource: cell.value })
           setError('')
         }
       } catch (error) {
@@ -157,6 +161,15 @@ export function OutputReferenceCell({
           ) : (
             result && (
               <div className="space-y-2">
+                {onCommentOutput && (
+                  <button
+                    type="button"
+                    className="btn"
+                    onClick={() => onCommentOutput(result.referenceSource)}
+                  >
+                    Comment on output
+                  </button>
+                )}
                 {showSource && (
                   <div
                     id={`reference-source-${cell.refId}`}

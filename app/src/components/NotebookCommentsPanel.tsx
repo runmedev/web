@@ -482,7 +482,10 @@ export function NotebookCommentsPanel({
                         New comment on{' '}
                         {item.draftTarget.type === 'document'
                           ? 'notebook'
-                          : (cellLabels.get(item.draftTarget.cellId) ?? 'cell')}
+                          : item.draftTarget.type === 'output'
+                            ? 'saved output'
+                            : (cellLabels.get(item.draftTarget.cellId) ??
+                              'cell')}
                       </label>
                       {(item.draftTarget.type === 'cell-source' ||
                         item.draftTarget.type === 'cell-text') && (
@@ -915,9 +918,11 @@ function sortCommentPanelItems(
   const draftKey =
     draftTarget.type === 'cell'
       ? getCellThreadKey(draftTarget.cellId)
-      : draftTarget.type === 'cell-source'
-        ? `source-draft:${draftTarget.cellId}:${draftTarget.range.start}:${draftTarget.range.end}`
-        : `draft:${draftTarget.cellId}:${draftTarget.selectors[0].start}:${draftTarget.selectors[0].end}`
+      : draftTarget.type === 'output'
+        ? 'output-draft'
+        : draftTarget.type === 'cell-source'
+          ? `source-draft:${draftTarget.cellId}:${draftTarget.range.start}:${draftTarget.range.end}`
+          : `draft:${draftTarget.cellId}:${draftTarget.selectors[0].start}:${draftTarget.selectors[0].end}`
   const existingItem =
     draftTarget.type === 'cell' ? itemsByCell.get(draftKey) : undefined
   if (existingItem) {
@@ -1021,6 +1026,17 @@ function navigationTargetForLocation(
 ): CommentNavigationTarget | null {
   if (entry.anchor.kind !== 'cell') return null
   const cellId = entry.anchor.cell_id
+  const item = entry.anchor.output_item
+  if (item)
+    return {
+      cellId,
+      output: {
+        cellId,
+        version: entry.anchor.version,
+        outputIndex: item.output_index,
+        itemIndex: item.item_index,
+      },
+    }
   if (entry.anchor.selection_surface === 'source')
     return { cellId, surface: 'source' }
   return {
@@ -1049,6 +1065,9 @@ function navigationTargetForItem(
   const located = item.threads.flatMap((thread) => thread.locations ?? [])
   const primary =
     located.find((entry) => isLocated(entry.location)) ?? located[0]
+  // Opening the historical preview is explicit so selecting a thread for reply
+  // doesn't interrupt the composer with a modal.
+  if (primary?.anchor.kind === 'cell' && primary.anchor.output_item) return null
   if (primary) return navigationTargetForLocation(primary)
   const rangeThread = item.threads.find(
     (thread) =>

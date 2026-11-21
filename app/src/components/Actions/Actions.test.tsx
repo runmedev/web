@@ -3919,26 +3919,46 @@ describe('Action component', () => {
     expect(screen.queryByRole('button', { name: 'Add Comment' })).toBeNull()
   })
 
-  it('starts a cell comment on an output reference', () => {
+  it('anchors a reference comment to the displayed historical item', async () => {
+    contextMocks.notebookStore = {
+      subscribeSync: vi.fn(() => () => {}),
+      getMetadata: vi.fn(),
+      resolveOutputReference: vi.fn(async () => ({
+        item: {
+          mime: 'text/plain',
+          data: new TextEncoder().encode('Original result'),
+        },
+      })),
+    } as unknown as typeof contextMocks.notebookStore
     const cell = create(parser_pb.CellSchema, {
       refId: 'reference-comment',
       kind: parser_pb.CellKind.MARKUP,
       languageId: 'runme-reference',
-      value: '<a href="#cell=x">Result</a>',
+      value:
+        '<a href="#cell=producer&amp;version=operation%3Aoriginal&amp;output_item=1.2">Result</a>',
     })
     const onStartComment = vi.fn()
     render(
       <Action
         cellData={new StubCellData(cell) as unknown as CellData}
         isFirst={false}
+        sourceCommentsAvailable
         commentsAvailable
         onStartComment={onStartComment}
       />
     )
-    fireEvent.click(screen.getByRole('button', { name: 'Add comment' }))
+    fireEvent.click(
+      await screen.findByRole('button', { name: 'Comment on output' })
+    )
     expect(onStartComment).toHaveBeenCalledWith({
-      type: 'cell',
-      cellId: 'reference-comment',
+      type: 'output',
+      cellId: 'producer',
+      output: {
+        cellId: 'producer',
+        version: { kind: 'operation', op_id: 'original' },
+        outputIndex: 1,
+        itemIndex: 2,
+      },
     })
   })
 

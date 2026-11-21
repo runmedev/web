@@ -1,4 +1,3 @@
-import { registerReleaseDatabase } from '../releases/databases'
 import Dexie, { type Table } from 'dexie'
 
 import {
@@ -6,6 +5,7 @@ import {
   createCellCommentAnchor,
   createPendingCellTextCommentAnchor,
 } from '../lib/notebookComments'
+import { registerReleaseDatabase } from '../releases/databases'
 import type { DriveComment, DriveNotebookStore, DriveReply } from './drive'
 
 export type LocalCommentSyncStatus =
@@ -365,11 +365,12 @@ export class LocalComments extends Dexie {
     input: SaveDesiredCommentInput
   ): Promise<DesiredCommentRecord> {
     if (
+      input.target.type === 'output' ||
       input.target.type === 'cell-source' ||
       input.target.type === 'document'
     ) {
       throw new Error(
-        'Source selection and whole-document comments require a .runme notebook.'
+        'Output, source selection and whole-document comments require a .runme notebook.'
       )
     }
     await this.draftWriteTails.get(input.notebookUri)?.catch(() => undefined)

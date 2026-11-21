@@ -2,6 +2,9 @@ import { AGENT_MONITOR_MIME } from '../../lib/agents/types'
 import { outputReferenceSource } from '../../lib/outputReferenceRuntime'
 import { OutputReferenceCell } from './OutputReferenceCell'
 import {
+  formatOutputReference,
+  parseOutputReference,
+  type OutputReference,
   isOutputReferenceCell,
   OUTPUT_REFERENCE_LANGUAGE,
 } from '../../lib/outputReference'
@@ -1508,6 +1511,32 @@ export function Action({
     }
     return (
       <ActionOutputItems
+        onComment={
+          docTitle.endsWith('.runme') && commentsAvailable && store
+            ? async (oi, ii) => {
+                try {
+                  const model = getNotebookData(docUri)
+                  if (!model) throw new Error('Notebook unavailable.')
+                  const output = parseOutputReference(
+                    await outputReferenceSource(
+                      store,
+                      model,
+                      cell.refId,
+                      oi,
+                      ii
+                    )
+                  )
+                  onStartComment?.({
+                    type: 'output',
+                    cellId: output.cellId,
+                    output,
+                  })
+                } catch (error) {
+                  showToast({ tone: 'error', message: String(error) })
+                }
+              }
+            : undefined
+        }
         outputs={cell.outputs}
         suppressStdText={Boolean(cellData.getStreams())}
         onCopyReference={
@@ -1518,7 +1547,18 @@ export function Action({
         }
       />
     )
-  }, [cell?.outputs, cellData, docTitle, handleCopyOutputReference])
+  }, [
+    cell?.outputs,
+    cellData,
+    docTitle,
+    handleCopyOutputReference,
+    commentsAvailable,
+    store,
+    getNotebookData,
+    docUri,
+    onStartComment,
+    cell,
+  ])
 
   const handleLanguageChange = useCallback(
     (event: ChangeEvent<HTMLSelectElement>) => {
@@ -1669,14 +1709,20 @@ export function Action({
           id={`reference-body-${cell.refId}`}
           className="relative min-w-0 flex-1"
         >
-          <CellCommentButton
-            count={commentCount}
-            available={commentsAvailable}
-            onClick={handleStartComment}
-            className={`absolute right-10 top-2 z-10 h-6 w-6 ${cellCommentVisibilityClass}`}
-          />
           <OutputReferenceCell
             cell={cell}
+            onCommentOutput={
+              commentsAvailable && sourceCommentsAvailable
+                ? (source) => {
+                    const output = parseOutputReference(source)
+                    onStartComment?.({
+                      type: 'output',
+                      cellId: output.cellId,
+                      output,
+                    })
+                  }
+                : undefined
+            }
             store={store}
             uri={docUri}
             readOnly={readOnly}
@@ -2726,8 +2772,11 @@ function NotebookTabContent({
     [docUri, findCellElement, onCellFocus]
   )
 
+  const [savedOutput, setSavedOutput] = useState<OutputReference | null>(null)
   const selectCommentTarget = useCallback(
     (target: CommentNavigationTarget) => {
+      setSavedOutput(target.output ?? null)
+      if (target.output) return
       focusCommentCell(
         target.cellId,
         target.surface === 'source' ? 'editor' : undefined
@@ -3378,7 +3427,27 @@ function NotebookTabContent({
   const startCommentDraft = useCallback(
     (target: CommentDraftTarget) => {
       if ((operationLogComments && readOnly) || commentsBusy) return
-      if (target.type === 'document') {
+      if (target.type === 'output') {
+        if (!operationLogComments) return
+        const { cellId, version, outputIndex, itemIndex } = target.output
+        draftAnchors.current.set(
+          target,
+          Promise.resolve({
+            anchors: [
+              {
+                kind: 'cell',
+                cell_id: cellId,
+                version,
+                surface: 'source',
+                output_item: {
+                  output_index: outputIndex,
+                  item_index: itemIndex,
+                },
+              },
+            ],
+          })
+        )
+      } else if (target.type === 'document') {
         if (!operationLogComments || !notebookData || !store) return
         // Freeze the whole-document target when the composer opens, so later
         // edits cannot silently move the comment to a different revision.
@@ -3471,7 +3540,7 @@ function NotebookTabContent({
       openCommentsPanel()
       setDraftTarget(target)
       setDraftContent('')
-      if (target.type !== 'document')
+      if (target.type !== 'document' && target.type !== 'output')
         focusCommentCell(
           target.cellId,
           target.type === 'cell-source' ? 'editor' : undefined
@@ -4311,6 +4380,30 @@ function NotebookTabContent({
         hidden={!commentsPanelOpen}
         className="h-full shrink-0"
       >
+        {savedOutput && (
+          <dialog
+            aria-label="Saved output"
+            ref={(node) => {
+              if (node && !node.open) node.showModal()
+            }}
+            onClose={() => setSavedOutput(null)}
+            className="m-auto max-w-[90vw] rounded p-4"
+          >
+            <button autoFocus onClick={() => setSavedOutput(null)}>
+              Close saved output
+            </button>
+            <OutputReferenceCell
+              readOnly
+              uri={docUri}
+              store={store}
+              cell={create(parser_pb.CellSchema, {
+                refId: 'comment-preview',
+                value: formatOutputReference(savedOutput),
+              })}
+              onChange={() => {}}
+            />
+          </dialog>
+        )}
         <NotebookCommentsPanel
           activeCommentId={activeCommentId}
           storage={

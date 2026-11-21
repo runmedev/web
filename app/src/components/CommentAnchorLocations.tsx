@@ -97,13 +97,22 @@ export function CommentAnchorLocations({
               title={
                 anchor.kind === 'cell' ? `Cell ${anchor.cell_id}` : undefined
               }
-              disabled={!onSelect || !isLocated(entry.location)}
-              onClick={() => onSelect?.(entry)}
+              disabled={
+                !onSelect ||
+                (!isLocated(entry.location) &&
+                  !(anchor.kind === 'cell' && anchor.output_item))
+              }
+              onClick={(event) => {
+                event.stopPropagation()
+                onSelect?.(entry)
+              }}
             >
               {entry.side
                 ? `${entry.side === 'base' ? 'Start' : 'End'} · `
                 : ''}
-              {status}
+              {anchor.kind === 'cell' && anchor.output_item
+                ? 'View saved output'
+                : status}
               {anchor.kind === 'cell'
                 ? ` · Cell ${anchor.cell_id.slice(0, 8)}`
                 : ''}

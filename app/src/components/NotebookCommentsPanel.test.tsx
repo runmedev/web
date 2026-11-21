@@ -65,9 +65,7 @@ describe('NotebookCommentsPanel', () => {
     fireEvent.change(screen.getByRole('textbox', { name: 'New comment' }), {
       target: { value: 'Document feedback' },
     })
-    fireEvent.click(
-      screen.getByRole('button', { name: 'Comment' })
-    )
+    fireEvent.click(screen.getByRole('button', { name: 'Comment' }))
     await waitFor(() =>
       expect(onCreateComment).toHaveBeenCalledWith(target, 'Document feedback')
     )
@@ -121,6 +119,40 @@ describe('NotebookCommentsPanel', () => {
       expect(onReply).toHaveBeenCalledWith('native-thread', 'Please clarify')
     )
     expect(onReply).toHaveBeenCalledTimes(1)
+  })
+  it('opens the original output version and item after the producer is deleted', () => {
+    const version = { kind: 'operation', op_id: 'run:1' }
+    const anchor = {
+      kind: 'cell',
+      cell_id: 'producer',
+      surface: 'source',
+      version,
+      output_item: { output_index: 1, item_index: 2 },
+    }
+    const threads = toCellCommentThreads(
+      [
+        {
+          id: 'c',
+          content: 'Review this chart',
+          anchor: JSON.stringify({
+            runme: {
+              version: 1,
+              type: 'cell',
+              cellId: 'producer',
+              anchorSources: [{ anchor, source: 'old code' }],
+            },
+          }),
+        },
+      ],
+      []
+    )
+    const onSelectTarget = vi.fn()
+    renderPanel({ threads, onSelectTarget })
+    fireEvent.click(screen.getByRole('button', { name: /^View saved output/ }))
+    expect(onSelectTarget).toHaveBeenCalledWith({
+      cellId: 'producer',
+      output: { cellId: 'producer', version, outputIndex: 1, itemIndex: 2 },
+    })
   })
   it.each([false, true])(
     'activates only the selected saved source range and navigates to its editor (legacy comparison: %s)',
