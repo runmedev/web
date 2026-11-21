@@ -3,15 +3,14 @@ import {
   RENDERED_MARKDOWN_PROJECTION_VERSION,
   buildRenderedMarkdownProjection,
   sha256Text,
-  sourceRangesForProjectionRange,
+  sourceRangeForRenderedSelection,
 } from '../markdown/renderedMarkdownProjection'
 import type { Anchor, VersionRef } from './records'
 import type { RunmeOperation } from './types'
 import { anchorSource, codePointRange } from './versions'
 
 /** Convert a captured UI/legacy anchor only when its immutable source matches.
- * Rendered selections may map to several source ranges; do not bridge gaps by
- * guessing a single span. Quotes are checked here and never persisted in V2.
+ * The captured selection supplies both source boundaries. Quotes are validated here.
  */
 export async function sourceAnchorsFromLegacy(
   operations: RunmeOperation[],
@@ -54,18 +53,20 @@ export async function sourceAnchorsFromLegacy(
         .join('') !== quote.exact
     )
       throw new Error('Rendered selection projection changed')
-    const ranges = sourceRangesForProjectionRange(
+    const range = sourceRangeForRenderedSelection(
       projection,
       source,
       position.start,
       position.end
     )
-    if (!ranges.length)
-      throw new Error('Rendered selection has no source mapping')
-    return ranges.map((r) => ({
-      ...anchor,
-      range: codePointRange(source, r.start, r.end),
-    }))
+    if (!range) throw new Error('Rendered selection has no source mapping')
+    return [
+      {
+        ...anchor,
+        selection_surface: 'rendered-markdown',
+        range: codePointRange(source, range.start, range.end),
+      },
+    ]
   }
   const range = target.diffTarget?.sourceRange
   if (range) {

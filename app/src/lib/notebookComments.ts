@@ -62,13 +62,17 @@ export type SourceSelectionDraft = {
   range: TextRange
 }
 
+type SavedOutput = import('./outputReference').OutputReference
+
 export type CommentDraftTarget =
   | { type: 'document' }
+  | { type: 'output'; cellId: string; output: SavedOutput }
   | SourceSelectionDraft
   | { type: 'cell'; cellId: string }
   | RenderedMarkdownSelectionDraft
 
 export type CommentNavigationTarget = {
+  output?: SavedOutput
   cellId: string
   /** Source anchors open Monaco; range below remains a rendered-text range. */
   surface?: 'source'

@@ -5,7 +5,7 @@ import { canLoadContentAsset } from '../../lib/externalServices'
  * This component implements Jupyter-style in-place markdown rendering:
  * - When `rendered=true`: Shows rendered markdown HTML
  * - When `rendered=false`: Shows the Monaco editor for editing
- * - Double-click on rendered content switches to edit mode
+ * - Use the edit control or keyboard to open the source
  * - Pressing Escape or running the cell switches back to render mode
  *
  * State Management:
@@ -233,7 +233,7 @@ function sameCommentRanges(
  * MarkdownCell renders markdown content in-place with edit/render mode toggle.
  *
  * Interaction patterns (Jupyter-style):
- * - Double-click rendered content → enter edit mode
+ * - Use the edit control or keyboard to enter edit mode
  * - Press Escape while editing → render markdown (if not empty)
  * - Focusing another notebook cell → render markdown (if not empty)
  * - Empty cells start in edit mode and stay in edit mode
@@ -301,6 +301,13 @@ const MarkdownCell = memo(
      */
     const restoreRenderedFocus = useCallback(() => {
       const root = renderedRef.current
+      const selection = root?.ownerDocument.getSelection()
+      if (
+        selection &&
+        !selection.isCollapsed &&
+        root?.contains(selection.anchorNode)
+      )
+        return
       if (root && !root.contains(root.ownerDocument.activeElement)) {
         root.focus({ preventScroll: true })
       }
@@ -382,9 +389,9 @@ const MarkdownCell = memo(
     }, [isActiveCell, rendered, tracksActiveCell, value])
 
     /**
-     * Handle switching to edit mode when user double-clicks rendered content.
+     * Open the Markdown source from the edit control.
      */
-    const handleDoubleClick = useCallback(() => {
+    const handleOpenSource = useCallback(() => {
       if (!canOpenSource) {
         return
       }
@@ -555,7 +562,7 @@ const MarkdownCell = memo(
           <div className="text-nb-text-faint italic py-2">
             {readOnly
               ? 'This read-only markdown cell is empty.'
-              : 'Double-click to edit markdown...'}
+              : 'Edit markdown...'}
           </div>
         )
       }
@@ -596,47 +603,72 @@ const MarkdownCell = memo(
         data-rendered={rendered}
       >
         {rendered ? (
-          // Rendered markdown view - double-click or keyboard to edit
-          <div
-            id={`markdown-rendered-${cell.refId}`}
-            className="notebook-markdown cursor-text rounded-nb-md border border-transparent p-4 transition-[border-color,background-color,box-shadow] duration-200 hover:border-nb-border hover:bg-nb-surface-2/60 hover:shadow-nb-xs"
-            onDoubleClick={canOpenSource ? handleDoubleClick : undefined}
-            onKeyDown={canOpenSource ? handleRenderedKeyDown : undefined}
-            ref={renderedRef}
-            tabIndex={canOpenSource ? 0 : undefined}
-            role={canOpenSource ? 'button' : undefined}
-            aria-label={
-              canOpenSource
-                ? readOnly
-                  ? 'Double-click or press Enter to view read-only markdown source'
-                  : 'Double-click or press Enter to edit markdown'
-                : undefined
-            }
-            data-testid="markdown-rendered"
-            data-runme-cell-id={cell.refId}
-            data-runme-surface="rendered-markdown"
-            data-runme-projection={`${RENDERED_MARKDOWN_PROJECTION_NAME}@${RENDERED_MARKDOWN_PROJECTION_VERSION}`}
-            data-runme-comment-range-count={commentRanges.length || undefined}
-            data-cell-focus-role="rendered"
-            aria-describedby={
-              commentRanges.length > 0
-                ? `markdown-comment-ranges-${cell.refId}`
-                : undefined
-            }
-            onFocus={() => onFocusRoleChange?.('rendered')}
-            onContextMenu={handleRenderedContextMenu}
-          >
-            {commentRanges.length > 0 && (
-              <span
-                id={`markdown-comment-ranges-${cell.refId}`}
-                className="sr-only"
+          // Rendered markdown remains selectable; editing has an explicit control.
+          <>
+            <div
+              id={`markdown-rendered-${cell.refId}`}
+              className="notebook-markdown cursor-text rounded-nb-md border border-transparent p-4 transition-[border-color,background-color,box-shadow] duration-200 hover:border-nb-border hover:bg-nb-surface-2/60 hover:shadow-nb-xs"
+              onMouseDown={(event) => {
+                const selection =
+                  event.currentTarget.ownerDocument.getSelection()
+                if (
+                  event.button === 2 &&
+                  selection &&
+                  !selection.isCollapsed &&
+                  event.currentTarget.contains(selection.anchorNode)
+                )
+                  event.preventDefault()
+              }}
+              onKeyDown={canOpenSource ? handleRenderedKeyDown : undefined}
+              ref={renderedRef}
+              tabIndex={canOpenSource ? 0 : undefined}
+              role={canOpenSource ? 'button' : undefined}
+              aria-label={
+                canOpenSource
+                  ? readOnly
+                    ? 'Press Enter to view read-only markdown source'
+                    : 'Press Enter to edit markdown'
+                  : undefined
+              }
+              data-testid="markdown-rendered"
+              data-runme-cell-id={cell.refId}
+              data-runme-surface="rendered-markdown"
+              data-runme-projection={`${RENDERED_MARKDOWN_PROJECTION_NAME}@${RENDERED_MARKDOWN_PROJECTION_VERSION}`}
+              data-runme-comment-range-count={commentRanges.length || undefined}
+              data-cell-focus-role="rendered"
+              aria-describedby={
+                commentRanges.length > 0
+                  ? `markdown-comment-ranges-${cell.refId}`
+                  : undefined
+              }
+              onFocus={() => onFocusRoleChange?.('rendered')}
+              onContextMenu={handleRenderedContextMenu}
+            >
+              {commentRanges.length > 0 && (
+                <span
+                  id={`markdown-comment-ranges-${cell.refId}`}
+                  className="sr-only"
+                >
+                  {commentRanges.length} commented text{' '}
+                  {commentRanges.length === 1 ? 'range' : 'ranges'} in this
+                  cell.
+                </span>
+              )}
+              {renderedMarkdown}
+            </div>
+            {canOpenSource && (
+              <button
+                type="button"
+                className="ml-4 mt-1 rounded-nb-sm border border-nb-border px-2 py-1 text-xs text-nb-text-muted hover:bg-nb-surface-2 focus-visible:outline focus-visible:outline-nb-accent"
+                onClick={(event) => {
+                  event.stopPropagation()
+                  handleOpenSource()
+                }}
               >
-                {commentRanges.length} commented text{' '}
-                {commentRanges.length === 1 ? 'range' : 'ranges'} in this cell.
-              </span>
+                {readOnly ? 'View Markdown source' : 'Edit Markdown'}
+              </button>
             )}
-            {renderedMarkdown}
-          </div>
+          </>
         ) : (
           // Editor view - Escape, run, or focusing another cell renders it
           <div

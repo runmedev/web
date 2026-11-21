@@ -204,7 +204,10 @@ try {
   )
 
   // Edit through Monaco and verify the existing autosave path still works.
-  await page.locator('#markdown-rendered-session-second').dblclick()
+  await page
+    .locator('#markdown-cell-session-second')
+    .getByRole('button', { name: 'Edit Markdown', exact: true })
+    .click()
   const editor = page
     .locator('#markdown-action-session-second textarea')
     .first()
@@ -239,11 +242,15 @@ try {
   // Synthetic events make this deterministic without relying on Chromium's
   // eligibility heuristics, while using the real reload and persistence paths.
   await page.evaluate(() =>
-    window.dispatchEvent(new PageTransitionEvent('pagehide', { persisted: true }))
+    window.dispatchEvent(
+      new PageTransitionEvent('pagehide', { persisted: true })
+    )
   )
   const takeover = await context!.newPage()
   await ready(takeover, resumeUrl)
-  await takeover.getByRole('heading', { name: 'edited after restart' }).waitFor()
+  await takeover
+    .getByRole('heading', { name: 'edited after restart' })
+    .waitFor()
   check(
     'Another tab can claim a session relinquished for BFCache',
     new URL(takeover.url()).searchParams.get('session') === id
@@ -258,7 +265,9 @@ try {
   await Promise.all([
     page.waitForEvent('load'),
     page.evaluate(() =>
-      window.dispatchEvent(new PageTransitionEvent('pageshow', { persisted: true }))
+      window.dispatchEvent(
+        new PageTransitionEvent('pageshow', { persisted: true })
+      )
     ),
   ])
   await page.getByText('No open notebooks yet', { exact: true }).waitFor()

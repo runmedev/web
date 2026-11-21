@@ -2,6 +2,9 @@ import { AGENT_MONITOR_MIME } from '../../lib/agents/types'
 import { outputReferenceSource } from '../../lib/outputReferenceRuntime'
 import { OutputReferenceCell } from './OutputReferenceCell'
 import {
+  formatOutputReference,
+  parseOutputReference,
+  type OutputReference,
   isOutputReferenceCell,
   OUTPUT_REFERENCE_LANGUAGE,
 } from '../../lib/outputReference'
@@ -22,7 +25,10 @@ import {
 import { create } from '@bufbuild/protobuf'
 import { useCommentAuthor } from '../../contexts/GoogleAuthContext'
 import { NotebookReviewFlow } from '../OperationLogSuggestions/NotebookReviewFlow'
-import { projectSourceCommentRange } from '../../lib/markdown/sourceCommentProjection'
+import {
+  projectSourceCommentRange,
+  renderedSelectionRange,
+} from '../../lib/markdown/sourceCommentProjection'
 import type { CommentSourceRange } from '../CommentedSourceRun'
 import { captureCommentSnapshot } from '../../lib/captureCommentSnapshot'
 import { Button, ScrollArea, Tabs, Text, Tooltip } from '@radix-ui/themes'
@@ -149,7 +155,7 @@ import {
   buildRenderedMarkdownProjection,
   scrollRenderedMarkdownRangeIntoView,
   sliceByCodePoint,
-  sourceRangesForProjectionRange,
+  sourceRangeForRenderedSelection,
   type RenderedMarkdownSelectionDraft,
 } from '../../lib/markdown/renderedMarkdownProjection'
 import type { Anchor } from '../../lib/operationLog/records'
@@ -1508,6 +1514,32 @@ export function Action({
     }
     return (
       <ActionOutputItems
+        onComment={
+          docTitle.endsWith('.runme') && commentsAvailable && store
+            ? async (oi, ii) => {
+                try {
+                  const model = getNotebookData(docUri)
+                  if (!model) throw new Error('Notebook unavailable.')
+                  const output = parseOutputReference(
+                    await outputReferenceSource(
+                      store,
+                      model,
+                      cell.refId,
+                      oi,
+                      ii
+                    )
+                  )
+                  onStartComment?.({
+                    type: 'output',
+                    cellId: output.cellId,
+                    output,
+                  })
+                } catch (error) {
+                  showToast({ tone: 'error', message: String(error) })
+                }
+              }
+            : undefined
+        }
         outputs={cell.outputs}
         suppressStdText={Boolean(cellData.getStreams())}
         onCopyReference={
@@ -1518,7 +1550,18 @@ export function Action({
         }
       />
     )
-  }, [cell?.outputs, cellData, docTitle, handleCopyOutputReference])
+  }, [
+    cell?.outputs,
+    cellData,
+    docTitle,
+    handleCopyOutputReference,
+    commentsAvailable,
+    store,
+    getNotebookData,
+    docUri,
+    onStartComment,
+    cell,
+  ])
 
   const handleLanguageChange = useCallback(
     (event: ChangeEvent<HTMLSelectElement>) => {
@@ -1665,9 +1708,24 @@ export function Action({
             <PlusIcon width={10} height={10} />
           </button>
         </div>
-        <div id={`reference-body-${cell.refId}`} className="min-w-0 flex-1">
+        <div
+          id={`reference-body-${cell.refId}`}
+          className="relative min-w-0 flex-1"
+        >
           <OutputReferenceCell
             cell={cell}
+            onCommentOutput={
+              commentsAvailable && sourceCommentsAvailable
+                ? (source) => {
+                    const output = parseOutputReference(source)
+                    onStartComment?.({
+                      type: 'output',
+                      cellId: output.cellId,
+                      output,
+                    })
+                  }
+                : undefined
+            }
             store={store}
             uri={docUri}
             readOnly={readOnly}
@@ -2717,8 +2775,11 @@ function NotebookTabContent({
     [docUri, findCellElement, onCellFocus]
   )
 
+  const [savedOutput, setSavedOutput] = useState<OutputReference | null>(null)
   const selectCommentTarget = useCallback(
     (target: CommentNavigationTarget) => {
+      setSavedOutput(target.output ?? null)
+      if (target.output) return
       focusCommentCell(
         target.cellId,
         target.surface === 'source' ? 'editor' : undefined
@@ -2727,11 +2788,11 @@ function NotebookTabContent({
         commentCellIdentities.find((cell) => cell.refId === target.cellId)
           ?.value ?? ''
       const range = target.sourceRange
-        ? projectSourceCommentRange(
+        ? renderedSelectionRange(
             source,
             target.sourceRange.start,
             target.sourceRange.end
-          )[0]
+          )
         : target.range
       setActiveCommentRange(range ? { cellId: target.cellId, ...range } : null)
 
@@ -3369,7 +3430,27 @@ function NotebookTabContent({
   const startCommentDraft = useCallback(
     (target: CommentDraftTarget) => {
       if ((operationLogComments && readOnly) || commentsBusy) return
-      if (target.type === 'document') {
+      if (target.type === 'output') {
+        if (!operationLogComments) return
+        const { cellId, version, outputIndex, itemIndex } = target.output
+        draftAnchors.current.set(
+          target,
+          Promise.resolve({
+            anchors: [
+              {
+                kind: 'cell',
+                cell_id: cellId,
+                version,
+                surface: 'source',
+                output_item: {
+                  output_index: outputIndex,
+                  item_index: itemIndex,
+                },
+              },
+            ],
+          })
+        )
+      } else if (target.type === 'document') {
         if (!operationLogComments || !notebookData || !store) return
         // Freeze the whole-document target when the composer opens, so later
         // edits cannot silently move the comment to a different revision.
@@ -3402,16 +3483,16 @@ function NotebookTabContent({
           target.type === 'cell-text'
             ? buildRenderedMarkdownProjection(target.source)
             : undefined
-        const ranges =
+        const selectionRange =
           target.type === 'cell-text' && projection
-            ? sourceRangesForProjectionRange(
+            ? sourceRangeForRenderedSelection(
                 projection,
                 target.source,
                 target.selectors[0].start,
                 target.selectors[0].end
               )
             : target.type === 'cell-source'
-              ? [target.range]
+              ? target.range
               : undefined
         const binding = (async () => {
           if (
@@ -3435,7 +3516,7 @@ function NotebookTabContent({
                 position.start,
                 position.end
               ) !== quote.exact ||
-              !ranges?.length
+              !selectionRange
             )
               throw new Error(
                 'The rendered selection changed. Select the text again.'
@@ -3446,7 +3527,7 @@ function NotebookTabContent({
             snapshot_heads: heads,
             cellId: target.cellId,
             source,
-            ranges,
+            ranges: selectionRange ? [selectionRange] : undefined,
             selectionSurface:
               target.type === 'cell-source' ? 'source' : 'rendered-markdown',
           })
@@ -3462,7 +3543,7 @@ function NotebookTabContent({
       openCommentsPanel()
       setDraftTarget(target)
       setDraftContent('')
-      if (target.type !== 'document')
+      if (target.type !== 'document' && target.type !== 'output')
         focusCommentCell(
           target.cellId,
           target.type === 'cell-source' ? 'editor' : undefined
@@ -4302,6 +4383,30 @@ function NotebookTabContent({
         hidden={!commentsPanelOpen}
         className="h-full shrink-0"
       >
+        {savedOutput && (
+          <dialog
+            aria-label="Saved output"
+            ref={(node) => {
+              if (node && !node.open) node.showModal()
+            }}
+            onClose={() => setSavedOutput(null)}
+            className="m-auto max-w-[90vw] rounded p-4"
+          >
+            <button autoFocus onClick={() => setSavedOutput(null)}>
+              Close saved output
+            </button>
+            <OutputReferenceCell
+              readOnly
+              uri={docUri}
+              store={store}
+              cell={create(parser_pb.CellSchema, {
+                refId: 'comment-preview',
+                value: formatOutputReference(savedOutput),
+              })}
+              onChange={() => {}}
+            />
+          </dialog>
+        )}
         <NotebookCommentsPanel
           activeCommentId={activeCommentId}
           storage={
@@ -4537,7 +4642,8 @@ function renderWorkspaceDocument({
 
   if (isOidcStatusUri(document.uri)) return <OidcStatusTab />
 
-  if (document.uri === PIN_RELEASE_DOCUMENT_URI) return <ReleaseRecoveryControls />
+  if (document.uri === PIN_RELEASE_DOCUMENT_URI)
+    return <ReleaseRecoveryControls />
 
   if (isVersionInfoUri(document.uri)) {
     return <VersionInfoTab />

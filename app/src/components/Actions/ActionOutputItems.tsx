@@ -71,12 +71,14 @@ export function ActionOutputItemView({
   outputIndex,
   itemIndex,
   onCopyReference,
+  onComment,
   onDoubleClick,
 }: {
   item: parser_pb.CellOutputItem
   outputIndex: number
   itemIndex: number
   onCopyReference?: () => void
+  onComment?: () => void
   onDoubleClick?: () => void
 }) {
   const mime = item.mime || ''
@@ -128,6 +130,11 @@ export function ActionOutputItemView({
       aria-label={`Output ${outputIndex}, item ${itemIndex}${isStreaming ? ', streaming' : ''}`}
     >
       {mime === 'text/html' ? <div className="p-2">{content}</div> : content}
+      {onComment && (
+        <button type="button" className="btn" onClick={onComment}>
+          Comment on output
+        </button>
+      )}
       {onCopyReference && (
         <button
           type="button"
@@ -145,9 +152,11 @@ export function ActionOutputItemView({
 
 export function ActionOutputItems({
   outputs,
+  onComment,
   suppressStdText = false,
   onCopyReference,
 }: {
+  onComment?: (outputIndex: number, itemIndex: number) => void
   outputs: parser_pb.CellOutput[]
   suppressStdText?: boolean
   onCopyReference?: (outputIndex: number, itemIndex: number) => void
@@ -181,6 +190,9 @@ export function ActionOutputItems({
         return (
           <ActionOutputItemView
             key={`${outputIndex}-${itemIndex}-${item.mime}`}
+            onComment={
+              onComment ? () => onComment(outputIndex, itemIndex) : undefined
+            }
             item={item}
             outputIndex={outputIndex}
             itemIndex={itemIndex}
