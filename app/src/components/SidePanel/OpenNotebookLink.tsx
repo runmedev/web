@@ -27,11 +27,11 @@ async function openLink(text: string) {
       const openTabs = getNotebookDataController().getOpenNotebooks()
       const store = appState.localNotebooks
       if (openTabs.length && store) {
-        const ids = await store.files
+        const mirror = await store.files
           .where('remoteId')
           .anyOf([remoteUri, driveFileUrl(item.id)])
-          .primaryKeys()
-        const existing = openTabs.find((tab) => ids.includes(tab.uri))
+          .first()
+        const existing = openTabs.find((tab) => tab.uri === mirror?.id)
         if (existing) {
           await appState.focusNotebook(existing.uri)
           return

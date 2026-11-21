@@ -53,7 +53,7 @@ describe('Open notebook link', () => {
       const previous = appState.localNotebooks
       appState.setLocalNotebooks({
         files: {
-          where: () => ({ anyOf: () => ({ primaryKeys: async () => [uri] }) }),
+          where: () => ({ anyOf: () => ({ first: async () => ({ id: uri }) }) }),
         },
       } as unknown as NonNullable<typeof previous>)
       try {
