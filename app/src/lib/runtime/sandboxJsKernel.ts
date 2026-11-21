@@ -454,6 +454,7 @@ export function buildSandboxSrcDoc(options: {
           appendCell: (args) => callHost("notebooks.appendCell", [args]),
           embed: (source, options) => callHost("notebooks.embed", [source, options]),
           attach: (source, options) => callHost("notebooks.attach", [source, options]),
+          normalizeLink: (text) => callHost("notebooks.normalizeLink", [text]),
           resolve: (reference) => callHost("notebooks.resolve", [reference]),
           open: (reference) => callHost("notebooks.open", [reference]),
           focus: (reference) => callHost("notebooks.focus", [reference]),
@@ -657,6 +658,7 @@ export function buildSandboxSrcDoc(options: {
           consoleProxy.log("- notebooks.appendCell({ target?, at?, kind, languageId?, value?, metadata?, execute?, reason? })");
           consoleProxy.log("- notebooks.embed(source, { target?, alt?, name? })");
           consoleProxy.log("- notebooks.attach(source, { target: { uri }, folderUri?, mode?, title?, altText?, expectedRevision?, operationId? })");
+          consoleProxy.log("- notebooks.normalizeLink(text)");
           consoleProxy.log("- notebooks.resolve([reference])");
           consoleProxy.log("- notebooks.show([reference])");
           consoleProxy.log("- notebooks.open([reference])");
