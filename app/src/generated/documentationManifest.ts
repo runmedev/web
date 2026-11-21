@@ -186,4 +186,12 @@ export const DOCUMENTATION_MANIFEST = [
     order: 22,
     path: 'docs/22-desktop-runtime.md',
   },
+  {
+    name: 'environment',
+    title: 'Environment variables',
+    description:
+      'Configure browser-local variables and read OpenAI organization and project IDs from JavaScript cells.',
+    order: 23,
+    path: 'docs/23-environment.md',
+  },
 ] as const satisfies readonly DocumentationManifestEntry[]
