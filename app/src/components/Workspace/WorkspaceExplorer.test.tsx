@@ -163,7 +163,7 @@ describe('WorkspaceExplorer current document handling', () => {
       type: NotebookStoreItemType.File,
     })
     mocks.isDriveItemUri.mockReset()
-    mocks.isDriveItemUri.mockReturnValue(false)
+    mocks.isDriveItemUri.mockImplementation((uri: string) => uri.startsWith('https://drive.google.com/'))
     mocks.openNotebook.mockReset()
     mocks.showDocument.mockReset()
     mocks.addItem.mockReset()
@@ -171,13 +171,13 @@ describe('WorkspaceExplorer current document handling', () => {
     mocks.ensureAccessToken.mockReset()
     mocks.ensureAccessToken.mockResolvedValue('access-token')
     mocks.fsStore = null
-    mocks.workspaceItems = []
+    mocks.workspaceItems = ['local://folder/drive']
     mocks.store.getMetadata.mockReset()
     mocks.store.getMetadata.mockResolvedValue({
-      uri: 'local://folder/local',
-      name: 'Local Notebooks',
+      uri: 'local://folder/drive',
+      name: 'Mounted Drive folder',
       type: NotebookStoreItemType.Folder,
-      children: [],
+      children: ['local://file/draft'],
       parents: [],
     })
     mocks.store.createFolder.mockReset()
@@ -320,12 +320,25 @@ describe('WorkspaceExplorer current document handling', () => {
     expect(mocks.ensureAccessToken).not.toHaveBeenCalled()
   })
 
-  it('disables the sync button while a pass is in progress', async () => {
+  it('ignores the former browser-only root in persisted workspaces', async () => {
     mocks.workspaceItems = ['local://folder/local']
+    mocks.store.getMetadata.mockResolvedValue({
+      name: 'Local Notebooks', type: NotebookStoreItemType.Folder, children: [], parents: [],
+    })
+    render(<WorkspaceExplorer />)
+    await screen.findByText('No notebook locations have been configured yet.')
+    expect(screen.queryByText('Browser drafts')).toBeNull()
+    expect(mocks.store.getMetadata).not.toHaveBeenCalledWith('local://folder/local')
+    expect(screen.queryByRole('button', { name: 'New browser draft' })).toBeNull()
+  })
+
+  it('disables the sync button while a pass is in progress', async () => {
+    mocks.workspaceItems = ['local://folder/drive']
+    mocks.store.getMetadata.mockResolvedValue({ name: 'Mounted folder', type: NotebookStoreItemType.Folder, children: [], parents: [], remoteUri: 'https://drive.google.com/drive/folders/folder' })
     let finish!: () => void
     mocks.store.sync.mockImplementation(() => new Promise<void>((resolve) => { finish = resolve }))
     render(<WorkspaceExplorer />)
-    await screen.findByText('Local Notebooks')
+    await screen.findByText('Mounted folder')
     const sync = screen.getByRole('button', { name: 'Sync folders' }) as HTMLButtonElement
     fireEvent.click(sync)
     expect(sync.disabled).toBe(true)
@@ -382,7 +395,7 @@ describe('WorkspaceExplorer current document handling', () => {
       mocks.treeProps.onToggle(JSON.stringify(['local://folder/root']))
     })
     await waitFor(() => expect(screen.getAllByText('Nested mount')).toHaveLength(2))
-    const [, root, shortcut] = mocks.treeProps.data
+    const [root, shortcut] = mocks.treeProps.data
     expect(root.children[0].uri).toBe(shortcut.uri)
     expect(root.children[0].id).toBe(JSON.stringify([root.uri, shortcut.uri]))
     expect(shortcut.id).toBe(JSON.stringify([shortcut.uri]))
@@ -1114,49 +1127,19 @@ describe('WorkspaceExplorer current document handling', () => {
     })
   })
 
-  it('rejects a non-notebook JSON file from a filesystem workspace', async () => {
-    const rootUri = 'fs://workspace/test/dir/'
-    const fileUri = 'fs://workspace/test/file/unrelated.json'
-    mocks.workspaceItems = [rootUri]
-    mocks.fsStore = {
-      getMetadata: vi.fn(async () => ({
-        uri: rootUri,
-        name: 'Filesystem Root',
-        type: NotebookStoreItemType.Folder,
-        children: [],
-        parents: [],
-      })),
-      list: vi.fn(async () => [
-        {
-          uri: fileUri,
-          name: 'unrelated.json',
-          type: NotebookStoreItemType.File,
-          children: [],
-          parents: [rootUri],
-        },
-      ]),
-      loadContent: vi.fn(async () => JSON.stringify({ unrelated: 'document' })),
-      createContent: vi.fn(),
-    }
-
-    render(<WorkspaceExplorer />)
-
-    await screen.findByText('Filesystem Root')
-    fireEvent.click(screen.getAllByRole('button', { name: 'Collapse folder' })[0])
-    fireEvent.contextMenu(await screen.findByText('unrelated.json'))
-    fireEvent.click(
-      screen.getByRole('button', {
-        name: 'Save as Runme Notebook (.runme)',
-      })
-    )
-
-    await waitFor(() => {
-      expect(mocks.fsStore.loadContent).toHaveBeenCalledWith(fileUri)
-      expect(mocks.fsStore.createContent).not.toHaveBeenCalled()
+  it('reads a mounted filesystem directory through its local mirror', async () => {
+    const root = 'local://folder/mounted'
+    mocks.workspaceItems = [root]
+    mocks.store.getMetadata.mockResolvedValue({
+      uri: root, name: 'Filesystem Root', type: NotebookStoreItemType.Folder,
+      remoteUri: 'fs://workspace/test/dir/', children: [], parents: [],
     })
-    expect(
-      await screen.findByText('Legacy .json file is not a Runme notebook')
-    ).toBeTruthy()
+    mocks.fsStore = { list: vi.fn() }
+    render(<WorkspaceExplorer />)
+    fireEvent.contextMenu(await screen.findByText('Filesystem Root'))
+    expect(screen.getByText('New Notebook (.runme)')).toBeTruthy()
+    expect(screen.queryByText('New Google Drive Folder')).toBeNull()
+    expect(mocks.fsStore.list).not.toHaveBeenCalled()
   })
 
   it('does not offer conversion for an existing .runme notebook', async () => {
@@ -1619,9 +1602,11 @@ describe('WorkspaceExplorer current document handling', () => {
     })
     const rect = vi.spyOn(HTMLElement.prototype, 'getBoundingClientRect')
       .mockReturnValue({ width: 220, height: 300 } as DOMRect)
+    mocks.workspaceItems = ['local://folder/drive']
+    mocks.store.getMetadata.mockResolvedValue({ name: 'Mounted folder', type: NotebookStoreItemType.Folder, children: [], parents: [], remoteUri: 'https://drive.google.com/drive/folders/folder' })
     const { unmount } = render(<WorkspaceExplorer />)
     try {
-      fireEvent.contextMenu(await screen.findByText('Local Notebooks'), { clientX: 900, clientY: 700 })
+      fireEvent.contextMenu(await screen.findByText('Mounted folder'), { clientX: 900, clientY: 700 })
       const menu = document.getElementById('workspace-explorer-context-menu')!
       expect(menu.style.top).toBe('460px')
       const observer = observers.find(entry => entry.element === menu)!

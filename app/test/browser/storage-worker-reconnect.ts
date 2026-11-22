@@ -165,7 +165,8 @@ async function main() {
     )
     const original = await pages[0].evaluate(async () => {
       const w = window as any
-      const file = await w.store.create('local://folder/local', 'restart.runme')
+      const directory = await (await navigator.storage.getDirectory()).getDirectoryHandle('Test notebooks', { create: true })
+      const file = await w.store.create(await w.store.mountFilesystemFolder(directory), 'restart.runme')
       w.uri = file.uri
       w.view = await w.store.createOperationLogSaveStore(file.uri)
       w.editor = w.view.initialNotebook

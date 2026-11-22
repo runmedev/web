@@ -45,15 +45,11 @@ async function main() {
     const a = await context.newPage(),
       b = await context.newPage()
     await Promise.all([connect(a, baseUrl), connect(b, baseUrl)])
-    const uri = await a.evaluate(
-      async () =>
-        (
-          await (window as any).store.create(
-            'local://folder/local',
-            'shared-owner-smoke.runme'
-          )
-        ).uri
-    )
+    const uri = await a.evaluate(async () => {
+      const store = (window as any).store
+      const dir = await (await navigator.storage.getDirectory()).getDirectoryHandle('Test notebooks', { create: true })
+      return (await store.create(await store.mountFilesystemFolder(dir), 'shared-owner-smoke.runme')).uri
+    })
     await Promise.all(
       [a, b].map((page) =>
         page.evaluate(async (uri) => {

@@ -50,22 +50,30 @@ try {
     return true;
   `)
   waitFor('return Boolean(document.querySelector("button[aria-label=\\"Sync folders\\"]"));', 'sync button')
-  const uri = JSON.stringify(evaluate(`
-    const file = await window.app.localNotebooks.create('local://folder/local', 'sync-original.runme');
-    return file.uri;
-  `))
-  evaluate(`
-    const root = document.querySelector('[data-node-id="local://folder/local"]');
-    root?.querySelector('button[aria-label="Expand folder"]')?.click();
-    return true;
+  const rootUri = evaluate<string>(`
+    const dir = await (await navigator.storage.getDirectory()).getDirectoryHandle('Explorer sync', {create:true});
+    const folder = await window.app.localNotebooks.mountFilesystemFolder(dir);
+    await window.app.localNotebooks.create(folder, 'sync-original.runme');
+    window.app.addWorkspaceItem(folder);
+    return folder;
   `)
+  const rootSelector = JSON.stringify('[data-node-id="' + rootUri + '"]')
+  waitFor(`return Boolean(document.querySelector(${rootSelector}));`, 'mounted root')
+  evaluate(`document.querySelector(${rootSelector})?.querySelector('button[aria-label="Expand folder"]')?.click(); return true;`)
   waitFor('return document.querySelector("#workspace-explorer-box")?.textContent.includes("sync-original.runme");', 'initial listing')
 
-  // Write only metadata, without emitting UI events: only a folder refresh can
-  // discover this rename. This does not read or rewrite notebook payloads.
-  evaluate(`await window.app.localNotebooks.files.update(${uri}, { name: 'sync-timer.runme' }); return true;`)
+  // Change the upstream listing outside the app so only a refresh can see it.
+  const addDiskFile = (name: string) => evaluate(`
+    const dir = await (await navigator.storage.getDirectory()).getDirectoryHandle('Explorer sync');
+    const bytes = await (await dir.getFileHandle('sync-original.runme')).getFile();
+    const writer = await (await dir.getFileHandle(${JSON.stringify(name)}, {create:true})).createWritable();
+    await writer.write(bytes);
+    await writer.close();
+    return true;
+  `)
+  addDiskFile('sync-timer.runme')
   waitFor('return document.querySelector("#workspace-explorer-box")?.textContent.includes("sync-timer.runme");', 'automatic folder refresh', 150)
-  assert(true, 'The one-minute timer discovers a persisted rename without a click')
+  assert(true, 'The one-minute timer discovers a new disk file without a click')
 
   const layout = evaluate<{ width: number; height: number; beforeOpen: boolean }>(`
     const sync = document.querySelector('button[aria-label="Sync folders"]').getBoundingClientRect();
@@ -77,7 +85,7 @@ try {
   browser('screenshot', join(output, 'scenario-explorer-folder-sync-desktop.png'))
 
   browser('set', 'viewport', '390', '844')
-  evaluate(`await window.app.localNotebooks.files.update(${uri}, { name: 'sync-mobile.runme' }); return true;`)
+  addDiskFile('sync-mobile.runme')
   browser('find', 'role', 'button', 'click', '--name', 'Sync folders', '--exact')
   waitFor('return document.querySelector("#workspace-explorer-box")?.textContent.includes("sync-mobile.runme");', 'phone toolbar refresh')
   assert(true, 'A phone-width toolbar click refreshes the listing without a context menu')
@@ -86,7 +94,7 @@ try {
     return await explorerSync.sync();
   `)
   evidence.sync = result
-  assert(result.failed.length === 0 && result.refreshed.includes('local://folder/local'), 'The shared runtime reports a successful folder refresh')
+  assert(result.failed.length === 0 && result.refreshed.includes(rootUri), 'The shared runtime reports a successful folder refresh')
   browser('screenshot', join(output, 'scenario-explorer-folder-sync-mobile.png'))
 } catch (error) {
   console.log(`[FAIL] ${String(error)}`)

@@ -1,3 +1,4 @@
+import { notebookDestination } from './mounted-folder-fixture.js'
 /** CUJ: unavailable runner diagnostics and recovery through real WebMCP tools. */
 import { type ChildProcess, spawn } from 'node:child_process'
 import {
@@ -111,7 +112,7 @@ try {
     page,
     `
     await runmeRunners.update('unavailable-cuj', 'ws://127.0.0.1:${port}/ws');
-    const doc = await notebooks.createLocal('runner-unavailable-cuj.runme');
+    const doc = await notebooks.createLocal('runner-unavailable-cuj.runme', ${JSON.stringify(await notebookDestination(page))});
     const uri = doc.handle.uri;
     const added = await notebooks.appendCell({target:{uri},kind:'code',languageId:'bash',value:${JSON.stringify(commands)},metadata:{'runme.dev/runnerName':'unavailable-cuj'}});
     await notebooks.show(uri);

@@ -128,7 +128,10 @@ import {
   filePayloadChecksum,
 } from './filePayloads'
 import {
+  buildFsUri,
+  buildWorkspaceRootUri,
   FilesystemEntryAlreadyExistsError,
+  parseFsUri,
   type FilesystemNotebookStore,
 } from './fs'
 import {
@@ -1396,6 +1399,10 @@ export class LocalNotebooks extends Dexie {
       return existing.id
     }
 
+    if (isFilesystemUri(remoteUri) && detectNotebookFileFormat(parseFsUri(remoteUri).relativePath) !== 'runme-operation-log') {
+      throw new Error('Mounted local folders support .runme notebooks only.')
+    }
+
     const id = this.generateLocalUri('file')
     const resolvedName =
       name ?? this.deriveDisplayNameFromUri(remoteUri) ?? 'Untitled Notebook'
@@ -1461,7 +1468,7 @@ export class LocalNotebooks extends Dexie {
         }
 
         return this.driveSyncCoordinator.runExclusive(
-          this.driveFolderMembershipLockKey(remoteFolderUri),
+          this.folderMembershipLockKey(remoteFolderUri),
           async () => {
             let folders = await this.folders
               .filter((record) => {
@@ -1784,12 +1791,39 @@ export class LocalNotebooks extends Dexie {
     }
 
     return this.driveSyncCoordinator.runExclusive(
-      this.driveFolderMembershipLockKey(remoteUri),
+      this.folderMembershipLockKey(remoteUri),
       () => this.updateFolderInner(remoteUri, name, options.recursive !== false)
     )
   }
 
-  private driveFolderMembershipLockKey(remoteUri: string): string {
+  async mountFilesystemFolder(handle: FileSystemDirectoryHandle): Promise<string> {
+    if (!this.filesystemStore) throw new Error('Filesystem storage is unavailable')
+    const uri = await this.filesystemStore.mountDirectory(handle)
+    return this.updateFolder(uri, handle.name)
+  }
+
+  async restoreFilesystemFolder(uri: string): Promise<string> {
+    if (!this.filesystemStore) throw new Error('Filesystem storage is unavailable')
+    await this.filesystemStore.restoreWorkspace(uri)
+    return this.updateFolder(uri)
+  }
+
+  async unmountFolder(localUri: string): Promise<void> {
+    const folder = await this.folders.get(localUri)
+    if (folder && isFilesystemUri(folder.remoteId) && !parseFsUri(folder.remoteId).relativePath) {
+      if (!this.filesystemStore) throw new Error('Filesystem storage is unavailable')
+      await this.filesystemStore.unmount(folder.remoteId)
+    }
+  }
+
+  private folderUpstream(uri: string) {
+    if (!isFilesystemUri(uri)) return this.driveStore
+    if (!this.filesystemStore) throw new Error('Filesystem storage is unavailable')
+    return this.filesystemStore
+  }
+
+  private folderMembershipLockKey(remoteUri: string): string {
+    if (isFilesystemUri(remoteUri)) return `folder-membership:${remoteUri}`
     const item = parseDriveItem(remoteUri)
     if (item.type !== NotebookStoreItemType.Folder) {
       throw new Error('Drive folder membership requires a folder URI')
@@ -1805,8 +1839,8 @@ export class LocalNotebooks extends Dexie {
     if (!initial) {
       throw new Error(`Local folder record not found for ${folderId}`)
     }
-    const lockKey = isDriveUri(initial.remoteId)
-      ? this.driveFolderMembershipLockKey(initial.remoteId)
+    const lockKey = isDriveUri(initial.remoteId) || isFilesystemUri(initial.remoteId)
+      ? this.folderMembershipLockKey(initial.remoteId)
       : `folder-membership:${initial.id}`
     await this.driveSyncCoordinator.runExclusive(lockKey, async () => {
       const current = await this.folders.get(folderId)
@@ -1838,7 +1872,7 @@ export class LocalNotebooks extends Dexie {
       .where('remoteId')
       .equals(remoteUri)
       .first()
-    if (!existingFolder) {
+    if (!existingFolder && isDriveUri(remoteUri)) {
       const target = parseDriveItem(remoteUri)
       existingFolder = await this.folders
         .filter((record) => {
@@ -1871,14 +1905,14 @@ export class LocalNotebooks extends Dexie {
         existingFolder.name === 'Drive')
     ) {
       try {
-        const metadata = await this.driveStore.getMetadata(remoteUri)
+        const metadata = await this.folderUpstream(remoteUri).getMetadata(remoteUri)
         const remoteName = metadata?.name?.trim()
         if (remoteName) {
           resolvedName = remoteName
         }
       } catch (error) {
         console.error(
-          'Failed to resolve Drive folder name from metadata',
+          'Failed to resolve folder name from metadata',
           remoteUri,
           error
         )
@@ -1911,7 +1945,22 @@ export class LocalNotebooks extends Dexie {
       await this.ensureFolderMirror(remoteUri, name)
     // Refresh only the requested level for explorer polling. Child mirrors keep
     // their existing membership until expanded, avoiding a full Drive crawl.
-    const items = await this.driveStore.list(remoteUri)
+    let items: NotebookStoreItem[]
+    try {
+      items = await this.folderUpstream(remoteUri).list(remoteUri)
+    } catch (error) {
+      // During a crawl a child can disappear or have stricter permissions.
+      // Preserve its last membership and continue indexing accessible siblings.
+      if (isFilesystemUri(remoteUri) && parseFsUri(remoteUri).relativePath &&
+          error instanceof DOMException &&
+          (error.name === 'NotAllowedError' || error.name === 'NotFoundError')) {
+        appLogger.warn('Skipped unavailable mounted subdirectory', {
+          attrs: { scope: 'storage.filesystem.sync', remoteUri, error: error.name },
+        })
+        return folderId
+      }
+      throw error
+    }
     const childUris: string[] = []
 
     for (const item of items) {
@@ -1920,11 +1969,12 @@ export class LocalNotebooks extends Dexie {
           mimeType: item.mimeType,
         })
         childUris.push(localUri)
+        if (recursive && isFilesystemUri(remoteUri)) this.enqueueSync(localUri, true)
       } else if (item.type === NotebookStoreItemType.Folder) {
         const localFolderUri = recursive
           ? await this.updateFolder(item.uri, item.name)
           : await this.driveSyncCoordinator.runExclusive(
-              this.driveFolderMembershipLockKey(item.uri),
+              this.folderMembershipLockKey(item.uri),
               async () =>
                 (await this.ensureFolderMirror(item.uri, item.name)).folderId
             )
@@ -2940,12 +2990,15 @@ export class LocalNotebooks extends Dexie {
       `notebook_${uuidv4()}`
     )
     if (!result.document) return { warnings: result.warnings }
+    const parent = await this.findParentFolder(uri)
+    if (!parent || parent.id === LOCAL_FOLDER_URI) {
+      throw new Error('Mount the source folder before creating a migrated notebook')
+    }
     const copy = await this.createContent(
-      LOCAL_FOLDER_URI,
+      parent.id,
       input.name ?? source.name.replace(/\.runme$/i, '') + '-v2.runme',
       result.document,
-      RUNME_OPERATION_LOG_MIME_TYPE,
-      { autoSync: false }
+      RUNME_OPERATION_LOG_MIME_TYPE
     )
     return {
       uri: copy.uri,
@@ -4216,9 +4269,7 @@ export class LocalNotebooks extends Dexie {
       }
       destinationParentUri = await this.updateFolder(remoteParentUri)
     }
-    if (!destinationParentUri) {
-      destinationParentUri = LOCAL_FOLDER_URI
-    }
+    if (!destinationParentUri) throw new Error('Choose a mounted destination for the converted notebook')
     const destinationParent = await this.folders.get(destinationParentUri)
     if (!destinationParent) {
       throw new Error(`Parent folder not found for ${destinationParentUri}`)
@@ -4569,6 +4620,24 @@ export class LocalNotebooks extends Dexie {
       throw new Error(`Parent folder not found for ${parentUri}`)
     }
 
+    if (this.runtime?.owner && !isDriveUri(parent.remoteId) && !isFilesystemUri(parent.remoteId)) {
+      throw new Error('Choose a mounted local or Google Drive folder for the new notebook')
+    }
+
+    if (isFilesystemUri(parent.remoteId)) {
+      if (detectNotebookFileFormat(name) !== 'runme-operation-log') {
+        throw new Error('Choose a .runme filename for a mounted folder')
+      }
+      const adapter = this.folderUpstream(parent.remoteId)
+      const item = options.content
+        ? await adapter.createContent(parent.remoteId, name, options.content, options.mimeType)
+        : await adapter.create(parent.remoteId, name)
+      const uri = await this.addFile(item.uri, item.name, { mimeType: item.mimeType })
+      await this.mutateFolderChildren(parentUri, children => [...new Set([...children, uri])])
+      await this.syncFile(uri)
+      return (await this.getMetadata(uri))!
+    }
+
     const fileUri = this.generateLocalUri('file')
     const isDriveBackedParent = isDriveUri(parent.remoteId)
     let localContent = options.content
@@ -4876,13 +4945,29 @@ export class LocalNotebooks extends Dexie {
       },
     })
 
-    if (remoteUri) {
-      const remoteItem = await this.driveStore.rename(remoteUri, nextName)
-      nextName = remoteItem.name || nextName
-      nextRemoteId = remoteItem.remoteUri ?? remoteItem.uri ?? record.remoteId
+    if (isFilesystemUri(record.remoteId)) {
+      const { workspaceId, relativePath } = parseFsUri(record.remoteId)
+      const parentUri = buildFsUri(workspaceId, relativePath.split('/').slice(0, -1).join('/'), 'directory')
+      // A scan must not publish a second mirror between a disk rename and its
+      // index update. Likewise, a queued write must use the updated disk path.
+      await this.driveSyncCoordinator.runExclusive(this.folderMembershipLockKey(parentUri), () =>
+        this.driveSyncCoordinator.runExclusive(uri, async () => {
+          const current = await this.files.get(uri)
+          if (!current || current.remoteId !== record.remoteId) throw new Error('Notebook changed during rename')
+          const renamed = await this.folderUpstream(current.remoteId).rename(current.remoteId, nextName)
+          nextName = renamed.name
+          nextRemoteId = renamed.uri
+          await this.updateFile(uri, { name: nextName, remoteId: nextRemoteId })
+        })
+      )
+    } else {
+      if (remoteUri) {
+        const remoteItem = await this.driveStore.rename(remoteUri, nextName)
+        nextName = remoteItem.name || nextName
+        nextRemoteId = remoteItem.remoteUri ?? remoteItem.uri ?? record.remoteId
+      }
+      await this.updateFile(uri, { name: nextName, remoteId: nextRemoteId })
     }
-
-    await this.updateFile(uri, { name: nextName, remoteId: nextRemoteId })
     if (record.operationLogRef) this.enqueueIpynbSync(uri)
 
     const parentFolder = await this.findParentFolder(uri)
@@ -5310,6 +5395,21 @@ export class LocalNotebooks extends Dexie {
     )
   }
 
+  /** Discover directory membership and enqueue content sync even for unopened files. */
+  async reconcileFilesystemFiles(): Promise<void> {
+    if (!this.filesystemStore) return
+    for (const ws of await this.filesystemStore.listWorkspaces()) {
+      if (!ws.mounted) continue
+      try {
+        await this.updateFolder(buildWorkspaceRootUri(ws.id), ws.name)
+      } catch (error) {
+        appLogger.warn('Could not refresh mounted directory', {
+          attrs: { workspaceId: ws.id, error: String(error) },
+        })
+      }
+    }
+  }
+
   /**
    * Enqueue durable source/creation work for the single delaying worker. The timer is only a wake-up:
    * pending work is reconstructed from IndexedDB; retry deadlines remain in memory.
@@ -5362,7 +5462,7 @@ export class LocalNotebooks extends Dexie {
 
   private enqueueSync(uri: string, discovered = false): void {
     void this.queueDriveWork('source', uri, () => this.performSyncFile(uri), {
-      delayMs: 20_000,
+      delayMs: discovered ? 0 : 20_000,
       discovered,
     })
   }
@@ -6012,7 +6112,14 @@ export class LocalNotebooks extends Dexie {
         await this.syncOperationLogFilesystem(localUri, record)
         return
       }
-      await this.syncSerializedNotebookUpstream(localUri, record)
+      // Serial formats replace the entire document. Order a disk pull with editor
+      // saves and read the local snapshot only after acquiring their shared queue.
+      const upstreamUri = record.remoteId
+      await this.serializeLocalSave(localUri, async () => {
+        const latest = await this.getFileRecord(localUri)
+        if (latest && latest.remoteId === upstreamUri)
+          await this.syncSerializedNotebookUpstream(localUri, latest)
+      })
       return
     }
 
@@ -6817,23 +6924,25 @@ export class LocalNotebooks extends Dexie {
     }
     if (!record.operationLogRef) {
       const upstreamDocument = await upstreamStore.loadContent(record.remoteId)
-      const upstream = parseOperationLog(upstreamDocument)
-      const stored = await this.operationLogStorage.initialize(
-        localUri,
-        serializeOperationLog(upstream.header, upstream.operations, {
-          canonicalOrder: true,
-        })
-      )
-      const checksum = md5(upstreamDocument)
-      await this.updateFile(localUri, {
-        doc: '',
-        operationLogRef: stored.ref,
-        md5Checksum: this.localWriteChecksum(stored),
-        lastRemoteChecksum: checksum,
-        lastUpstreamVersion: { checksum },
+      parseOperationLog(upstreamDocument)
+      const stored = await this.operationLogStorage.initialize(localUri, upstreamDocument)
+      const baseline = {
+        lastUpstreamVersion: { checksum: md5(upstreamDocument) },
         lastSynced: nowIsoString(),
         lastSyncError: undefined,
-      })
+      }
+      if (this.ownedLogs) {
+        const current = await this.ownedLogs.acknowledge(localUri, stored, record.remoteId, baseline)
+        if (!current) this.enqueueSync(localUri)
+      } else {
+        await this.updateFile(localUri, {
+          ...baseline,
+          doc: '',
+          operationLogRef: stored.ref,
+          md5Checksum: stored.checksum,
+          lastRemoteChecksum: stored.checksum,
+        })
+      }
       return
     }
 
@@ -7001,6 +7110,16 @@ export class LocalNotebooks extends Dexie {
     const upstreamDoc = upstream.serialized
     const upstreamChecksum = checksumForSerializedNotebook(upstreamDoc)
 
+    if (upstreamChecksum === localChecksum) {
+      await this.updateFile(localUri, {
+        lastRemoteChecksum: localChecksum, lastUpstreamVersion: { checksum: localChecksum },
+        lastSynced: nowIsoString(), lastSyncError: undefined,
+        ...(upstream.ipynbPreservation ? { ipynbPreservation: upstream.ipynbPreservation } : {}),
+      })
+      await this.deleteReplacedIpynbShadow(record.ipynbPreservation, upstream.ipynbPreservation)
+      return
+    }
+
     if (upstreamChecksum !== lastRemoteChecksum) {
       if (localChecksum === lastRemoteChecksum) {
         logRemoteOverwriteLocalDoc({
@@ -7047,7 +7166,7 @@ export class LocalNotebooks extends Dexie {
         upstream.ipynbPreservation,
         record.ipynbPreservation
       )
-      return
+      throw new Error('Both the browser copy and the filesystem notebook changed. Download the browser copy before resolving the conflict.')
     }
 
     const parseResult = parseSerializedNotebook(localDoc)
@@ -7236,7 +7355,7 @@ export class LocalNotebooks extends Dexie {
       throw new Error(`Local folder not found for ${localUri}`)
     }
 
-    if (!isDriveUri(record.remoteId)) {
+    if (!isDriveUri(record.remoteId) && !isFilesystemUri(record.remoteId)) {
       await this.folders.update(localUri, {
         lastSynced: nowIsoString(),
       })
@@ -7244,7 +7363,7 @@ export class LocalNotebooks extends Dexie {
     }
 
     try {
-      const metadata = await this.driveStore.getMetadata(record.remoteId)
+      const metadata = await this.folderUpstream(record.remoteId).getMetadata(record.remoteId)
       if (metadata?.name && metadata.name !== record.name) {
         await this.folders.update(localUri, { name: metadata.name })
         record.name = metadata.name

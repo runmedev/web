@@ -1,6 +1,6 @@
+import { LOCAL_FOLDER_URI } from '../storage/local'
 import { isExcalidrawFileName } from '../storage/excalidraw'
 import {
-  type NotebookStoreItem,
   NotebookStoreItemType,
 } from '../storage/notebook'
 import { isNotebookFileName } from './notebookFormat'
@@ -12,37 +12,30 @@ export type ExplorerNotebook = { uri: string; name: string; folder: string }
  * Only folder listings and item metadata are needed to match notebook names.
  */
 export async function* explorerNotebookBatches(signal: AbortSignal) {
-  const queue: { uri: string; folder: string; item?: NotebookStoreItem }[] =
-    appState.getWorkspaceItems().map((uri) => ({ uri, folder: '' }))
+  const queue: { uri: string; folder: string }[] =
+    appState.getWorkspaceItems().filter(uri => uri !== LOCAL_FOLDER_URI).map((uri) => ({ uri, folder: '' }))
   const seen = new Set<string>()
   let batch: ExplorerNotebook[] = []
   let lastPublished = 0
   let incomplete = false
   for (let i = 0; i < queue.length && !signal.aborted; i++) {
-    const { uri, folder, item: listed } = queue[i]
+    const { uri, folder } = queue[i]
     if (seen.has(uri)) continue
     seen.add(uri)
-    const fs = uri.startsWith('fs://') ? appState.filesystemStore : null
-    const store =
-      fs ?? (uri.startsWith('local://') ? appState.localNotebooks : null)
+    // Legacy raw mount URIs are replaced by their mirror during startup.
+    const store = uri.startsWith('local://') ? appState.localNotebooks : null
     if (!store) {
       incomplete = true
       continue
     }
     try {
-      const item = listed ?? (await store.getMetadata(uri))
+      const item = await store.getMetadata(uri)
       if (signal.aborted) return
       if (!item) continue
       if (item.type === NotebookStoreItemType.Folder) {
         const path = folder ? folder + '/' + item.name : item.name
-        if (fs) {
-          for (const child of await fs.list(uri, signal)) {
-            queue.push({ uri: child.uri, folder: path, item: child })
-          }
-        } else {
-          for (const child of item.children)
-            queue.push({ uri: child, folder: path })
-        }
+        for (const child of item.children)
+          queue.push({ uri: child, folder: path })
       } else if (
         isNotebookFileName(item.name) &&
         !isExcalidrawFileName(item.name)
