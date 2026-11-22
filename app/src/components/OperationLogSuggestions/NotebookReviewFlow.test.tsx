@@ -1,3 +1,4 @@
+import { mockGraderSources } from '../../lib/suggestionGraderTestFixture'
 import { create } from '@bufbuild/protobuf'
 import {
   act,
@@ -277,8 +278,9 @@ describe('comment-first comparison flow', () => {
       />
     )
   it('renders advisory colors and hover text without accepting or undoing', async () => {
-    saveGraderSettings({ enabled: true, model: 'ft:test', organization: '', project: '', apiKey: 'test-key' })
-    const fetcher = vi.spyOn(globalThis, 'fetch').mockResolvedValue(new Response(JSON.stringify({ status: 'completed', output: [{ type: 'message', content: [{ type: 'output_text', text: 'false' }] }] })))
+    mockGraderSources()
+    saveGraderSettings({ enabled: true, instructionsUri: 'local://file/rules', keyName: 'review', organization: '', project: '' })
+    const fetcher = vi.spyOn(globalThis, 'fetch').mockResolvedValue(new Response(JSON.stringify({ answers: [{type:'choice',name:'review',choice:'reject'}] })))
     try {
       const f = fixture()
       mount(f)
@@ -290,7 +292,7 @@ describe('comment-first comparison flow', () => {
       fireEvent.click(screen.getByRole('button', { name: 'Training examples' }))
       expect(fetcher).toHaveBeenCalledTimes(1)
     } finally {
-      saveGraderSettings({ enabled: false, model: '', organization: '', project: '', apiKey: '' })
+      saveGraderSettings({ enabled: false, instructionsUri: 'local://file/rules', keyName: 'review', organization: '', project: '' })
       fetcher.mockRestore()
     }
   })

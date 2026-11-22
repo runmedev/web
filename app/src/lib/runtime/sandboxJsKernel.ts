@@ -113,6 +113,7 @@ const DEFAULT_SANDBOX_ALLOWED_METHODS = [
   'suggestionGrader.getSettings',
   'suggestionGrader.setSettings',
   'suggestionGrader.grade',
+  'suggestionGrader.gradePhrase',
   'suggestionGrader.help',
   'trainingExamples.prepare',
   'trainingExamples.preview',
@@ -534,6 +535,7 @@ export function buildSandboxSrcDoc(options: {
           getSettings: () => hostCall("suggestionGrader.getSettings", []),
           setSettings: (args) => hostCall("suggestionGrader.setSettings", [args]),
           grade: (args) => hostCall("suggestionGrader.grade", [args]),
+          gradePhrase: (args) => hostCall("suggestionGrader.gradePhrase", [args]),
           help: () => hostCall("suggestionGrader.help", []),
         };
         const agents = {

@@ -1,4 +1,5 @@
 // @vitest-environment jsdom
+import { mockGraderSources } from '../suggestionGraderTestFixture'
 import { create } from '@bufbuild/protobuf'
 import { afterEach, describe, expect, it, vi } from 'vitest'
 
@@ -99,9 +100,10 @@ describe('codeModeExecutor', () => {
       updateCell: (cell: parser_pb.Cell) => { model.getNotebook().cells[0] = cell },
       flushPendingPersist: vi.fn().mockResolvedValue(undefined),
     }
-    saveGraderSettings({ enabled: true, model: 'ft:test', organization: '', project: '', apiKey: 'test-only' })
+    mockGraderSources()
+    saveGraderSettings({ enabled: true, instructionsUri: 'local://file/rules', keyName: 'review', organization: '', project: '' })
     const fetchMock = vi.spyOn(globalThis, 'fetch').mockResolvedValue(new Response(JSON.stringify({
-      status: 'completed', output: [{ type: 'message', content: [{ type: 'output_text', text: 'true' }] }],
+      answers: [{type:'choice',name:'review',choice:'accept'}],
     })))
     const args = { target: { uri: model.getUri() }, grade: true, operations: [{ op: 'update', refId: 'cell-a', patch: { value: 'after' } }] }
     let bridgeResult: any
@@ -133,14 +135,15 @@ describe('codeModeExecutor', () => {
     const results: unknown[] = []
     vi.spyOn(SandboxJSKernel.prototype, 'run').mockImplementation(async function (this: SandboxJSKernel) {
       const bridge = (this as unknown as { bridge: { call: (method: string, args: unknown[]) => Promise<unknown> } }).bridge
-      results.push(await bridge.call('suggestionGrader.setSettings', [{ enabled: false, model: 'ft:test', organization: '', project: '', apiKey: 'test-only-key' }]))
+      await expect(bridge.call('suggestionGrader.setSettings', [{ keyName: 'unselected' }])).rejects.toThrow('Select the key')
+      results.push(await bridge.call('suggestionGrader.setSettings', [{ enabled: false, instructionsUri: 'local://file/rules', organization: '', project: '', apiKey: 'test-only-key' }]))
       results.push(await bridge.call('suggestionGrader.getSettings', []))
       results.push(await bridge.call('suggestionGrader.help', []))
       await expect(bridge.call('suggestionGrader.grade', [{}])).rejects.toThrow('target.uri')
     })
     await createCodeModeExecutor({ mode: 'sandbox', resolveNotebook: () => null }).execute({ source: 'webmcp', code: '// test grader host bridge' })
     expect(JSON.stringify(results)).not.toContain('test-only-key')
-    expect(results[1]).toMatchObject({ model: 'ft:test', enabled: false, hasDedicatedKey: true })
+    expect(results[1]).toMatchObject({ instructionsUri: 'local://file/rules', enabled: false, keyName: '' })
     window.localStorage.removeItem('runme.suggestion-grader.v1')
   })
   it('dispatches upload, submit and status through the sandbox host without returning credentials', async () => {

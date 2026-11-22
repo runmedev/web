@@ -73,7 +73,7 @@ interface ParsedFsUri {
   relativePath: string;
 }
 
-function parseFsUri(uri: string): ParsedFsUri {
+export function parseFsUri(uri: string): ParsedFsUri {
   if (!uri.startsWith("fs://workspace/")) {
     throw new Error(`Invalid filesystem URI: ${uri}`);
   }

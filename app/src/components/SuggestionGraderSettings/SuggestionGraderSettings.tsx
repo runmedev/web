@@ -1,27 +1,44 @@
-import { useState } from 'react'
+import { useEffect, useState, useSyncExternalStore } from 'react'
 import {
   getGraderSettings,
   saveGraderSettings,
+  readRubric,
+  listRubrics,
 } from '../../lib/suggestionGrader'
+
+import { keyVault } from '../../lib/keyvault/store'
+import type { ExplorerNotebook } from '../../lib/explorerNotebookSearch'
+
+const fieldClass =
+  'mt-1 block w-full rounded border border-nb-border bg-nb-surface p-2 text-nb-text'
 
 /** Local drafts are only persisted by Save. Secrets never populate a saved-key input. */
 export function SuggestionGraderSettings() {
   const [settings, setSettings] = useState(getGraderSettings)
-  const [apiKey, setApiKey] = useState('')
-  const [clearKey, setClearKey] = useState(false)
-  const [showKey, setShowKey] = useState(false)
+  const vault = useSyncExternalStore(keyVault.subscribe, keyVault.getSnapshot)
+  const [files, setFiles] = useState<ExplorerNotebook[]>([])
+  const [query, setQuery] = useState('')
   const [message, setMessage] = useState('')
-  const save = () => {
+  useEffect(() => {
+    const controller = new AbortController()
+    async function list() {
+      for await (const batch of listRubrics(controller.signal)) {
+        if (!controller.signal.aborted) setFiles(old => [...old, ...batch])
+      }
+    }
+    void list().catch(() => setMessage('Unable to list mounted notebooks.'))
+    return () => controller.abort()
+  }, [])
+  const save = async () => {
     try {
-      setSettings(
-        saveGraderSettings({
-          ...settings,
-          apiKey: clearKey ? '' : apiKey || undefined,
-        })
-      )
-      setApiKey('')
-      setClearKey(false)
-      setShowKey(false)
+      if (settings.enabled) {
+        if (!vault.names.includes(settings.keyName))
+          throw new Error('Unlock Key Vault and select an API key.')
+        if (!settings.instructionsUri)
+          throw new Error('Select a mounted instructions notebook.')
+        await readRubric(settings.instructionsUri)
+      }
+      setSettings(saveGraderSettings(settings))
       setMessage('AI grader settings saved.')
     } catch (e) {
       setMessage(e instanceof Error ? e.message : 'Could not save settings')
@@ -37,15 +54,76 @@ export function SuggestionGraderSettings() {
         Predict whether to accept or reject a cell change. Predictions are
         advisory; only you can accept or undo edits.
       </p>
-      {(['model', 'organization', 'project'] as const).map((field) => (
+      <label className="block text-sm">
+        OpenAI key in Key Vault
+        <select
+          className={fieldClass}
+          value={settings.keyName}
+          onChange={(e) =>
+            setSettings({ ...settings, keyName: e.target.value })
+          }
+        >
+          <option value="">Select a key</option>
+          {settings.keyName && !vault.names.includes(settings.keyName) && (
+            <option value={settings.keyName}>
+              {settings.keyName} (unavailable)
+            </option>
+          )}
+          {vault.names.map((name) => (
+            <option key={name}>{name}</option>
+          ))}
+        </select>
+      </label>
+      <p className="text-xs text-nb-text-muted">
+        Add your OpenAI API key in Key Vault and unlock it to grade.
+      </p>
+      <label className="block text-sm">
+        Search mounted notebooks
+        <input
+          className={fieldClass}
+          type="search"
+          value={query}
+          onChange={(e) => setQuery(e.target.value)}
+        />
+      </label>
+      <label className="block text-sm">
+        Instructions notebook
+        <select
+          className={fieldClass}
+          value={settings.instructionsUri}
+          onChange={(e) =>
+            setSettings({ ...settings, instructionsUri: e.target.value })
+          }
+        >
+          <option value="">Select a mounted .runme notebook</option>
+          {settings.instructionsUri &&
+            !files.some((f) => f.uri === settings.instructionsUri) && (
+              <option value={settings.instructionsUri}>
+                {settings.instructionsUri}
+              </option>
+            )}
+          {files
+            .filter(
+              (f) =>
+                f.uri === settings.instructionsUri ||
+                (f.folder + '/' + f.name)
+                  .toLowerCase()
+                  .includes(query.toLowerCase())
+            )
+            .map((f) => (
+              <option key={f.uri} value={f.uri}>
+                {[f.folder, f.name].filter(Boolean).join('/')}
+              </option>
+            ))}
+        </select>
+      </label>
+      {(['organization', 'project'] as const).map((field) => (
         <label key={field} className="block text-sm">
-          {field === 'model'
-            ? 'Model ID'
-            : field === 'organization'
-              ? 'Organization (optional)'
-              : 'Project (optional)'}
+          {field === 'organization'
+            ? 'Organization (optional)'
+            : 'Project (optional)'}
           <input
-            className="mt-1 w-full rounded border border-nb-border bg-white p-2 text-nb-text"
+            className={fieldClass}
             value={settings[field]}
             onChange={(e) =>
               setSettings({ ...settings, [field]: e.target.value })
@@ -53,50 +131,6 @@ export function SuggestionGraderSettings() {
           />
         </label>
       ))}
-      <label className="block text-sm">
-        Grader API key (optional)
-        <input
-          id="grader-api-key"
-          type={showKey ? 'text' : 'password'}
-          autoComplete="off"
-          spellCheck={false}
-          className="mt-1 w-full rounded border border-nb-border bg-white p-2 text-nb-text"
-          placeholder={
-            settings.hasDedicatedKey
-              ? 'Dedicated key saved; enter a replacement'
-              : 'Uses OpenAI key from Authentication Settings'
-          }
-          value={apiKey}
-          onChange={(e) => {
-            setApiKey(e.target.value)
-            setClearKey(false)
-          }}
-        />
-      </label>
-      <button
-        type="button"
-        aria-controls="grader-api-key"
-        disabled={!apiKey}
-        onClick={() => setShowKey(!showKey)}
-      >
-        {showKey ? 'Hide' : 'Show'} entered key
-      </button>
-      {settings.hasDedicatedKey && (
-        <label className="block text-sm">
-          <input
-            type="checkbox"
-            checked={clearKey}
-            onChange={(e) => setClearKey(e.target.checked)}
-          />{' '}
-          Clear dedicated key on save
-        </label>
-      )}
-      <p className="text-xs text-nb-text-muted">
-        Settings stay in this browser origin. Keys are stored unencrypted in
-        localStorage, accessible to same-origin scripts and notebook code; only
-        run trusted code. Keys are never written to notebooks or Drive. Requests
-        go only to api.openai.com.
-      </p>
       <label className="block text-sm">
         <input
           type="checkbox"
@@ -108,10 +142,11 @@ export function SuggestionGraderSettings() {
         Enable automatic predictions when reviewing
       </label>
       <p className="text-xs text-nb-text-muted">
-        Enabling sends baseline notebook text and each proposed cell change to
-        OpenAI when you open Compare changes. Comments, outputs, authors and
-        labels are excluded. Requests use your API key and may incur charges.
-        Two requests run at a time; predictions are cached for this view only.
+        Grading sends the selected Markdown instructions, baseline text and
+        proposed change to OpenAI when you open Compare changes. Comments,
+        outputs, authors and labels are excluded. Requests use your API key and
+        may incur charges. Two requests run at a time; predictions are cached
+        for this view only.
       </p>
       <button
         type="button"

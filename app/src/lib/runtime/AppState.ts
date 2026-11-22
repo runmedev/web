@@ -35,6 +35,8 @@ export class AppState {
   filesystemStore: FilesystemNotebookStore | null = null;
   localNotebooks: LocalNotebooks | null = null;
   localComments: LocalComments | null = null;
+  /** Flush an open editor before another feature reads its committed local snapshot. */
+  flushOpenNotebook?: (uri: string) => Promise<void>;
   private openNotebookHandler: ((uri: string) => void | Promise<void>) | null =
     null;
   private loadNotebookHandler:

@@ -157,6 +157,9 @@ export function NotebookProvider({ children }: { children: ReactNode }) {
   );
 
   useEffect(() => {
+    appState.flushOpenNotebook = async (uri) => {
+      await controller.getNotebookData(uri)?.flushPendingPersist();
+    };
     appState.setOpenNotebookHandler(async (uri: string) => {
       await openAndSelectNotebook(uri);
     });
@@ -176,6 +179,7 @@ export function NotebookProvider({ children }: { children: ReactNode }) {
       setCurrentDoc(localUri);
     });
     return () => {
+      delete appState.flushOpenNotebook;
       appState.setOpenNotebookHandler(null);
       appState.setLoadNotebookHandler(null);
       appState.setFocusNotebookHandler(null);

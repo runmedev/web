@@ -1,3 +1,4 @@
+import { mockGraderSources } from '../../lib/suggestionGraderTestFixture'
 import '@testing-library/jest-dom/vitest'
 import {
   act,
@@ -89,12 +90,13 @@ afterEach(() => localStorage.removeItem('runme.suggestion-grader.v1'))
 describe('training examples viewer', () => {
   it('shows the model prediction separately from the label using the exact example input', async () => {
     const { result, j } = fixture()
+    mockGraderSources()
     saveGraderSettings({
       enabled: true,
-      model: 'ft:example-classifier',
+      instructionsUri: 'local://file/rules', keyName: 'review',
       organization: '',
       project: '',
-      apiKey: 'test-key',
+
     })
     vi.mocked(gradeSuggestion).mockResolvedValue({
       accepted: false,

@@ -1,4 +1,5 @@
 // @vitest-environment jsdom
+import { mockGraderSources } from '../../lib/suggestionGraderTestFixture'
 import { act, renderHook, waitFor } from '@testing-library/react'
 import { create } from '@bufbuild/protobuf'
 import { afterEach, beforeEach, expect, it, vi } from 'vitest'
@@ -37,14 +38,15 @@ function preview(value: string, count = 1) {
 }
 const settings = {
   enabled: true,
-  model: 'ft:test',
+  instructionsUri: 'local://file/rules',
+  keyName: 'review',
   organization: '',
   project: '',
-  apiKey: 'test-key',
 }
 beforeEach(() => {
   localStorage.clear()
   vi.mocked(gradeSuggestion).mockReset()
+  mockGraderSources()
   saveGraderSettings(settings)
 })
 afterEach(() => vi.restoreAllMocks())
@@ -121,7 +123,7 @@ it('clears predictions when disabled and invalidates cache on key/model changes'
   })
   expect(result.current.get('c0')?.status).toBe('none')
   act(() => {
-    saveGraderSettings({ ...settings, apiKey: 'new-key' })
+    saveGraderSettings({ ...settings, project: 'new-project' })
   })
   await waitFor(() => expect(gradeSuggestion).toHaveBeenCalledTimes(2))
 })

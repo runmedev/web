@@ -1005,6 +1005,10 @@ describe('LocalNotebooks operation-log storage', () => {
             languageId: 'markdown',
             value: 'Local OPFS value',
           }),
+          create(parser_pb.CellSchema, {
+            refId: 'code_example', kind: parser_pb.CellKind.CODE,
+            languageId: 'javascript', value: 'discard this code',
+          }),
         ],
       })
     )
@@ -1014,6 +1018,8 @@ describe('LocalNotebooks operation-log storage', () => {
 
     const snapshot = await store.loadOperationLogSnapshot(created.uri)
 
+    expect(await store.readGradingInstructions(created.uri, [created.uri])).toBe('Local OPFS value')
+    await expect(store.readGradingInstructions(created.uri, [])).rejects.toThrow('Mount')
     expect(snapshot.cells[0]?.value).toBe('Local OPFS value')
     expect(driveStore.loadContent).not.toHaveBeenCalled()
     expect(driveStore.getVersionMetadata).not.toHaveBeenCalled()

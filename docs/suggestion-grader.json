@@ -10,20 +10,22 @@
       "kind": 1,
       "languageId": "markdown",
       "refId": "suggestion-grader-guide",
-      "value": "# Advisory AI predictions in Compare changes\n\nOpen **AI grader** (the sparkle icon in the left navigation). Enter your fine-tuned model ID, optional organization and project, and optionally a dedicated key. Without a dedicated key, Runme uses the OpenAI key in Authentication Settings, only if it is configured for https://api.openai.com/v1.\n\nEnable automatic predictions and save to opt in. Opening **Compare changes** sends baseline notebook text and each cell's proposed content change to the OpenAI Responses API. API charges may apply. Comments, outputs, authors, review decisions and labels are excluded. Keys stay in this browser origin's unencrypted localStorage, never in notebook history or Google Drive. Only run trusted code.\n\nA green accept button means the model predicts acceptance. A red X means it predicts rejection; clicking X still **undoes** the cell change. The alternative is subdued. Neutral buttons mean no prediction, disabled settings, a pending request or an error. Hover or keyboard-focus the controls for the accessible textual explanation. Colors indicate a binary prediction, not confidence. Human decisions never happen automatically.\n\nPredictions use exactly the classifier prompt from trainingExamples.encodeSftExample, with content-only native operation payloads. Changes outside the graded cell remain at the selected baseline. Output/metadata-only changes abstain. Only completed responses containing exactly true or false are accepted.\n\nAt most two requests run concurrently. Leaving the comparison cancels pending work. Exact input/config matches are cached in memory for this mounted view; settings changes invalidate results. Errors do not trigger automatic retries. No prediction is stored as human feedback or used as a training label."
+      "value": "# Configure the AI grader\n\nWrite your grading rules in Markdown cells in a mounted .runme notebook. Add a named OpenAI API key in Key Vault and unlock it. In **AI grader**, select the key name and instructions notebook, then enable predictions and save. Existing model-based configurations require a new selection. Only the key name is saved with grader preferences.\n\nOpening **Compare changes** sends the saved rubric, baseline text and proposed content change to OpenAI Decisions. API charges may apply. Code cells, outputs, comments, labels and authors are excluded from the rubric. Save a rubric edit to apply it to subsequent grades. Remote edits take effect after Explorer syncs them locally.\n\nGreen highlights accept and red highlights undo. You decide whether to apply either action. Refusals, missing files and locked or deleted keys yield no prediction."
     },
     {
       "kind": 2,
       "languageId": "javascript",
       "refId": "suggestion-grader-status",
-      "metadata": { "runme.dev/runnerName": "appkernel-js" },
+      "metadata": {
+        "runme.dev/runnerName": "appkernel-js"
+      },
       "value": "// Read-only; does not reveal API keys or send inference requests.\nconsole.log(await suggestionGrader.getSettings());\nconsole.log(await suggestionGrader.help());"
     },
     {
       "kind": 1,
       "languageId": "markdown",
       "refId": "suggestion-grader-api",
-      "value": "## Agent/API usage\n\nThe same functions are available through browser JavaScript and WebMCP. Configure non-secret fields with `suggestionGrader.setSettings({enabled, model, organization, project})`; enter secrets through Settings, not executable notebook source.\n\nTo explicitly grade a frozen cell transition, call `await suggestionGrader.grade({target: {uri: notebookUri}, comparison: {startRevisionId, endRevisionId}, cellId})`. It returns `{accepted, model, requestId}` without editing the notebook. Settings must be enabled first.\n\n[Responses API reference](https://developers.openai.com/api/reference/cli/resources/responses/methods/create)"
+      "value": "## Agent/API usage\n\nInspect the active selections with `suggestionGrader.getSettings()`. For a phrase, call `await suggestionGrader.gradePhrase({text: \"up to five attempts\"})`. For a cell comparison, call `await suggestionGrader.grade({target: {uri: notebookUri}, comparison: {startRevisionId, endRevisionId}, cellId})`. Both return an advisory `{accepted, model, requestId}`.\n\n[Decisions API reference](https://developers.openai.com/api/reference/resources/decisions/methods/create)\n\n### Grade alternatives before editing with Codex\n\nUse WebMCP ExecuteCode to read the target once and generate candidate replacements against that baseline. For each candidate call `suggestionGrader.gradePhrase({text: candidate, context: originalCell.value})`. A grading call leaves the notebook untouched. If several candidates pass, Codex or the reviewer selects one. If none pass or grading fails, leave the cell alone. To apply an authorized selection, call `notebooks.update({target, expectedRevision: baseline.handle.revision, operations: [{op: 'update', refId: originalCell.refId, patch: {value: candidate}}]})`. On a revision mismatch, read again and regrade. For independent cells, collect the selected edits into the same revision-checked update."
     },
     {
       "kind": 1,
@@ -35,7 +37,9 @@
       "kind": 2,
       "languageId": "javascript",
       "refId": "suggestion-grader-update-example",
-      "metadata": { "runme.dev/runnerName": "appkernel-js" },
+      "metadata": {
+        "runme.dev/runnerName": "appkernel-js"
+      },
       "value": "const uri = ''; // Fill in the resolved local:// notebook URI.\nconst cellId = ''; // Fill in the target cell refId.\nconst newText = ''; // Fill in the replacement source.\nif (!uri || !cellId) throw new Error('Set uri, cellId and newText before running.');\nif (!(await notebooks.help('update')).includes('grade?: boolean')) throw new Error('This build does not support graded updates.');\nconst target = { uri };\nconst doc = await notebooks.get(target);\nconst updated = await notebooks.update({\n  target,\n  expectedRevision: doc.handle.revision,\n  operations: [{ op: 'update', refId: cellId, patch: { value: newText } }],\n  grade: true,\n});\nconsole.log({ handle: updated.handle, grading: updated.grading });"
     }
   ]

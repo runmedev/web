@@ -129,6 +129,7 @@ import {
 } from './filePayloads'
 import {
   FilesystemEntryAlreadyExistsError,
+  parseFsUri,
   type FilesystemNotebookStore,
 } from './fs'
 import {
@@ -3565,6 +3566,58 @@ export class LocalNotebooks extends Dexie {
     return this.withMissingOpfsRecovery(uri, () =>
       this.loadOperationLogSnapshotInner(uri)
     )
+  }
+
+  /** Resolve a mirrored file against mounted roots using IndexedDB metadata only. */
+  private async mountedRubricFolder(file: LocalFileRecord, roots: Set<string>): Promise<string | undefined> {
+    if (!file.operationLogRef || detectNotebookFileFormat(file.name) !== 'runme-operation-log') return
+    if (roots.has(file.id)) return ''
+    if (roots.has(LOCAL_FOLDER_URI) && isLocalFileUpstream(file.remoteId, file.id)) return 'Local Notebooks'
+    if (file.remoteId.startsWith('fs://workspace/')) {
+      const source = parseFsUri(file.remoteId)
+      for (const uri of roots) {
+        if (!uri.startsWith('fs://workspace/')) continue
+        const root = parseFsUri(uri)
+        if (source.workspaceId === root.workspaceId && root.kind === 'directory' &&
+            (!root.relativePath || source.relativePath.startsWith(root.relativePath + '/'))) {
+          return [root.workspaceId, ...source.relativePath.split('/').slice(0,-1)].join('/')
+        }
+      }
+    }
+    const names: string[] = []
+    const seen = new Set<string>()
+    let current = file.id
+    while (!seen.has(current)) {
+      seen.add(current)
+      const parent = await this.findParentFolder(current)
+      if (!parent) return
+      names.unshift(parent.name)
+      current = parent.id
+      if (roots.has(current)) return names.join('/')
+    }
+  }
+
+  /** Project one bounded metadata page. Notebook bytes stay in OPFS. */
+  async listMountedRubrics(mountedRoots: string[], after?: string) {
+    const roots = new Set(mountedRoots)
+    return readTablePage(this.files, async file => {
+      const folder = await this.mountedRubricFolder(file, roots)
+      return folder === undefined ? undefined : {uri:file.id, name:file.name, folder}
+    }, {after})
+  }
+
+  async readGradingInstructions(uri: string, mountedRoots: string[]): Promise<string> {
+    const file = await this.files.get(uri)
+    if (!file || await this.mountedRubricFolder(file, new Set(mountedRoots)) === undefined)
+      throw new Error('Mount and sync the instructions notebook in Explorer.')
+    const notebook = await this.loadOperationLogSnapshotInner(uri)
+    const text = notebook.cells
+      .filter(cell => cell.kind === parser_pb.CellKind.MARKUP &&
+        (!cell.languageId || cell.languageId === 'markdown') && cell.value.trim())
+      .map(cell => cell.value)
+      .join('\n\n')
+    if (!text) throw new Error('Add Markdown instructions to the selected notebook.')
+    return text
   }
 
   private async loadOperationLogSnapshotInner(

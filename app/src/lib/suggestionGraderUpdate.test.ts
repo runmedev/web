@@ -7,7 +7,10 @@ import { gradeSuggestion } from './suggestionGrader'
 import { gradeNotebookUpdate } from './suggestionGraderUpdate'
 import { replayContent } from './trainingExamples/payloads'
 
-vi.mock('./suggestionGrader', () => ({ gradeSuggestion: vi.fn() }))
+vi.mock('./suggestionGrader', () => ({
+  gradeSuggestion: vi.fn(),
+  prepareGrader: vi.fn().mockResolvedValue({}),
+}))
 
 /** Build isolated content snapshots without a storage backend. */
 function doc(cells: Array<[string, string]>): NotebookDocument {
@@ -85,7 +88,7 @@ it('bounds concurrency, retains ordered partial results, and does not retry erro
       ['c', 'c'],
     ])
   )
-  expect(gradeSuggestion).toHaveBeenCalledTimes(2)
+  await vi.waitFor(() => expect(gradeSuggestion).toHaveBeenCalledTimes(2))
   vi.mocked(gradeSuggestion).mockRejectedValue(new Error('No prediction'))
   finish[0]()
   finish[1]()
