@@ -620,6 +620,23 @@ describe('Actions tabs', () => {
     }
   )
 
+  it('keeps a removed page tab from editing the first page', async () => {
+    const uri = 'local://file/page-test'
+    const removed = 'page://notebook/' + encodeURIComponent(uri) + '/removed'
+    contextMocks.currentDoc = removed
+    contextMocks.workspaceDocuments = [{ uri: removed, title: 'Removed' }]
+    contextMocks.notebookSnapshots.set(uri, {
+      uri,
+      loaded: true,
+      notebook: create(parser_pb.NotebookSchema),
+    })
+    render(<Actions />)
+    expect(await screen.findByTestId('missing-notebook-page')).toBeTruthy()
+    expect(screen.queryByLabelText('Add cell at end')).toBeNull()
+    fireEvent.click(screen.getByRole('button', { name: 'Open first page' }))
+    expect(contextMocks.setCurrentDoc).toHaveBeenCalledWith(uri)
+  })
+
   it('opens suggestion review as a separate workspace tab', async () => {
     const uri = 'local://file/suggestions'
     const suggestionUri = getOperationLogSuggestionDocumentUri(uri)
@@ -3346,14 +3363,8 @@ describe('Action component', () => {
     ) as HTMLSelectElement | null
 
     expect(runButton.disabled).toBe(true)
-    expect(screen.getByLabelText('Add cell above')).toHaveProperty(
-      'disabled',
-      true
-    )
-    expect(screen.getByLabelText('Add cell below')).toHaveProperty(
-      'disabled',
-      true
-    )
+    expect(screen.queryByLabelText('Add cell above')).toBeNull()
+    expect(screen.queryByLabelText('Add cell below')).toBeNull()
     fireEvent.click(runButton)
     expect(stub.run).not.toHaveBeenCalled()
     expect(stub.update).not.toHaveBeenCalled()

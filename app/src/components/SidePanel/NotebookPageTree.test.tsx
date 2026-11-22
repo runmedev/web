@@ -76,7 +76,7 @@ it('adds and renames a page, nests its headings and reorders it by dragging its 
     'Remove page and keep cells',
   ])
   fireEvent.keyDown(screen.getByRole('menu'), { key: 'Escape' })
-  const target = screen.getByRole('button', { name: 'Main', exact: true })
+  const target = screen.getByRole('button', { name: 'Main' })
   fireEvent.dragStart(title, { dataTransfer: { setData: vi.fn() } })
   fireEvent.dragOver(target)
   fireEvent.drop(target)

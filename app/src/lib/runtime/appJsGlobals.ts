@@ -624,7 +624,7 @@ export function createAppJsGlobals({
     const doc = await notebooksApi.get(target)
     if (pageId !== undefined) {
       if (
-        !target ||
+        resolveNotebookTargetUri(target) !== doc.handle.uri ||
         !notebookPages(doc.notebook.metadata).some((p) => p.id === pageId)
       )
         throw new Error(
@@ -637,7 +637,10 @@ export function createAppJsGlobals({
     )
     const updated = await notebooksApi.update({
       target: { handle: doc.handle },
-      expectedRevision: doc.handle.revision,
+      expectedRevision:
+        target && 'handle' in target
+          ? target.handle.revision
+          : doc.handle.revision,
       reason:
         reason ??
         `Append ${cell.kind === 'markup' ? 'markup' : 'code'} cell from App Console helper`,

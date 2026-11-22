@@ -784,20 +784,6 @@ export function Action({
   // immediately repaint output visibility without requiring a separate listener.
   const runID = cellData.getRunID()
 
-  const handleAddCellBefore = useCallback(() => {
-    if (readOnly) {
-      return
-    }
-    cellData.addBefore(parser_pb.CellKind.CODE, cell?.languageId)
-  }, [cell?.languageId, cellData, readOnly])
-
-  const handleAddCellAfter = useCallback(() => {
-    if (readOnly) {
-      return
-    }
-    cellData.addAfter(parser_pb.CellKind.CODE, cell?.languageId)
-  }, [cell?.languageId, cellData, readOnly])
-
   const updateCellLocal = useCallback(
     (nextCell: parser_pb.Cell) => {
       if (readOnly) {
@@ -1713,26 +1699,6 @@ export function Action({
         onFocusCapture={handleFocusCapture}
         data-cell-ref-id={cell.refId}
       >
-        <div className="flex w-7 shrink-0 flex-col items-center justify-between py-1">
-          <button
-            type="button"
-            aria-label="Add cell above"
-            className="cell-add-btn h-5 w-5"
-            disabled={readOnly}
-            onClick={handleAddCellBefore}
-          >
-            <PlusIcon width={10} height={10} />
-          </button>
-          <button
-            type="button"
-            aria-label="Add cell below"
-            className="cell-add-btn h-5 w-5"
-            disabled={readOnly}
-            onClick={handleAddCellAfter}
-          >
-            <PlusIcon width={10} height={10} />
-          </button>
-        </div>
         <div
           id={`reference-body-${cell.refId}`}
           className="relative min-w-0 flex-1"
@@ -1815,26 +1781,6 @@ export function Action({
         data-testid="resource-action"
         data-cell-ref-id={cell.refId}
       >
-        <div className="flex w-7 shrink-0 flex-col items-center justify-between py-1">
-          <button
-            type="button"
-            aria-label="Add cell above"
-            className="cell-add-btn h-5 w-5"
-            disabled={readOnly}
-            onClick={handleAddCellBefore}
-          >
-            <PlusIcon width={10} height={10} />
-          </button>
-          <button
-            type="button"
-            aria-label="Add cell below"
-            className="cell-add-btn h-5 w-5"
-            disabled={readOnly}
-            onClick={handleAddCellAfter}
-          >
-            <PlusIcon width={10} height={10} />
-          </button>
-        </div>
         <div className="relative min-w-0 flex-1">
           <ResourceCell cell={cell} />
           {canCopyCellLink && (
@@ -1905,30 +1851,6 @@ export function Action({
         data-testid="markdown-action"
         data-cell-ref-id={cell.refId}
       >
-        {/* Left gutter: top + bottom add-cell buttons */}
-        <div
-          id={`markdown-gutter-${cell.refId}`}
-          className="flex w-7 shrink-0 flex-col items-center justify-between py-1"
-        >
-          <button
-            type="button"
-            aria-label="Add cell above"
-            className="cell-add-btn h-5 w-5"
-            disabled={readOnly}
-            onClick={handleAddCellBefore}
-          >
-            <PlusIcon width={10} height={10} />
-          </button>
-          <button
-            type="button"
-            aria-label="Add cell below"
-            className="cell-add-btn h-5 w-5"
-            disabled={readOnly}
-            onClick={handleAddCellAfter}
-          >
-            <PlusIcon width={10} height={10} />
-          </button>
-        </div>
         {/* Cell content */}
         <div className="min-w-0 flex-1">
           <div className="relative w-full min-w-0 max-w-full overflow-hidden">
@@ -2076,29 +1998,6 @@ export function Action({
         data-testid="html-action"
         data-cell-ref-id={cell.refId}
       >
-        <div
-          id={`html-gutter-${cell.refId}`}
-          className="flex w-7 shrink-0 flex-col items-center justify-between py-1"
-        >
-          <button
-            type="button"
-            aria-label="Add cell above"
-            className="cell-add-btn h-5 w-5"
-            disabled={readOnly}
-            onClick={handleAddCellBefore}
-          >
-            <PlusIcon width={10} height={10} />
-          </button>
-          <button
-            type="button"
-            aria-label="Add cell below"
-            className="cell-add-btn h-5 w-5"
-            disabled={readOnly}
-            onClick={handleAddCellAfter}
-          >
-            <PlusIcon width={10} height={10} />
-          </button>
-        </div>
         <div className="min-w-0 flex-1">
           <div className="relative w-full min-w-0 max-w-full overflow-hidden">
             <HtmlCell
@@ -2206,31 +2105,6 @@ export function Action({
       data-testid="code-action"
       data-cell-ref-id={cell.refId}
     >
-      {/* Left gutter: top + bottom add-cell buttons */}
-      <div
-        id={`code-gutter-${cell.refId}`}
-        className="flex w-7 shrink-0 flex-col items-center justify-between py-1"
-      >
-        <button
-          type="button"
-          aria-label="Add cell above"
-          className="cell-add-btn h-5 w-5"
-          disabled={readOnly}
-          onClick={handleAddCellBefore}
-        >
-          <PlusIcon width={10} height={10} />
-        </button>
-        <button
-          type="button"
-          aria-label="Add cell below"
-          className="cell-add-btn h-5 w-5"
-          disabled={readOnly}
-          onClick={handleAddCellAfter}
-        >
-          <PlusIcon width={10} height={10} />
-        </button>
-      </div>
-
       {/* One interaction group, with no padded output tray or enclosing card. */}
       <div
         id={`cell-group-${cell.refId}`}
@@ -2604,7 +2478,7 @@ function NotebookTabContent({
   const moveDestinations = readOnly
     ? []
     : pages.filter((page) => page.id !== currentPage)
-  const pageTitle = pages.find((page) => page.id === currentPage)?.name
+  const pageTitle = pages.find((page) => page.id === initialPage)?.name
   useEffect(() => {
     if (initialPage && pageTitle)
       showDocument(notebookPageUri(docUri, initialPage), { title: pageTitle })
@@ -4024,6 +3898,33 @@ function NotebookTabContent({
     }
   }, [])
 
+  // A tab identifies a particular page. Never redirect edits from a removed
+  // page to the default page, even when another client deleted it.
+  if (initialPage && notebookSnapshot?.loaded && pageTitle === undefined) {
+    return (
+      <div
+        data-testid="missing-notebook-page"
+        className="p-4 text-sm text-nb-text-muted"
+      >
+        <p>
+          This page is no longer in the notebook. Its cells are on the first
+          page.
+        </p>
+        <Button
+          variant="soft"
+          onClick={() => {
+            const first = pages[0]
+            const uri = first ? notebookPageUri(docUri, first.id) : docUri
+            showDocument(uri, { title: first?.name ?? entry.name })
+            setCurrentDoc(uri)
+          }}
+        >
+          Open first page
+        </Button>
+      </div>
+    )
+  }
+
   if (readOnly && !isSelected) {
     return (
       <div
@@ -4150,7 +4051,7 @@ function NotebookTabContent({
       >
         {/* Full-width notebook column with horizontal padding for breathing room.
             Cells expand to fill the available width of the tab content area. */}
-        <div id="notebook-column" className="w-full py-2 px-8">
+        <div id="notebook-column" className="w-full px-2 py-2 sm:px-3">
           {derivedSource && (
             <div
               id="derived-notebook-notice"
@@ -4369,7 +4270,7 @@ function NotebookTabContent({
               )}
             </div>
           ) : (
-            <div className="space-y-3">
+            <div data-testid="notebook-cell-list" className="space-y-1">
               {cellDatas.map((cellData, index) => {
                 const refId = cellData.snapshot?.refId ?? `cell-${index}`
                 return (

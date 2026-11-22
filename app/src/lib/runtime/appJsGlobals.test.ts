@@ -3,8 +3,8 @@ import { create } from '@bufbuild/protobuf'
 import { afterEach, describe, expect, it, vi } from 'vitest'
 
 import { parser_pb } from '../../runme/client'
-import { explorerSync } from '../explorerSync'
 import { driveLinkCoordinator } from '../driveLinkCoordinator'
+import { explorerSync } from '../explorerSync'
 import { GoogleClientManager } from '../googleClientManager'
 import { dismissTour, tourGuideStore } from '../tourGuide'
 import { tourUiController } from '../tourUiController'
@@ -583,9 +583,9 @@ describe('createAppJsGlobals notebook reference helpers', () => {
       description:
         'Use this guide when opening Runme for the first time or when an agent needs the shortest path from an unopened notebook to a successful cell execution. It covers prerequisites, opening a notebook, selecting an execution path, running a cell, and checking its output. For detailed runner configuration, use one of the runner-specific guides.',
     })
-    await expect(globals.documentation.get('getting-started')).resolves.toContain(
-      '# Getting Started'
-    )
+    await expect(
+      globals.documentation.get('getting-started')
+    ).resolves.toContain('# Getting Started')
     expect(globals.documentation.help()).toContain(
       'await documentation.get(name)'
     )
@@ -1090,6 +1090,20 @@ it('manages page order and cell membership through notebook helpers', async () =
       expectedRevision: layout.handle.revision,
     })
   ).rejects.toThrow('Revision mismatch')
+  await expect(
+    notebooks.appendCell({
+      target: { handle: layout.handle },
+      pageId: page.id,
+      kind: 'markup',
+    })
+  ).rejects.toThrow('Revision mismatch')
+  await expect(
+    notebooks.appendCell({
+      target: { uri: 'local://file/other' },
+      pageId: page.id,
+      kind: 'markup',
+    })
+  ).rejects.toThrow('explicit target')
   const added = await notebooks.appendCell({
     target,
     pageId: page.id,

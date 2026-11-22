@@ -11,6 +11,7 @@ import { getNotebookSessionPersistence } from '../lib/notebookSessionPersistence
 import {
   isNotebookDocumentUri,
   isRestorableWorkspaceDocument,
+  parseNotebookPageUri,
 } from '../lib/workspaceDocuments/workspaceDocumentTypes'
 
 interface CurrentDocContextValue {
@@ -43,7 +44,10 @@ export function CurrentDocProvider({ children }: { children: ReactNode }) {
   const [lastNotebookDoc, setLastNotebookDocState] = useState<string | null>(
     () => {
       const uri = loadRestorableStoredCurrentDoc()
-      return isNotebookDocumentUri(uri) ? uri : null
+      return (
+        parseNotebookPageUri(uri ?? '')?.notebookUri ??
+        (isNotebookDocumentUri(uri) ? uri : null)
+      )
     }
   )
 
@@ -60,14 +64,9 @@ export function CurrentDocProvider({ children }: { children: ReactNode }) {
       if (currentDoc === localUri) {
         return
       }
-      if (isNotebookDocumentUri(localUri)) {
-        setLastNotebookDocState((prev) => {
-          if (prev === localUri) {
-            return prev
-          }
-          return localUri
-        })
-      }
+      const source =
+        parseNotebookPageUri(localUri ?? '')?.notebookUri ?? localUri
+      if (isNotebookDocumentUri(source)) setLastNotebookDocState(source)
       // Avoid no-op updates that can trigger unnecessary renders.
       setCurrentDocState((prev) => {
         if (prev === localUri) {

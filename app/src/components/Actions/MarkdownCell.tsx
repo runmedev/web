@@ -564,7 +564,7 @@ const MarkdownCell = memo(
         )
       }
       return (
-        <div className="prose prose-sm max-w-none">
+        <div className="prose prose-sm max-w-none [&>:first-child]:mt-0 [&>:last-child]:mb-0">
           <ReactMarkdown
             remarkPlugins={[remarkGfm]}
             rehypePlugins={[projectionPlugin]}
@@ -604,7 +604,7 @@ const MarkdownCell = memo(
           <>
             <div
               id={`markdown-rendered-${cell.refId}`}
-              className="notebook-markdown cursor-text rounded-nb-md border border-transparent p-4 transition-[border-color,background-color,box-shadow] duration-200 hover:border-nb-border hover:bg-nb-surface-2/60 hover:shadow-nb-xs"
+              className="notebook-markdown cursor-text rounded-nb-md border border-transparent px-2 py-1.5 transition-[border-color,background-color,box-shadow] duration-200 hover:border-nb-border hover:bg-nb-surface-2/60 hover:shadow-nb-xs"
               onMouseDown={(event) => {
                 const selection =
                   event.currentTarget.ownerDocument.getSelection()
