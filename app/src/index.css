@@ -333,3 +333,48 @@
   background-color: rgba(59, 130, 246, 0.6);
   color: #ffffff;
 }
+
+/* The active surface covers the strip baseline all the way to the document. */
+#notebook-tabs-list {
+  align-items: stretch;
+  box-shadow: inset 0 -1px var(--nb-border);
+}
+.workspace-tab-group {
+  border-radius: 9px 9px 0 0;
+  box-shadow: inset 0 1px var(--nb-border-strong), inset 1px 0 var(--nb-border-strong), inset -1px 0 var(--nb-border-strong);
+  padding: 2px 1px 0;
+}
+.workspace-tab {
+  padding: 0 6px 0 2px;
+  border-radius: 8px 8px 0 0;
+}
+.workspace-tab::after {
+  content: '';
+  position: absolute;
+  right: 0;
+  top: 25%;
+  height: 50%;
+  border-right: 1px solid var(--nb-border-strong);
+  pointer-events: none;
+}
+.workspace-tab:hover { background: var(--nb-surface-3); }
+.workspace-tab[data-selected] {
+  z-index: 1;
+  background: white;
+  box-shadow: 0 -1px 2px rgb(0 0 0 / 12%);
+}
+.workspace-tab[data-selected]::after, #notebook-tabs-list > :last-child > .workspace-tab:last-child::after { display: none; }
+#notebook-tabs-list .workspace-tab-trigger { padding: 0 8px; height: 34px; background: transparent; }
+#notebook-tabs-list .workspace-tab-trigger::before { display: none; }
+.workspace-tab[data-drop]::before {
+  content: '';
+  position: absolute;
+  inset-block: 2px;
+  width: 3px;
+  background: var(--nb-accent);
+  z-index: 2;
+}
+.workspace-tab[data-drop=before]::before { left: 0; }
+.workspace-tab[data-drop=after]::before { right: 0; }
+
+#notebook-tabs-list .workspace-tab-trigger:hover .rt-BaseTabListTriggerInner { background: transparent; }

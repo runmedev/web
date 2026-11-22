@@ -2,6 +2,7 @@ import {
   type WorkspaceDocument,
   deriveWorkspaceDocumentTitle,
   isRestorableWorkspaceDocument,
+  parseNotebookPageUri,
 } from './workspaceDocumentTypes'
 
 const WORKSPACE_DOCUMENTS_STORAGE_KEY = 'runme/workspaceDocuments'
@@ -169,7 +170,12 @@ export class WorkspaceDocumentController {
     const existingIndex = this.documents.findIndex(
       (item) => item.uri === normalizedUri
     )
-    const afterUri = options?.afterUri?.trim()
+    // Opening a page from the Outline positions a new tab next to its notebook.
+    // Selecting an existing page must preserve the user's tab order.
+    const afterUri =
+      existingIndex >= 0 && parseNotebookPageUri(normalizedUri)
+        ? undefined
+        : options?.afterUri?.trim()
     const isPositionedAfter =
       Boolean(afterUri) &&
       existingIndex > 0 &&
@@ -212,6 +218,21 @@ export class WorkspaceDocumentController {
         this.documents = documentsWithoutTarget
       }
     }
+    this.emit()
+    this.persist()
+  }
+
+  /** Reorder the workspace view without closing its editor or changing the notebook. */
+  moveDocument(uri: string, target: string, after: boolean): void {
+    this.ensureRestored()
+    if (uri === target) return
+    const doc = this.documents.find((item) => item.uri === uri)
+    if (!doc) return
+    const next = this.documents.filter((item) => item !== doc)
+    const at = next.findIndex((item) => item.uri === target)
+    if (at < 0 || this.documents.indexOf(doc) === at + Number(after)) return
+    next.splice(at + Number(after), 0, doc)
+    this.documents = next
     this.emit()
     this.persist()
   }
