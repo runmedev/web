@@ -5684,10 +5684,9 @@ export default function Actions() {
                           onDragStart={(e) => {
                             draggingTab.current = doc.uri
                             e.dataTransfer.effectAllowed = 'move'
-                            e.dataTransfer.setData(
-                              'application/x-runme-workspace-tab',
-                              doc.uri
-                            )
+                            // Chromium needs a standard drag flavor. An empty payload
+                            // lets the tab travel without inserting its title into editors.
+                            e.dataTransfer.setData('text/plain', '')
                           }}
                           onDragOver={(e) => {
                             if (
