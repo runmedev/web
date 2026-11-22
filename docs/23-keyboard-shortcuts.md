@@ -1,6 +1,6 @@
 ---
 name: keyboard-shortcuts
-title: Keyboard shortcuts
+title: Keyboard Shortcuts
 order: 23
 description: >-
   Find Runme keyboard shortcuts by focused cell or panel. Learn how to switch
@@ -8,7 +8,7 @@ description: >-
   comments, and navigate the App Console.
 ---
 
-# Keyboard shortcuts
+# Keyboard Shortcuts
 
 ## Toggle a Markdown cell
 

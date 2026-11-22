@@ -188,7 +188,7 @@ export const DOCUMENTATION_MANIFEST = [
   },
   {
     name: 'keyboard-shortcuts',
-    title: 'Keyboard shortcuts',
+    title: 'Keyboard Shortcuts',
     description:
       'Find Runme keyboard shortcuts by focused cell or panel. Learn how to switch Markdown and HTML between rendered and source modes, run code, submit comments, and navigate the App Console.',
     order: 23,

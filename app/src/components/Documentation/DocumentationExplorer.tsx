@@ -10,6 +10,7 @@ import { useCurrentDoc } from '../../contexts/CurrentDocContext'
 import { useWorkspaceDocumentContext } from '../../contexts/WorkspaceDocumentContext'
 import {
   DOCUMENTATION_MIME_TYPE,
+  type DocumentationEntry,
   listDocumentation,
   markDocumentationOpened,
 } from '../../lib/documentation'
@@ -34,6 +35,40 @@ export function DocumentationExplorer() {
       }
     }
   }, [])
+
+  const shortcuts = result.documents.find(
+    (doc) => doc.name === 'keyboard-shortcuts'
+  )
+  const guidePages = result.documents.filter((doc) => doc !== shortcuts)
+  function renderDocument(document: DocumentationEntry) {
+    const selected = currentDoc === document.uri
+    return (
+      <button
+        key={document.path}
+        type="button"
+        role="treeitem"
+        aria-selected={selected}
+        title={document.uri}
+        className={`flex w-full items-center gap-2 rounded-nb-sm px-2 py-1.5 text-left text-sm transition-colors ${
+          selected
+            ? 'bg-nb-accent-soft text-nb-text'
+            : 'text-nb-text-muted hover:bg-white/80 hover:text-nb-text'
+        }`}
+        onClick={() => {
+          markDocumentationOpened(document.uri)
+          showDocument(document.uri, {
+            title: document.title,
+            mimeType: DOCUMENTATION_MIME_TYPE,
+            readOnly: true,
+          })
+          setCurrentDoc(document.uri)
+        }}
+      >
+        <DocumentTextIcon className="h-4 w-4 shrink-0" />
+        <span className="truncate">{document.title}</span>
+      </button>
+    )
+  }
 
   return (
     <div
@@ -75,6 +110,7 @@ export function DocumentationExplorer() {
           </div>
         ) : (
           <div role="tree" aria-label="Runme documentation">
+            {shortcuts && renderDocument(shortcuts)}
             <button
               type="button"
               role="treeitem"
@@ -88,39 +124,11 @@ export function DocumentationExplorer() {
                 <ChevronRightIcon className="h-4 w-4 shrink-0" />
               )}
               <BookOpenIcon className="h-4 w-4 shrink-0" />
-              <span>Runme Web</span>
+              <span>User Guide</span>
             </button>
             {expanded ? (
               <div role="group" className="ml-4 border-l border-nb-border pl-1">
-                {result.documents.map((document) => {
-                  const selected = currentDoc === document.uri
-                  return (
-                    <button
-                      key={document.path}
-                      type="button"
-                      role="treeitem"
-                      aria-selected={selected}
-                      title={document.uri}
-                      className={`flex w-full items-center gap-2 rounded-nb-sm px-2 py-1.5 text-left text-sm transition-colors ${
-                        selected
-                          ? 'bg-nb-accent-soft text-nb-text'
-                          : 'text-nb-text-muted hover:bg-white/80 hover:text-nb-text'
-                      }`}
-                      onClick={() => {
-                        markDocumentationOpened(document.uri)
-                        showDocument(document.uri, {
-                          title: document.title,
-                          mimeType: DOCUMENTATION_MIME_TYPE,
-                          readOnly: true,
-                        })
-                        setCurrentDoc(document.uri)
-                      }}
-                    >
-                      <DocumentTextIcon className="h-4 w-4 shrink-0" />
-                      <span className="truncate">{document.title}</span>
-                    </button>
-                  )
-                })}
+                {guidePages.map(renderDocument)}
               </div>
             ) : null}
           </div>
