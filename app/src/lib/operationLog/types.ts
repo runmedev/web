@@ -146,6 +146,8 @@ export interface SuggestionReviewPayload {
 
 export type KnownOperationKind =
   | 'transaction.commit'
+  | 'page.set'
+  | 'cell.set_page'
   | 'notebook.update'
   | 'cell.create'
   | 'cell.update'

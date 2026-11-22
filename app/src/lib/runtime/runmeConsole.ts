@@ -26,6 +26,7 @@ function isRunnableNotebookCodeCell(
 }
 
 export type NotebookDataLike = {
+  setMetadataProperties?: NotebookData['setMetadataProperties']
   setNotebookStore?: NotebookData['setNotebookStore']
   setReviewPending?: NotebookData['setReviewPending']
   setReviewReloadRequired?: NotebookData['setReviewReloadRequired']

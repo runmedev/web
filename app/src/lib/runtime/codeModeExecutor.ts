@@ -350,6 +350,8 @@ async function handleSandboxAppKernelBridgeCall({
       return runmeApi.runAll(target)
     case 'runme.rerun':
       return runmeApi.rerun(target)
+    case 'notebooks.help':
+      return globals.notebooks.help(args[0] as string | undefined)
     case 'runme.help':
       return runmeApi.help()
     case 'tour.show':
@@ -707,6 +709,8 @@ async function handleSandboxAppKernelBridgeCall({
     case 'trainingExamples.help':
       return globals.trainingExamples.help()
     default:
+      if (method === 'notebooks.createPage')
+        return globals.notebooks.createPage(args[0] as any)
       if (method === 'notebooks.createLocal') {
         return (globals.notebooks as any).createLocal(args[0], args[1])
       }

@@ -5,6 +5,7 @@ import {
   RunmeMetadataKey,
   parser_pb,
 } from '../../runme/client'
+import { CELL_PAGE, PAGE_PREFIX } from '../notebookPages'
 import { isRecoveredOutput } from '../recoveredOutputs'
 import { materializeOperationLog } from './materialize'
 import { causalHeads, createRunmeOperation } from './mutations'
@@ -31,7 +32,9 @@ export interface OperationLogDiffInput {
 }
 
 function operationCell(cell: parser_pb.Cell): OperationCell {
-  const protoCell = { ...cell, outputs: [] }
+  const metadata = { ...cell.metadata }
+  delete metadata[CELL_PAGE]
+  const protoCell = { ...cell, metadata, outputs: [] }
   const protoJson = JSON.parse(
     toJsonString(parser_pb.CellSchema, protoCell, JSON_OPTIONS)
   ) as Record<string, JsonValue>
@@ -43,7 +46,7 @@ function operationCell(cell: parser_pb.Cell): OperationCell {
       cell.kind === parser_pb.CellKind.MARKUP ? 'markup' : ('code' as const),
     language_id: cell.languageId,
     value: cell.value,
-    metadata: { ...cell.metadata },
+    metadata,
     proto_json: protoJson,
   }
 }
@@ -59,7 +62,11 @@ function sameOperationCell(
 
 function notebookUpdate(notebook: parser_pb.Notebook): NotebookUpdatePayload {
   return {
-    metadata: { ...notebook.metadata },
+    metadata: Object.fromEntries(
+      Object.entries(notebook.metadata).filter(
+        ([key]) => !key.startsWith(PAGE_PREFIX)
+      )
+    ),
     frontmatter: notebook.frontmatter
       ? (JSON.parse(
           toJsonString(
@@ -146,6 +153,19 @@ export async function buildOperationLogDiff({
     return operation
   }
 
+  // Each page property has an independent register, so a stale editor can
+  // rename a page concurrently with another editor changing its position.
+  for (const key of new Set([
+    ...Object.keys(previous.metadata),
+    ...Object.keys(next.metadata),
+  ])) {
+    if (
+      key.startsWith(PAGE_PREFIX) &&
+      previous.metadata[key] !== next.metadata[key]
+    ) {
+      append('page.set', { key, value: next.metadata[key] ?? null })
+    }
+  }
   const previousNotebookUpdate = notebookUpdate(previous)
   const nextNotebookUpdate = notebookUpdate(next)
   if (
@@ -232,6 +252,13 @@ export async function buildOperationLogDiff({
           cell: operationCell(cell) as unknown as JsonValue,
         })
       }
+    }
+    const previousPage = previousCells.get(cell.refId)?.metadata[CELL_PAGE]
+    if (previousPage !== cell.metadata[CELL_PAGE]) {
+      append('cell.set_page', {
+        cell_id: cell.refId,
+        page_id: cell.metadata[CELL_PAGE] ?? null,
+      })
     }
     leftPosition = position
   }

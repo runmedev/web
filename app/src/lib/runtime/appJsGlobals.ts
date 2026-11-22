@@ -74,6 +74,7 @@ import {
 } from '../markdownImport'
 import { createNotebookDiffRuntimeApi } from '../notebookDiff/runtime'
 import { detectNotebookFileFormat } from '../notebookFormat'
+import { createPageProperties, notebookPages } from '../notebookPages'
 import {
   type OutputReferenceStore,
   outputReferenceSource,
@@ -1090,6 +1091,8 @@ export function createAppJsGlobals({
     help: async (topic?: string) => {
       if (topic === 'outputLink')
         return 'notebooks.outputLink({ target: { uri }, cellId, outputIndex, itemIndex }): Promise<string>. Returns an HTML anchor to the autosaved output version; no named revision required. Insert it with notebooks.appendCell({target, kind: "markup", languageId: "runme-reference", value: link}).'
+      if (topic === 'createPage')
+        return 'notebooks.createPage({target:{uri}, name}) returns {id,name}. Pass the ID as cell metadata runme.dev/pageId when appending cells.'
       if (topic === 'createLocal') {
         return 'notebooks.createLocal(name, options?: { folderUri?: string }): Promise<NotebookDocument>. Creates a new local notebook, adds it to the open notebook list without changing focus, and returns the notebook document.'
       }
@@ -1129,6 +1132,7 @@ export function createAppJsGlobals({
       }
       return [
         base,
+        '- notebooks.createPage({target:{uri},name})',
         '- notebooks.createLocal(name, options?)',
         '- notebooks.appendCell({ target?, at?, kind, languageId?, value?, metadata?, execute?, reason? })',
         '- notebooks.embed(source, options?)',
@@ -1142,6 +1146,26 @@ export function createAppJsGlobals({
         '- notebooks.shareUrl(reference?)',
         '- notebooks.markdownLink(reference?)',
       ].join('\n')
+    },
+    createPage: async ({
+      target,
+      name,
+    }: {
+      target: { uri: string }
+      name: string
+    }) => {
+      const uri = resolveNotebookTargetUri(target)
+      if (!uri) throw new Error('A target notebook URI is required.')
+      const notebook = resolveNotebook?.(uri)
+      if (!notebook?.setMetadataProperties)
+        throw new Error('Open the target notebook before adding a page.')
+      const { id, changes } = createPageProperties(
+        notebookPages(notebook.getNotebook().metadata),
+        name
+      )
+      notebook.setMetadataProperties(changes)
+      await notebook.flushPendingPersist?.()
+      return { id, name: name.trim() }
     },
     createLocal: async (
       name: string,

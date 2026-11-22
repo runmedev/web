@@ -1,6 +1,7 @@
 import { create } from '@bufbuild/protobuf'
 
 import { parser_pb } from '../runme/client'
+import { CELL_PAGE } from './notebookPages'
 import type { NotebookDataLike } from './runtime/runmeConsole'
 
 export const MAX_EMBEDDED_IMAGE_BYTES = 10 * 1024 * 1024
@@ -18,12 +19,12 @@ const IMAGE_MIME_BY_EXTENSION: Record<string, string> = {
   '.svg': 'image/svg+xml',
   '.webp': 'image/webp',
 }
-const IMAGE_MIME_TYPE_PATTERN =
-  /^image\/[a-z0-9][a-z0-9!#$%&'*+.^_|~-]*$/
+const IMAGE_MIME_TYPE_PATTERN = /^image\/[a-z0-9][a-z0-9!#$%&'*+.^_|~-]*$/
 
 export type EmbeddedImageSource = string | Blob
 
 export type EmbedImageOptions = {
+  pageId?: string
   alt?: string
   name?: string
   signal?: AbortSignal
@@ -395,6 +396,7 @@ export async function embedImageInNotebook(
     updated.value = buildEmbeddedImageHtml(image, options)
     updated.metadata = {
       ...(updated.metadata ?? {}),
+      ...(options.pageId ? { [CELL_PAGE]: options.pageId } : {}),
       'runme.dev/embeddedImage': 'true',
       'runme.dev/embeddedImageMimeType': image.mimeType,
       'runme.dev/embeddedImageName': options.name?.trim() || image.name,

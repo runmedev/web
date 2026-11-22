@@ -1,3 +1,14 @@
+import { NotebookPageToolbar } from './NotebookPageToolbar'
+import {
+  CELL_PAGE,
+  DEFAULT_PAGE,
+  notebookPages,
+  resolvePage,
+} from '../../lib/notebookPages'
+import {
+  notebookPageUri,
+  parseNotebookPageUri,
+} from '../../lib/workspaceDocuments/workspaceDocumentTypes'
 import { AGENT_MONITOR_MIME } from '../../lib/agents/types'
 import { outputReferenceSource } from '../../lib/outputReferenceRuntime'
 import { OutputReferenceCell } from './OutputReferenceCell'
@@ -2489,6 +2500,7 @@ export function Action({
 
 function NotebookTabContent({
   docUri,
+  initialPage,
   entry,
   activeCell,
   deepLinkCellId,
@@ -2496,6 +2508,7 @@ function NotebookTabContent({
   isWindowFocused,
   onCellFocus,
 }: {
+  initialPage?: string
   docUri: string
   entry: OpenNotebookEntry
   activeCell: NotebookActiveCellState | null
@@ -2556,6 +2569,29 @@ function NotebookTabContent({
   const { commentsPanelOpen, openCommentsPanel, setCommentsPanelOpen } =
     useCommentsPanel()
   const shouldRenderCells = !readOnly || isSelected
+  const [selectedPage, setSelectedPage] = useState(initialPage)
+  const pages = useMemo(
+    () => notebookPages(notebookSnapshot?.notebook.metadata ?? {}),
+    [notebookSnapshot?.notebook.metadata]
+  )
+  const defaultPage = resolvePage(
+    undefined,
+    pages,
+    notebookSnapshot?.notebook.metadata[DEFAULT_PAGE]
+  )
+  const currentPage = resolvePage(selectedPage, pages, defaultPage)
+  const pageTitle = pages.find((page) => page.id === currentPage)?.name
+  useEffect(() => {
+    if (initialPage && pageTitle)
+      showDocument(notebookPageUri(docUri, initialPage), { title: pageTitle })
+  }, [docUri, initialPage, pageTitle, showDocument])
+  const linkedPage =
+    deepLinkCellId &&
+    notebookSnapshot?.notebook.cells.find((c) => c.refId === deepLinkCellId)
+      ?.metadata[CELL_PAGE]
+  useEffect(() => {
+    if (deepLinkCellId) setSelectedPage(linkedPage || undefined)
+  }, [linkedPage, deepLinkCellId])
   const cellDatas = useMemo(() => {
     if (!shouldRenderCells) {
       return []
@@ -2567,9 +2603,21 @@ function NotebookTabContent({
       return []
     }
     return (notebookSnapshot.notebook.cells ?? [])
+      .filter(
+        (c) =>
+          resolvePage(c?.metadata?.[CELL_PAGE], pages, defaultPage) ===
+          currentPage
+      )
       .map((c) => (c?.refId ? notebookData.getCell(c.refId) : null))
       .filter((c): c is CellData => Boolean(c))
-  }, [notebookData, notebookSnapshot, shouldRenderCells])
+  }, [
+    notebookData,
+    notebookSnapshot,
+    shouldRenderCells,
+    pages,
+    defaultPage,
+    currentPage,
+  ])
   const cellDatasRef = useRef(cellDatas)
   cellDatasRef.current = cellDatas
   const [commentsRemoteUri, setCommentsRemoteUri] = useState<string | null>(
@@ -2859,7 +2907,9 @@ function NotebookTabContent({
       setEmbeddingImage(true)
       try {
         for (const file of files) {
-          await embedImageInNotebook(notebookData, file)
+          await (currentPage
+            ? embedImageInNotebook(notebookData, file, { pageId: currentPage })
+            : embedImageInNotebook(notebookData, file))
         }
         showToast({
           message:
@@ -2877,7 +2927,7 @@ function NotebookTabContent({
         setEmbeddingImage(false)
       }
     },
-    [notebookData, readOnly]
+    [currentPage, notebookData, readOnly]
   )
 
   const handleEmbedImage = useCallback(async () => {
@@ -2916,6 +2966,7 @@ function NotebookTabContent({
             { kind: 'file', value: file, name: file.name },
             {
               target: { uri: docUri },
+              ...(currentPage ? { pageId: currentPage } : {}),
               folderUri,
               onProgress: (uploaded, total) => {
                 setResourceUploadProgress(total > 0 ? uploaded / total : null)
@@ -2945,7 +2996,14 @@ function NotebookTabContent({
         setResourceUploadProgress(null)
       }
     },
-    [docUri, isDriveBacked, notebookData, pickDriveFolder, readOnly]
+    [
+      currentPage,
+      docUri,
+      isDriveBacked,
+      notebookData,
+      pickDriveFolder,
+      readOnly,
+    ]
   )
 
   const retryResourceInsertion = useCallback(async () => {
@@ -2959,6 +3017,7 @@ function NotebookTabContent({
         { kind: 'drive', uri: resourceInsertionRecovery.uri },
         {
           target: { uri: docUri },
+          ...(currentPage ? { pageId: currentPage } : {}),
           title: resourceInsertionRecovery.name,
         }
       )
@@ -2975,7 +3034,7 @@ function NotebookTabContent({
     } finally {
       setAttachingResource(false)
     }
-  }, [docUri, notebookData, readOnly, resourceInsertionRecovery])
+  }, [currentPage, docUri, notebookData, readOnly, resourceInsertionRecovery])
 
   const handleAttachFile = useCallback(async () => {
     try {
@@ -3004,7 +3063,11 @@ function NotebookTabContent({
       await attachResourceToNotebook(
         notebookData,
         { kind: 'drive', uri: picked.uri },
-        { target: { uri: docUri }, title: picked.name }
+        {
+          target: { uri: docUri },
+          ...(currentPage ? { pageId: currentPage } : {}),
+          title: picked.name,
+        }
       )
       showToast({
         message: `Attached ${picked.name} from Google Drive.`,
@@ -3018,7 +3081,7 @@ function NotebookTabContent({
     } finally {
       setAttachingResource(false)
     }
-  }, [docUri, notebookData, pickDriveFile, readOnly])
+  }, [currentPage, docUri, notebookData, pickDriveFile, readOnly])
 
   const handleImageDragOver = useCallback(
     (event: ReactDragEvent<HTMLDivElement>) => {
@@ -4039,7 +4102,7 @@ function NotebookTabContent({
   const ownerSessionId = getNotebookOwnerSessionId(entry.owner)
 
   if (
-    cellDatas.length === 0 &&
+    notebookSnapshot.notebook.cells.length === 0 &&
     isDriveBacked &&
     syncState?.status === 'syncing'
   ) {
@@ -4073,6 +4136,29 @@ function NotebookTabContent({
         {/* Full-width notebook column with horizontal padding for breathing room.
             Cells expand to fill the available width of the tab content area. */}
         <div id="notebook-column" className="w-full py-2 px-8">
+          <NotebookPageToolbar
+            pages={pages}
+            current={currentPage}
+            defaultId={defaultPage}
+            data={readOnly ? null : (data ?? null)}
+            select={(id) => {
+              if (initialPage) {
+                const uri = notebookPageUri(docUri, id)
+                showDocument(uri, {
+                  title: pages.find((p) => p.id === id)?.name ?? entry.name,
+                })
+                setCurrentDoc(uri)
+              } else setSelectedPage(id)
+            }}
+            open={(id) => {
+              const uri = notebookPageUri(docUri, id)
+              showDocument(uri, {
+                title: pages.find((p) => p.id === id)?.name ?? entry.name,
+                afterUri: docUri,
+              })
+              setCurrentDoc(uri)
+            }}
+          />
           {derivedSource && (
             <div
               id="derived-notebook-notice"
@@ -4231,7 +4317,9 @@ function NotebookTabContent({
               <p>
                 {readOnly
                   ? 'This read-only notebook has no cells.'
-                  : 'This notebook has no cells yet.'}
+                  : pages.length
+                    ? 'This page has no cells yet.'
+                    : 'This notebook has no cells yet.'}
               </p>
               {!readOnly && (
                 <div className="flex items-center gap-2">
@@ -4239,7 +4327,13 @@ function NotebookTabContent({
                     type="button"
                     className="cell-add-btn h-8 w-8"
                     aria-label="Add first cell"
-                    onClick={() => data?.appendCell(parser_pb.CellKind.MARKUP)}
+                    onClick={() =>
+                      data?.appendCell(
+                        parser_pb.CellKind.MARKUP,
+                        undefined,
+                        currentPage
+                      )
+                    }
                   >
                     <PlusIcon className="h-5 w-5" />
                   </button>
@@ -4292,6 +4386,33 @@ function NotebookTabContent({
                     id={`commented-cell-${refId}`}
                     className="relative"
                   >
+                    {!!pages.length && !readOnly && (
+                      <select
+                        aria-label="Move cell to page"
+                        className="text-xs text-nb-text-muted"
+                        value=""
+                        onChange={(e) => {
+                          const cell = cellData.snapshot
+                          if (cell && e.target.value)
+                            data?.updateCell({
+                              ...cell,
+                              metadata: {
+                                ...cell.metadata,
+                                [CELL_PAGE]: e.target.value,
+                              },
+                            })
+                        }}
+                      >
+                        <option value="">Move to page…</option>
+                        {pages
+                          .filter((p) => p.id !== currentPage)
+                          .map((p) => (
+                            <option key={p.id} value={p.id}>
+                              {p.name}
+                            </option>
+                          ))}
+                      </select>
+                    )}
                     <Action
                       key={`action-${refId}`}
                       cellData={cellData}
@@ -4331,7 +4452,13 @@ function NotebookTabContent({
                     type="button"
                     className="flex items-center gap-1.5 rounded-full border border-nb-border-strong bg-white px-3 py-1 text-xs text-nb-text-muted transition-colors duration-150 hover:border-nb-accent hover:text-nb-accent hover:bg-nb-accent-muted"
                     aria-label="Add cell at end"
-                    onClick={() => data?.appendCell(parser_pb.CellKind.CODE)}
+                    onClick={() =>
+                      data?.appendCell(
+                        parser_pb.CellKind.CODE,
+                        undefined,
+                        currentPage
+                      )
+                    }
                   >
                     <PlusIcon width={10} height={10} />
                     <span>Add cell</span>
@@ -4565,6 +4692,7 @@ function UnknownDocumentTab({ uri }: { uri: string }) {
 
 function renderWorkspaceDocument({
   document,
+  sourceEntries,
   activeCell,
   deepLinkCellId,
   isSelected,
@@ -4573,6 +4701,7 @@ function renderWorkspaceDocument({
   onDriveLogin,
   onDriveRetry,
 }: {
+  sourceEntries: OpenNotebookEntry[]
   document: WorkspaceDocument
   activeCell: NotebookActiveCellState | null
   deepLinkCellId: string | null
@@ -4586,8 +4715,12 @@ function renderWorkspaceDocument({
     return <ExcalidrawDocument document={document} />
   }
 
-  if (isNotebookDocumentUri(document.uri)) {
-    const entry: OpenNotebookEntry = {
+  const pageView = parseNotebookPageUri(document.uri)
+  if (isNotebookDocumentUri(document.uri) || pageView) {
+    const source =
+      pageView &&
+      sourceEntries.find((entry) => entry.uri === pageView.notebookUri)
+    const entry: OpenNotebookEntry = source || {
       uri: document.uri,
       requestedUri: document.requestedUri ?? document.uri,
       name: document.title,
@@ -4605,7 +4738,8 @@ function renderWorkspaceDocument({
     }
     return (
       <NotebookTabContent
-        docUri={document.uri}
+        docUri={pageView?.notebookUri ?? document.uri}
+        initialPage={pageView?.pageId}
         entry={entry}
         activeCell={activeCell}
         deepLinkCellId={deepLinkCellId}
@@ -5761,13 +5895,14 @@ export default function Actions() {
                 <TabPanel className="flex-1 min-h-0" data-document-id={doc.uri}>
                   {renderWorkspaceDocument({
                     document: doc,
+                    sourceEntries: openNotebooks,
                     activeCell: activeCellsByDoc[doc.uri] ?? null,
                     deepLinkCellId:
                       deepLinkTargetDocUri === doc.uri ? deepLinkCellId : null,
                     isSelected: resolvedSelectedTabUri === doc.uri,
                     isWindowFocused:
                       isWindowFocused && resolvedSelectedTabUri === doc.uri,
-                    onCellFocus: handleCellFocus,
+                    onCellFocus: (_, state) => handleCellFocus(doc.uri, state),
                     onDriveLogin: () =>
                       driveLinkCoordinator.loginToDriveAndProcess(),
                     onDriveRetry: () =>

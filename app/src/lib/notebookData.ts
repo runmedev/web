@@ -25,6 +25,7 @@ import {
 } from './ipykernel'
 import { isLinkedResourceLanguageId } from './linkedResource'
 import { appLogger } from './logging/runtime'
+import { CELL_PAGE } from './notebookPages'
 import { markOnboardingTaskComplete } from './onboarding'
 import { isOutputReferenceCell } from './outputReference'
 import { buildExecuteRequest } from './runme'
@@ -735,10 +736,12 @@ export class NotebookData {
   /** Append a new cell to the end of the notebook. */
   appendCell(
     kind: parser_pb.CellKind = parser_pb.CellKind.CODE,
-    languageId?: string | null
+    languageId?: string | null,
+    pageId?: string
   ): parser_pb.Cell {
     this.assertWritable()
     const cell = this.createCell(kind, languageId)
+    if (pageId) cell.metadata[CELL_PAGE] = pageId
     this.notebook.cells.push(cell)
     this.rebuildIndex()
     this.snapshotCache = this.buildSnapshot()
@@ -758,6 +761,8 @@ export class NotebookData {
       return null
     }
     const cell = this.createCell(kind, languageId)
+    const page = this.notebook.cells[idx]?.metadata[CELL_PAGE]
+    if (page) cell.metadata[CELL_PAGE] = page
     this.notebook.cells.splice(idx + 1, 0, cell)
     this.rebuildIndex()
     this.snapshotCache = this.buildSnapshot()
@@ -777,6 +782,8 @@ export class NotebookData {
       return null
     }
     const cell = this.createCell(kind, languageId)
+    const page = this.notebook.cells[idx]?.metadata[CELL_PAGE]
+    if (page) cell.metadata[CELL_PAGE] = page
     this.notebook.cells.splice(idx, 0, cell)
     this.rebuildIndex()
     this.snapshotCache = this.buildSnapshot()
@@ -801,7 +808,16 @@ export class NotebookData {
   /** Apply portable document properties through the normal journal save path. */
   setMetadataProperty(key: string, value: string): void {
     this.assertWritable()
-    this.notebook.metadata[key] = value
+    this.setMetadataProperties({ [key]: value })
+  }
+
+  /** Publish one atomic editor change, including creation of both initial pages. */
+  setMetadataProperties(changes: Record<string, string | null>): void {
+    this.assertWritable()
+    for (const [key, value] of Object.entries(changes)) {
+      if (value === null) delete this.notebook.metadata[key]
+      else this.notebook.metadata[key] = value
+    }
     this.snapshotCache = this.buildSnapshot()
     this.emit()
     this.schedulePersist()
