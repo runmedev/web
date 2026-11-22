@@ -1,4 +1,5 @@
-import { memo, useCallback, useEffect, useRef, useState } from "react";
+import { CellPageMoveContext } from "./CellPageMove";
+import { memo, useContext, useCallback, useEffect, useRef, useState } from "react";
 
 import MonacoEditor from "@monaco-editor/react";
 import useResizeObserver from "use-resize-observer";
@@ -53,6 +54,18 @@ const Editor = memo(
     const editorRef = useRef<any>(null);
     const [mountVersion, setMountVersion] = useState(0);
     const monacoRef = useRef<any>(null);
+
+    const moveCell = useContext(CellPageMoveContext);
+    useEffect(() => {
+      if (!editorRef.current || !moveCell) return;
+      const action = editorRef.current.addAction({
+        id: "runme.moveCellToPage",
+        label: "Move to page…",
+        contextMenuGroupId: "navigation",
+        run: moveCell,
+      });
+      return () => action.dispose();
+    }, [moveCell, mountVersion]);
 
     // Read Monaco's model/selection synchronously when the action runs. DOM
     // selections are unrelated to Monaco offsets and disappear on menu focus.

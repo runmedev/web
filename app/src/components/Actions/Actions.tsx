@@ -1,3 +1,4 @@
+import { CellPageMove, CellPageMoveContext } from './CellPageMove'
 import { NotebookPageTabMenu } from './NotebookPageTabMenu'
 import { CELL_PAGE, notebookPages, resolvePage } from '../../lib/notebookPages'
 import {
@@ -20,6 +21,7 @@ import {
   type DragEvent as ReactDragEvent,
   type MouseEvent as ReactMouseEvent,
   useCallback,
+  useContext,
   useEffect,
   useLayoutEffect,
   useMemo,
@@ -755,6 +757,7 @@ export function Action({
   onStartComment?: (target: CommentDraftTarget) => void
   isDeepLinkTarget?: boolean
 }) {
+  const moveCell = useContext(CellPageMoveContext)
   const { store } = useNotebookStore()
   const { openNotebook, getNotebookData } = useNotebookContext()
   const { showDocument } = useWorkspaceDocumentContext()
@@ -922,7 +925,8 @@ export function Action({
     const menuWidth = 200
     const menuHeight =
       (shareTargetUri && cell?.refId.trim() ? 164 : 88) +
-      (contextMenu.captureRenderedSelection ? 38 : 0)
+      (contextMenu.captureRenderedSelection ? 38 : 0) +
+      (moveCell ? 38 : 0)
     const left = Math.max(
       0,
       Math.min(contextMenu.x, window.innerWidth - menuWidth)
@@ -932,7 +936,7 @@ export function Action({
       Math.min(contextMenu.y, window.innerHeight - menuHeight)
     )
     return { x: left, y: top }
-  }, [cell?.refId, contextMenu, shareTargetUri])
+  }, [cell?.refId, contextMenu, shareTargetUri, moveCell])
 
   const runCode = useCallback(() => {
     if (readOnly) {
@@ -1686,11 +1690,26 @@ export function Action({
     : 'Copy local link to cell'
   const canCopyCellLink = Boolean(shareTargetUri && cell.refId.trim())
 
+  const moveMenuItem = moveCell && (
+    <button
+      type="button"
+      className="ctx-menu-item"
+      onClick={(event) => {
+        event.stopPropagation()
+        setContextMenu(null)
+        moveCell()
+      }}
+    >
+      Move to page…
+    </button>
+  )
+
   if (isOutputReferenceCell(cell)) {
     return (
       <div
         id={`reference-action-${cell.refId}`}
         className={`group/cell relative flex min-w-0 ${deepLinkTargetClass}`}
+        onContextMenu={moveCell ? handleContextMenu : undefined}
         onFocusCapture={handleFocusCapture}
         data-cell-ref-id={cell.refId}
       >
@@ -1774,6 +1793,14 @@ export function Action({
             </div>
           </OutputReferenceCell>
         </div>
+        {adjustedContextMenu && moveCell && (
+          <div
+            className="ctx-menu"
+            style={{ top: adjustedContextMenu.y, left: adjustedContextMenu.x }}
+          >
+            {moveMenuItem}
+          </div>
+        )}
       </div>
     )
   }
@@ -1848,6 +1875,7 @@ export function Action({
                 {contextMenuLinkLabel}
               </button>
             )}
+            {moveMenuItem}
             <button
               type="button"
               className="ctx-menu-item text-red-600"
@@ -2021,6 +2049,7 @@ export function Action({
                 ? 'Comment on selected text'
                 : 'Add Comment'}
             </button>
+            {moveMenuItem}
             <button
               type="button"
               className="ctx-menu-item text-red-600"
@@ -2148,6 +2177,7 @@ export function Action({
             >
               Add Comment
             </button>
+            {moveMenuItem}
             <button
               type="button"
               className="ctx-menu-item text-red-600"
@@ -2476,6 +2506,7 @@ export function Action({
           >
             Add Comment
           </button>
+          {moveMenuItem}
           <button
             type="button"
             className="ctx-menu-item text-red-600"
@@ -2570,6 +2601,9 @@ function NotebookTabContent({
     [notebookSnapshot?.notebook.metadata]
   )
   const currentPage = resolvePage(selectedPage, pages)
+  const moveDestinations = readOnly
+    ? []
+    : pages.filter((page) => page.id !== currentPage)
   const pageTitle = pages.find((page) => page.id === currentPage)?.name
   useEffect(() => {
     if (initialPage && pageTitle)
@@ -4344,53 +4378,42 @@ function NotebookTabContent({
                     id={`commented-cell-${refId}`}
                     className="relative"
                   >
-                    {!!pages.length && !readOnly && (
-                      <select
-                        aria-label="Move cell to page"
-                        className="text-xs text-nb-text-muted"
-                        value=""
-                        onChange={(e) => {
-                          const cell = cellData.snapshot
-                          if (cell && e.target.value)
-                            data?.updateCell({
-                              ...cell,
-                              metadata: {
-                                ...cell.metadata,
-                                [CELL_PAGE]: e.target.value,
-                              },
-                            })
-                        }}
-                      >
-                        <option value="">Move to page…</option>
-                        {pages
-                          .filter((p) => p.id !== currentPage)
-                          .map((p) => (
-                            <option key={p.id} value={p.id}>
-                              {p.name}
-                            </option>
-                          ))}
-                      </select>
-                    )}
-                    <Action
-                      key={`action-${refId}`}
-                      cellData={cellData}
-                      docUri={docUri}
-                      docTitle={entry.name}
-                      isFirst={index === 0}
-                      isActiveCell={activeCell?.refId === refId}
-                      activeFocusRole={activeCell?.focusRole ?? 'editor'}
-                      isWindowFocused={isWindowFocused}
-                      isDeepLinkTarget={highlightedDeepLinkCellId === refId}
-                      onFocusStateChange={(state) => onCellFocus(docUri, state)}
-                      readOnly={readOnly}
-                      commentsAvailable={Boolean(commentsRemoteUri)}
-                      sourceCommentsAvailable={operationLogComments}
-                      commentCount={commentsByCell.get(refId)?.length ?? 0}
-                      commentRanges={commentRangesByCell.get(refId) ?? []}
-                      commentSourceRanges={sourceRangesByCell.get(refId) ?? []}
-                      onSelectComment={openComment}
-                      onStartComment={startCommentDraft}
-                    />
+                    <CellPageMove
+                      destinations={moveDestinations}
+                      move={(pageId) => {
+                        const cell = cellData.snapshot
+                        if (cell && !readOnly)
+                          data?.updateCell({
+                            ...cell,
+                            metadata: { ...cell.metadata, [CELL_PAGE]: pageId },
+                          })
+                      }}
+                    >
+                      <Action
+                        key={`action-${refId}`}
+                        cellData={cellData}
+                        docUri={docUri}
+                        docTitle={entry.name}
+                        isFirst={index === 0}
+                        isActiveCell={activeCell?.refId === refId}
+                        activeFocusRole={activeCell?.focusRole ?? 'editor'}
+                        isWindowFocused={isWindowFocused}
+                        isDeepLinkTarget={highlightedDeepLinkCellId === refId}
+                        onFocusStateChange={(state) =>
+                          onCellFocus(docUri, state)
+                        }
+                        readOnly={readOnly}
+                        commentsAvailable={Boolean(commentsRemoteUri)}
+                        sourceCommentsAvailable={operationLogComments}
+                        commentCount={commentsByCell.get(refId)?.length ?? 0}
+                        commentRanges={commentRangesByCell.get(refId) ?? []}
+                        commentSourceRanges={
+                          sourceRangesByCell.get(refId) ?? []
+                        }
+                        onSelectComment={openComment}
+                        onStartComment={startCommentDraft}
+                      />
+                    </CellPageMove>
                     {!!commentsByCell.get(refId)?.length && (
                       <button
                         type="button"
