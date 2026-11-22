@@ -5782,24 +5782,6 @@ export default function Actions() {
               onClick={(event) => event.stopPropagation()}
               onContextMenu={(event) => event.preventDefault()}
             >
-              <button
-                type="button"
-                className="ctx-menu-item"
-                onClick={() => closeTabs(adjustedTabContextMenu.docUri, false)}
-              >
-                Close All Tabs
-              </button>
-              <button
-                type="button"
-                className="ctx-menu-item"
-                disabled={
-                  workspaceDocuments.at(-1)?.uri ===
-                  adjustedTabContextMenu.docUri
-                }
-                onClick={() => closeTabs(adjustedTabContextMenu.docUri, true)}
-              >
-                Close All Tabs to the Right
-              </button>
               {isNotebookDocumentUri(adjustedTabContextMenu.docUri) && (
                 <>
                   <button
@@ -5932,8 +5914,27 @@ export default function Actions() {
                       Compare with upstream
                     </button>
                   )}
+                  <hr className="my-1 border-0 border-t border-nb-border" />
                 </>
               )}
+              <button
+                type="button"
+                className="ctx-menu-item"
+                onClick={() => closeTabs(adjustedTabContextMenu.docUri, false)}
+              >
+                Close All Tabs
+              </button>
+              <button
+                type="button"
+                className="ctx-menu-item"
+                disabled={
+                  workspaceDocuments.at(-1)?.uri ===
+                  adjustedTabContextMenu.docUri
+                }
+                onClick={() => closeTabs(adjustedTabContextMenu.docUri, true)}
+              >
+                Close All Tabs to the Right
+              </button>
             </div>
           )}
           <div className="relative flex-1 min-h-0 overflow-hidden">

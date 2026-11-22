@@ -50,6 +50,14 @@ export function NotebookPageTabMenu({
             }
           }}
         >
+          <NotebookPageMenuItems
+            contextMenu
+            pages={pages}
+            id={pageId}
+            data={data}
+            rename={() => setName(page.name)}
+          />
+          <ContextMenu.Separator />
           <ContextMenu.Item onSelect={() => closeTabs(false)}>
             Close All Tabs
           </ContextMenu.Item>
@@ -59,14 +67,6 @@ export function NotebookPageTabMenu({
           >
             Close All Tabs to the Right
           </ContextMenu.Item>
-          <ContextMenu.Separator />
-          <NotebookPageMenuItems
-            contextMenu
-            pages={pages}
-            id={pageId}
-            data={data}
-            rename={() => setName(page.name)}
-          />
         </ContextMenu.Content>
       </ContextMenu.Root>
       {name !== null && (
