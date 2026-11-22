@@ -10,10 +10,14 @@ export function NotebookPageTabMenu({
   pageId,
   readOnly,
   children,
+  closeTabs,
+  hasTabsToRight,
 }: {
   notebookUri: string
   pageId: string
   readOnly: boolean
+  closeTabs: (right: boolean) => void
+  hasTabsToRight: boolean
   children: ReactElement
 }) {
   const { useNotebookSnapshot, getNotebookData } = useNotebookContext()
@@ -46,6 +50,16 @@ export function NotebookPageTabMenu({
             }
           }}
         >
+          <ContextMenu.Item onSelect={() => closeTabs(false)}>
+            Close All Tabs
+          </ContextMenu.Item>
+          <ContextMenu.Item
+            disabled={!hasTabsToRight}
+            onSelect={() => closeTabs(true)}
+          >
+            Close All Tabs to the Right
+          </ContextMenu.Item>
+          <ContextMenu.Separator />
           <NotebookPageMenuItems
             contextMenu
             pages={pages}

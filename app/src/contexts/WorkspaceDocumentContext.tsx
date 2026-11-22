@@ -25,6 +25,7 @@ import {
 type WorkspaceDocumentContextValue = {
   useWorkspaceDocuments: () => WorkspaceDocument[]
   showDocument: (uri: string, options?: ShowWorkspaceDocumentOptions) => void
+  moveWorkspaceDocument: (uri: string, target: string, after: boolean) => void
   closeWorkspaceDocument: (uri: string) => string | null
 }
 
@@ -142,11 +143,13 @@ export function WorkspaceDocumentProvider({
 
   const value = useMemo<WorkspaceDocumentContextValue>(
     () => ({
+      moveWorkspaceDocument: (uri, target, after) =>
+        controller.moveDocument(uri, target, after),
       useWorkspaceDocuments,
       showDocument,
       closeWorkspaceDocument,
     }),
-    [closeWorkspaceDocument, showDocument, useWorkspaceDocuments]
+    [controller, closeWorkspaceDocument, showDocument, useWorkspaceDocuments]
   )
 
   return (

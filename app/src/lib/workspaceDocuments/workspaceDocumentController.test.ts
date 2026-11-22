@@ -36,6 +36,30 @@ describe("WorkspaceDocumentController", () => {
     expect(restored.getSnapshot().documents.map(d=>d.uri)).toEqual([uri,reviewUri]);
   });
 
+  it("persists left and right tab drops and ignores stale drag targets", () => {
+    const persistence = createMemoryPersistence();
+    const controller = new WorkspaceDocumentController(persistence);
+    const [a, b, c] = ["local://file/a", "local://file/b", "local://file/c"] as const;
+    for (const uri of [a, b, c]) controller.showDocument(uri);
+    controller.moveDocument(c, a, false);
+    expect(controller.getSnapshot().documents.map(doc => doc.uri)).toEqual([c, a, b]);
+    controller.moveDocument(a, b, true);
+    controller.moveDocument(b, "closed", true);
+    const restored = new WorkspaceDocumentController(persistence);
+    expect(restored.getSnapshot().documents.map(doc => doc.uri)).toEqual([c, b, a]);
+  });
+
+  it("retains a dragged page position when the Outline selects it again", () => {
+    const controller = new WorkspaceDocumentController(createMemoryPersistence());
+    const source = "local://file/incident";
+    const page = "page://notebook/" + encodeURIComponent(source) + "/evidence";
+    controller.showDocument(source);
+    controller.showDocument(page, { afterUri: source });
+    controller.moveDocument(page, source, false);
+    controller.showDocument(page, { afterUri: source });
+    expect(controller.getSnapshot().documents.map(doc => doc.uri)).toEqual([page, source]);
+  });
+
   it("shows and deduplicates workspace documents", () => {
     const persistence = createMemoryPersistence();
     const controller = new WorkspaceDocumentController(persistence);

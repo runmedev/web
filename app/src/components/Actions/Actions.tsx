@@ -4686,28 +4686,37 @@ function renderWorkspaceDocument({
 }
 
 export default function Actions() {
-  const { useWorkspaceDocuments, showDocument, closeWorkspaceDocument } =
-    useWorkspaceDocumentContext()
+  const {
+    useWorkspaceDocuments,
+    showDocument,
+    closeWorkspaceDocument,
+    moveWorkspaceDocument,
+  } = useWorkspaceDocumentContext()
   const { getNotebookData, getOpenNotebooks } = useNotebookContext()
   const { store } = useNotebookStore()
   const openNotebooks = getOpenNotebooks()
   const workspaceDocuments = useWorkspaceDocuments()
-  // Group by canonical URI even when restored tabs are interleaved.
+  // Only group adjacent siblings: the stored order is also the visible drag order.
   const tabGroups = useMemo(() => {
-    const groups = new Map<string, typeof workspaceDocuments>()
+    const groups: [string, typeof workspaceDocuments][] = []
     for (const doc of workspaceDocuments) {
       const source = parseNotebookPageUri(doc.uri)?.notebookUri ?? doc.uri
-      const members = groups.get(source) ?? []
-      if (source === doc.uri) members.unshift(doc)
-      else members.push(doc)
-      groups.set(source, members)
+      const last = groups.at(-1)
+      if (last?.[0] === source) last[1].push(doc)
+      else groups.push([source, [doc]])
     }
-    return Array.from(groups)
+    return groups
   }, [workspaceDocuments])
+  const draggingTab = useRef<string | null>(null)
+  const [dropMark, setDropMark] = useState<{
+    uri: string
+    after: boolean
+  } | null>(null)
 
   const { getCurrentDoc, setCurrentDoc } = useCurrentDoc()
   const currentDocUri = getCurrentDoc()
   const driveLinkSnapshot = useDriveLinkCoordinatorSnapshot()
+  const dismissedDriveStatus = useRef<typeof driveLinkSnapshot | null>(null)
   const statusTabVisible =
     driveLinkSnapshot.intents.length > 0 ||
     Boolean(driveLinkSnapshot.lastErrorMessage)
@@ -4876,7 +4885,10 @@ export default function Actions() {
   // CurrentDocContext may restore a non-restorable URI, such as a diff/status
   // document. Fall back to the first restored workspace document in that case.
   useEffect(() => {
-    if (statusTabVisible) {
+    if (
+      statusTabVisible &&
+      dismissedDriveStatus.current !== driveLinkSnapshot
+    ) {
       return
     }
     const pendingSelectedTabUri = pendingSelectedTabUriRef.current
@@ -4905,6 +4917,7 @@ export default function Actions() {
   }, [
     currentDocIsOpen,
     currentDocIsRestoring,
+    driveLinkSnapshot,
     currentDocUri,
     selectedTabIsOpen,
     selectedTabUri,
@@ -4916,6 +4929,7 @@ export default function Actions() {
 
   useEffect(() => {
     if (statusTabVisible) {
+      if (dismissedDriveStatus.current === driveLinkSnapshot) return
       showDocument(DRIVE_LINK_STATUS_TAB_URI, {
         title: 'Drive Link Status',
       })
@@ -4950,7 +4964,7 @@ export default function Actions() {
     closeWorkspaceDocument,
     currentDocIsOpen,
     currentDocUri,
-    driveLinkSnapshot.intents,
+    driveLinkSnapshot,
     setCurrentDoc,
     showDocument,
     statusTabVisible,
@@ -5030,10 +5044,25 @@ export default function Actions() {
 
   const handleCloseTab = useCallback(
     (uri: string) => {
+      if (uri === DRIVE_LINK_STATUS_TAB_URI)
+        dismissedDriveStatus.current = driveLinkSnapshot
       closeWorkspaceDocument(uri)
     },
-    [closeWorkspaceDocument]
+    [closeWorkspaceDocument, driveLinkSnapshot]
   )
+
+  function closeTabs(anchor: string, toRight: boolean) {
+    const index = workspaceDocuments.findIndex((doc) => doc.uri === anchor)
+    if (index < 0) return
+    const closing = workspaceDocuments.slice(toRight ? index + 1 : 0)
+    setTabContextMenu(null)
+    for (const doc of closing.reverse()) handleCloseTab(doc.uri)
+    if (closing.some((doc) => doc.uri === resolvedSelectedTabUri)) {
+      pendingSelectedTabUriRef.current = null
+      setSelectedTabUri(toRight ? anchor : null)
+      setCurrentDoc(toRight ? anchor : null)
+    }
+  }
 
   useEffect(() => {
     if (!tabContextMenu) {
@@ -5061,7 +5090,7 @@ export default function Actions() {
       return tabContextMenu
     }
     const itemCount =
-      5 +
+      7 +
       (tabContextMenu.googleDriveUri ? 1 : 0) +
       (tabContextMenu.googleDriveUri && tabContextMenu.isIpynb ? 1 : 0) +
       (tabContextMenu.autoIpynb ? 1 : 0) +
@@ -5575,11 +5604,11 @@ export default function Actions() {
         >
           <div
             id="notebook-tabs-scroll"
-            className="notebook-tab-strip overflow-x-auto overflow-y-hidden border-b border-nb-border bg-nb-surface-2"
+            className="notebook-tab-strip overflow-x-auto overflow-y-hidden bg-nb-surface-2"
           >
             <Tabs.List
               id="notebook-tabs-list"
-              className="flex min-w-max items-center gap-0.5 px-2 py-1"
+              className="flex min-w-max items-stretch px-1 pt-1"
             >
               {tabGroups.map(([source, members]) => {
                 const grouped = members.some((doc) => doc.uri !== source)
@@ -5589,17 +5618,17 @@ export default function Actions() {
                 const title = sourceEntry?.name ?? members[0].title
                 return (
                   <div
-                    key={source}
+                    key={members[0].uri}
                     role={grouped ? 'group' : undefined}
                     aria-label={grouped ? title : undefined}
                     className={
                       grouped
-                        ? 'flex items-center gap-1 rounded-md border border-nb-text-faint bg-nb-surface px-1'
+                        ? 'workspace-tab-group flex items-stretch'
                         : 'flex'
                     }
                   >
-                    {grouped && members[0].uri !== source && (
-                      <span className="px-2 text-xs font-medium text-nb-text-muted">
+                    {grouped && !members.some((doc) => doc.uri === source) && (
+                      <span className="self-center px-2 text-xs font-medium text-nb-text-muted">
                         {title}
                       </span>
                     )}
@@ -5614,12 +5643,7 @@ export default function Actions() {
                         <Tabs.Trigger
                           value={doc.uri}
                           title={doc.title}
-                          onContextMenu={
-                            isNotebook
-                              ? (event) => handleTabContextMenu(event, doc.uri)
-                              : undefined
-                          }
-                          className="group flex shrink-0 items-center gap-2 rounded-nb-sm border border-transparent px-3 py-1.5 text-sm font-medium text-nb-text-muted transition-all duration-150 data-[state=active]:border-nb-border data-[state=active]:bg-nb-surface data-[state=active]:text-nb-text data-[state=active]:shadow-nb-xs data-[state=inactive]:hover:bg-nb-surface/60 data-[state=inactive]:hover:text-nb-text focus:outline-none"
+                          className="workspace-tab-trigger"
                         >
                           <span className="max-w-[140px] truncate">
                             {displayName}
@@ -5639,11 +5663,74 @@ export default function Actions() {
                               tabTriggerRefs.current.delete(doc.uri)
                             }
                           }}
-                          className="flex shrink-0 items-center gap-1"
+                          className="workspace-tab relative flex shrink-0 items-center gap-0.5"
+                          data-selected={
+                            resolvedSelectedTabUri === doc.uri || undefined
+                          }
+                          data-drop={
+                            dropMark?.uri === doc.uri
+                              ? dropMark.after
+                                ? 'after'
+                                : 'before'
+                              : undefined
+                          }
+                          draggable
+                          onContextMenu={(e) => {
+                            if (!e.defaultPrevented)
+                              handleTabContextMenu(e, doc.uri)
+                          }}
+                          onDragStart={(e) => {
+                            draggingTab.current = doc.uri
+                            e.dataTransfer.effectAllowed = 'move'
+                            e.dataTransfer.setData('text/plain', doc.title)
+                          }}
+                          onDragOver={(e) => {
+                            if (
+                              !draggingTab.current ||
+                              draggingTab.current === doc.uri
+                            )
+                              return
+                            e.preventDefault()
+                            e.dataTransfer.dropEffect = 'move'
+                            const r = e.currentTarget.getBoundingClientRect()
+                            setDropMark({
+                              uri: doc.uri,
+                              after: e.clientX >= r.left + r.width / 2,
+                            })
+                          }}
+                          onDragLeave={(e) => {
+                            if (
+                              !e.currentTarget.contains(
+                                e.relatedTarget as Node | null
+                              )
+                            )
+                              setDropMark(null)
+                          }}
+                          onDrop={(e) => {
+                            const uri = draggingTab.current
+                            if (!uri) return
+                            e.preventDefault()
+                            const r = e.currentTarget.getBoundingClientRect()
+                            moveWorkspaceDocument(
+                              uri,
+                              doc.uri,
+                              e.clientX >= r.left + r.width / 2
+                            )
+                            draggingTab.current = null
+                            setDropMark(null)
+                          }}
+                          onDragEnd={() => {
+                            draggingTab.current = null
+                            setDropMark(null)
+                          }}
                         >
                           {pageView ? (
                             <NotebookPageTabMenu
                               {...pageView}
+                              closeTabs={(right) => closeTabs(doc.uri, right)}
+                              hasTabsToRight={
+                                workspaceDocuments.at(-1)?.uri !== doc.uri
+                              }
                               readOnly={Boolean(
                                 sourceEntry?.readOnly ||
                                   sourceEntry?.releasePending
@@ -5698,132 +5785,154 @@ export default function Actions() {
               <button
                 type="button"
                 className="ctx-menu-item"
-                onClick={() => {
-                  setPropertiesUri(adjustedTabContextMenu.docUri)
-                  setTabContextMenu(null)
-                }}
+                onClick={() => closeTabs(adjustedTabContextMenu.docUri, false)}
               >
-                Notebook properties
+                Close All Tabs
               </button>
               <button
                 type="button"
                 className="ctx-menu-item"
-                disabled={adjustedTabContextMenu.readOnly}
-                onClick={(event) => {
-                  event.stopPropagation()
-                  void handleRenameTab()
-                }}
+                disabled={
+                  workspaceDocuments.at(-1)?.uri ===
+                  adjustedTabContextMenu.docUri
+                }
+                onClick={() => closeTabs(adjustedTabContextMenu.docUri, true)}
               >
-                Rename
+                Close All Tabs to the Right
               </button>
-              {adjustedTabContextMenu.canReviewSuggestions && (
-                <button
-                  type="button"
-                  className="ctx-menu-item"
-                  onClick={(event) => {
-                    event.stopPropagation()
-                    handleReviewTabSuggestions()
-                  }}
-                >
-                  Review suggestions
-                </button>
-              )}
-              <button
-                type="button"
-                className="ctx-menu-item"
-                onClick={(event) => {
-                  event.stopPropagation()
-                  void handleCopyTabShareableLink()
-                }}
-              >
-                Copy Shareable Link
-              </button>
-              <button
-                type="button"
-                className="ctx-menu-item"
-                onClick={(event) => {
-                  event.stopPropagation()
-                  void handleCopyTabMarkdownLink()
-                }}
-              >
-                Copy Markdown Link
-              </button>
-              <button
-                type="button"
-                className="ctx-menu-item"
-                onClick={(event) => {
-                  event.stopPropagation()
-                  void handleCopyTabLocalUri()
-                }}
-              >
-                Copy local URI
-              </button>
-              {adjustedTabContextMenu.ownerSessionId && (
-                <button
-                  type="button"
-                  className="ctx-menu-item"
-                  onClick={(event) => {
-                    event.stopPropagation()
-                    void handleCopyTabOwnerSessionId()
-                  }}
-                >
-                  Copy Owner Session ID
-                </button>
-              )}
-              {adjustedTabContextMenu.googleDriveUri && (
-                <button
-                  type="button"
-                  className="ctx-menu-item"
-                  onClick={(event) => {
-                    event.stopPropagation()
-                    void handleCopyTabGoogleDriveLink()
-                  }}
-                >
-                  Copy Google Drive Link
-                </button>
-              )}
-              {adjustedTabContextMenu.googleDriveUri &&
-                adjustedTabContextMenu.isIpynb && (
+              {isNotebookDocumentUri(adjustedTabContextMenu.docUri) && (
+                <>
+                  <button
+                    type="button"
+                    className="ctx-menu-item"
+                    onClick={() => {
+                      setPropertiesUri(adjustedTabContextMenu.docUri)
+                      setTabContextMenu(null)
+                    }}
+                  >
+                    Notebook properties
+                  </button>
+                  <button
+                    type="button"
+                    className="ctx-menu-item"
+                    disabled={adjustedTabContextMenu.readOnly}
+                    onClick={(event) => {
+                      event.stopPropagation()
+                      void handleRenameTab()
+                    }}
+                  >
+                    Rename
+                  </button>
+                  {adjustedTabContextMenu.canReviewSuggestions && (
+                    <button
+                      type="button"
+                      className="ctx-menu-item"
+                      onClick={(event) => {
+                        event.stopPropagation()
+                        handleReviewTabSuggestions()
+                      }}
+                    >
+                      Review suggestions
+                    </button>
+                  )}
                   <button
                     type="button"
                     className="ctx-menu-item"
                     onClick={(event) => {
                       event.stopPropagation()
-                      void handleCopyTabGoogleColabLink()
+                      void handleCopyTabShareableLink()
                     }}
                   >
-                    Copy Google Colab Link
+                    Copy Shareable Link
                   </button>
-                )}
-              {adjustedTabContextMenu.autoIpynb && (
-                <button
-                  type="button"
-                  className="ctx-menu-item"
-                  disabled={!adjustedTabContextMenu.colabCopyUri}
-                  title={
-                    adjustedTabContextMenu.colabCopyUri
-                      ? undefined
-                      : 'Available after the Colab copy is saved to Google Drive'
-                  }
-                  onClick={(event) => {
-                    event.stopPropagation()
-                    void handleCopyTabColabCopyLink()
-                  }}
-                >
-                  Copy Colab link
-                </button>
-              )}
-              {adjustedTabContextMenu.canOpenUpstreamDiff && (
-                <button
-                  type="button"
-                  className="ctx-menu-item"
-                  onClick={(event) => {
-                    event.stopPropagation()
-                    void handleOpenTabUpstreamDiff()
-                  }}
-                >
-                  Compare with upstream
-                </button>
+                  <button
+                    type="button"
+                    className="ctx-menu-item"
+                    onClick={(event) => {
+                      event.stopPropagation()
+                      void handleCopyTabMarkdownLink()
+                    }}
+                  >
+                    Copy Markdown Link
+                  </button>
+                  <button
+                    type="button"
+                    className="ctx-menu-item"
+                    onClick={(event) => {
+                      event.stopPropagation()
+                      void handleCopyTabLocalUri()
+                    }}
+                  >
+                    Copy local URI
+                  </button>
+                  {adjustedTabContextMenu.ownerSessionId && (
+                    <button
+                      type="button"
+                      className="ctx-menu-item"
+                      onClick={(event) => {
+                        event.stopPropagation()
+                        void handleCopyTabOwnerSessionId()
+                      }}
+                    >
+                      Copy Owner Session ID
+                    </button>
+                  )}
+                  {adjustedTabContextMenu.googleDriveUri && (
+                    <button
+                      type="button"
+                      className="ctx-menu-item"
+                      onClick={(event) => {
+                        event.stopPropagation()
+                        void handleCopyTabGoogleDriveLink()
+                      }}
+                    >
+                      Copy Google Drive Link
+                    </button>
+                  )}
+                  {adjustedTabContextMenu.googleDriveUri &&
+                    adjustedTabContextMenu.isIpynb && (
+                      <button
+                        type="button"
+                        className="ctx-menu-item"
+                        onClick={(event) => {
+                          event.stopPropagation()
+                          void handleCopyTabGoogleColabLink()
+                        }}
+                      >
+                        Copy Google Colab Link
+                      </button>
+                    )}
+                  {adjustedTabContextMenu.autoIpynb && (
+                    <button
+                      type="button"
+                      className="ctx-menu-item"
+                      disabled={!adjustedTabContextMenu.colabCopyUri}
+                      title={
+                        adjustedTabContextMenu.colabCopyUri
+                          ? undefined
+                          : 'Available after the Colab copy is saved to Google Drive'
+                      }
+                      onClick={(event) => {
+                        event.stopPropagation()
+                        void handleCopyTabColabCopyLink()
+                      }}
+                    >
+                      Copy Colab link
+                    </button>
+                  )}
+                  {adjustedTabContextMenu.canOpenUpstreamDiff && (
+                    <button
+                      type="button"
+                      className="ctx-menu-item"
+                      onClick={(event) => {
+                        event.stopPropagation()
+                        void handleOpenTabUpstreamDiff()
+                      }}
+                    >
+                      Compare with upstream
+                    </button>
+                  )}
+                </>
               )}
             </div>
           )}
