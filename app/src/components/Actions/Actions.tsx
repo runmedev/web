@@ -1,4 +1,3 @@
-import { NotebookPageToolbar } from './NotebookPageToolbar'
 import {
   CELL_PAGE,
   DEFAULT_PAGE,
@@ -4136,29 +4135,6 @@ function NotebookTabContent({
         {/* Full-width notebook column with horizontal padding for breathing room.
             Cells expand to fill the available width of the tab content area. */}
         <div id="notebook-column" className="w-full py-2 px-8">
-          <NotebookPageToolbar
-            pages={pages}
-            current={currentPage}
-            defaultId={defaultPage}
-            data={readOnly ? null : (data ?? null)}
-            select={(id) => {
-              if (initialPage) {
-                const uri = notebookPageUri(docUri, id)
-                showDocument(uri, {
-                  title: pages.find((p) => p.id === id)?.name ?? entry.name,
-                })
-                setCurrentDoc(uri)
-              } else setSelectedPage(id)
-            }}
-            open={(id) => {
-              const uri = notebookPageUri(docUri, id)
-              showDocument(uri, {
-                title: pages.find((p) => p.id === id)?.name ?? entry.name,
-                afterUri: docUri,
-              })
-              setCurrentDoc(uri)
-            }}
-          />
           {derivedSource && (
             <div
               id="derived-notebook-notice"
@@ -4810,6 +4786,19 @@ export default function Actions() {
   const { store } = useNotebookStore()
   const openNotebooks = getOpenNotebooks()
   const workspaceDocuments = useWorkspaceDocuments()
+  // Group by canonical URI even when restored tabs are interleaved.
+  const tabGroups = useMemo(() => {
+    const groups = new Map<string, typeof workspaceDocuments>()
+    for (const doc of workspaceDocuments) {
+      const source = parseNotebookPageUri(doc.uri)?.notebookUri ?? doc.uri
+      const members = groups.get(source) ?? []
+      if (source === doc.uri) members.unshift(doc)
+      else members.push(doc)
+      groups.set(source, members)
+    }
+    return Array.from(groups)
+  }, [workspaceDocuments])
+
   const { getCurrentDoc, setCurrentDoc } = useCurrentDoc()
   const currentDocUri = getCurrentDoc()
   const driveLinkSnapshot = useDriveLinkCoordinatorSnapshot()
@@ -5686,57 +5675,89 @@ export default function Actions() {
               id="notebook-tabs-list"
               className="flex min-w-max items-center gap-0.5 px-2 py-1"
             >
-              {workspaceDocuments.map((doc) => {
-                const displayName = getNotebookDisplayName(doc.uri, doc.title)
-                const isNotebook = isNotebookDocumentUri(doc.uri)
+              {tabGroups.map(([source, members]) => {
+                const grouped = members.some((doc) => doc.uri !== source)
+                const title =
+                  openNotebooks.find((entry) => entry.uri === source)?.name ??
+                  members[0].title
                 return (
                   <div
-                    key={`tab-${doc.uri}`}
-                    ref={(node) => {
-                      if (node) {
-                        tabTriggerRefs.current.set(doc.uri, node)
-                      } else {
-                        tabTriggerRefs.current.delete(doc.uri)
-                      }
-                    }}
-                    className="flex shrink-0 items-center gap-1"
+                    key={source}
+                    role={grouped ? 'group' : undefined}
+                    aria-label={grouped ? title : undefined}
+                    className={
+                      grouped
+                        ? 'flex items-center gap-1 rounded-md border border-nb-text-faint bg-nb-surface px-1'
+                        : 'flex'
+                    }
                   >
-                    <Tabs.Trigger
-                      value={doc.uri}
-                      title={doc.title}
-                      onContextMenu={
-                        isNotebook
-                          ? (event) => handleTabContextMenu(event, doc.uri)
-                          : undefined
-                      }
-                      className="group flex shrink-0 items-center gap-2 rounded-nb-sm border border-transparent px-3 py-1.5 text-sm font-medium text-nb-text-muted transition-all duration-150 data-[state=active]:border-nb-border data-[state=active]:bg-nb-surface data-[state=active]:text-nb-text data-[state=active]:shadow-nb-xs data-[state=inactive]:hover:bg-nb-surface/60 data-[state=inactive]:hover:text-nb-text focus:outline-none"
-                    >
-                      <span className="max-w-[140px] truncate">
-                        {displayName}
+                    {grouped && members[0].uri !== source && (
+                      <span className="px-2 text-xs font-medium text-nb-text-muted">
+                        {title}
                       </span>
-                      {doc.readOnly && <ReadOnlyTabIndicator uri={doc.uri} />}
-                    </Tabs.Trigger>
-                    {isNotebook &&
-                      detectNotebookFileFormat(doc.title) ===
-                        'runme-operation-log' && (
-                        <OperationLogRefreshButton
-                          docUri={doc.uri}
-                          displayName={displayName}
-                        />
-                      )}
-                    {isNotebook && <NotebookSyncIndicator docUri={doc.uri} />}
-                    <button
-                      type="button"
-                      className="ml-1 inline-flex h-5 w-5 items-center justify-center rounded-nb-xs text-nb-text-faint transition-all duration-150 hover:bg-nb-surface-2 hover:text-nb-text"
-                      aria-label={`Close ${displayName}`}
-                      onClick={(event) => {
-                        event.stopPropagation()
-                        handleCloseTab(doc.uri)
-                      }}
-                      onMouseDown={(event) => event.stopPropagation()}
-                    >
-                      <XMarkIcon className="h-3 w-3" />
-                    </button>
+                    )}
+                    {members.map((doc) => {
+                      const displayName = getNotebookDisplayName(
+                        doc.uri,
+                        doc.title
+                      )
+                      const isNotebook = isNotebookDocumentUri(doc.uri)
+                      return (
+                        <div
+                          key={`tab-${doc.uri}`}
+                          ref={(node) => {
+                            if (node) {
+                              tabTriggerRefs.current.set(doc.uri, node)
+                            } else {
+                              tabTriggerRefs.current.delete(doc.uri)
+                            }
+                          }}
+                          className="flex shrink-0 items-center gap-1"
+                        >
+                          <Tabs.Trigger
+                            value={doc.uri}
+                            title={doc.title}
+                            onContextMenu={
+                              isNotebook
+                                ? (event) =>
+                                    handleTabContextMenu(event, doc.uri)
+                                : undefined
+                            }
+                            className="group flex shrink-0 items-center gap-2 rounded-nb-sm border border-transparent px-3 py-1.5 text-sm font-medium text-nb-text-muted transition-all duration-150 data-[state=active]:border-nb-border data-[state=active]:bg-nb-surface data-[state=active]:text-nb-text data-[state=active]:shadow-nb-xs data-[state=inactive]:hover:bg-nb-surface/60 data-[state=inactive]:hover:text-nb-text focus:outline-none"
+                          >
+                            <span className="max-w-[140px] truncate">
+                              {displayName}
+                            </span>
+                            {doc.readOnly && (
+                              <ReadOnlyTabIndicator uri={doc.uri} />
+                            )}
+                          </Tabs.Trigger>
+                          {isNotebook &&
+                            detectNotebookFileFormat(doc.title) ===
+                              'runme-operation-log' && (
+                              <OperationLogRefreshButton
+                                docUri={doc.uri}
+                                displayName={displayName}
+                              />
+                            )}
+                          {isNotebook && (
+                            <NotebookSyncIndicator docUri={doc.uri} />
+                          )}
+                          <button
+                            type="button"
+                            className="ml-1 inline-flex h-5 w-5 items-center justify-center rounded-nb-xs text-nb-text-faint transition-all duration-150 hover:bg-nb-surface-2 hover:text-nb-text"
+                            aria-label={`Close ${displayName}`}
+                            onClick={(event) => {
+                              event.stopPropagation()
+                              handleCloseTab(doc.uri)
+                            }}
+                            onMouseDown={(event) => event.stopPropagation()}
+                          >
+                            <XMarkIcon className="h-3 w-3" />
+                          </button>
+                        </div>
+                      )
+                    })}
                   </div>
                 )
               })}

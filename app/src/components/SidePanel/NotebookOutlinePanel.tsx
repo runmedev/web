@@ -11,7 +11,19 @@ import {
 } from '../../lib/notebookOutline'
 import { copyNotebookCellShareUrl } from '../../lib/shareLinks'
 import { showToast } from '../../lib/toast'
-import { isNotebookDocumentUri } from '../../lib/workspaceDocuments/workspaceDocumentTypes'
+import { useWorkspaceDocumentContext } from '../../contexts/WorkspaceDocumentContext'
+import { NotebookPageTree } from './NotebookPageTree'
+import {
+  CELL_PAGE,
+  DEFAULT_PAGE,
+  notebookPages,
+  resolvePage,
+} from '../../lib/notebookPages'
+import {
+  notebookPageUri,
+  parseNotebookPageUri,
+  isNotebookDocumentUri,
+} from '../../lib/workspaceDocuments/workspaceDocumentTypes'
 
 function findCellElement(
   notebookUri: string,
@@ -20,7 +32,9 @@ function findCellElement(
   const notebookElements =
     document.querySelectorAll<HTMLElement>('[data-document-id]')
   const notebookElement = Array.from(notebookElements).find(
-    (element) => element.dataset.documentId === notebookUri
+    (element) =>
+      element.dataset.documentId === notebookUri &&
+      !element.closest('[role="tabpanel"][data-state="inactive"]')
   )
   const elements =
     notebookElement?.querySelectorAll<HTMLElement>('[data-cell-ref-id]') ?? []
@@ -46,13 +60,35 @@ function focusCellElement(cellElement: HTMLElement): void {
 }
 
 export default function NotebookOutlinePanel() {
-  const { getCurrentDoc } = useCurrentDoc()
-  const { useNotebookSnapshot } = useNotebookContext()
+  const { getCurrentDoc, setCurrentDoc } = useCurrentDoc()
+  const { useNotebookSnapshot, getNotebookData, useNotebookList } =
+    useNotebookContext()
   const { store } = useNotebookStore()
   const currentDocUri = getCurrentDoc()
+  const { showDocument } = useWorkspaceDocumentContext()
+  const view = parseNotebookPageUri(currentDocUri ?? '')
   const notebookUri =
-    currentDocUri && isNotebookDocumentUri(currentDocUri) ? currentDocUri : ''
+    view?.notebookUri ??
+    (currentDocUri && isNotebookDocumentUri(currentDocUri) ? currentDocUri : '')
   const notebookSnapshot = useNotebookSnapshot(notebookUri)
+  const entry = useNotebookList().find((n) => n.uri === notebookUri)
+  const metadata = notebookSnapshot?.notebook.metadata
+  const pages = useMemo(() => notebookPages(metadata ?? {}), [metadata])
+  const defaultId = resolvePage(undefined, pages, metadata?.[DEFAULT_PAGE])
+  const current = resolvePage(view?.pageId, pages, defaultId)
+  const data =
+    entry?.readOnly ||
+    entry?.releasePending ||
+    notebookSnapshot?.readOnly ||
+    notebookSnapshot?.reviewPending ||
+    notebookSnapshot?.releasePending
+      ? null
+      : getNotebookData(notebookUri)
+  function openPage(id: string, name: string) {
+    const uri = id ? notebookPageUri(notebookUri, id) : notebookUri
+    if (id) showDocument(uri, { title: name, afterUri: notebookUri })
+    setCurrentDoc(uri)
+  }
   const [shareTarget, setShareTarget] = useState<{
     notebookUri: string
     targetUri: string | null
@@ -62,13 +98,16 @@ export default function NotebookOutlinePanel() {
   }))
   const shareTargetUri =
     shareTarget.notebookUri === notebookUri ? shareTarget.targetUri : null
-  const entries = useMemo(
-    () =>
-      notebookSnapshot?.loaded
-        ? extractNotebookOutline(notebookSnapshot.notebook.cells ?? [])
-        : [],
-    [notebookSnapshot]
-  )
+  const entriesByPage = useMemo(() => {
+    const result = new Map<string | undefined, NotebookOutlineEntry[]>()
+    for (const cell of notebookSnapshot?.notebook.cells ?? []) {
+      const id = resolvePage(cell.metadata[CELL_PAGE], pages, defaultId)
+      const entries = result.get(id) ?? []
+      entries.push(...extractNotebookOutline([cell]))
+      result.set(id, entries)
+    }
+    return result
+  }, [notebookSnapshot, pages, defaultId])
 
   useEffect(() => {
     const fallbackUri = notebookUri || null
@@ -147,8 +186,6 @@ export default function NotebookOutlinePanel() {
     emptyMessage = 'Open a notebook to see its outline.'
   } else if (!notebookSnapshot?.loaded) {
     emptyMessage = 'Loading outline…'
-  } else if (entries.length === 0) {
-    emptyMessage = 'Add Markdown headings to build an outline.'
   }
 
   return (
@@ -156,60 +193,52 @@ export default function NotebookOutlinePanel() {
       id="notebook-outline-panel"
       className="flex h-full min-h-0 w-full flex-col bg-nb-surface"
     >
-      <div
-        id="notebook-outline-panel-header"
-        className="border-b border-nb-border px-4 py-3"
-      >
-        <p className="text-xs font-semibold tracking-[0.18em] text-nb-text-faint uppercase">
-          Outline
-        </p>
-        <p className="mt-1 text-sm text-nb-text-muted">
-          {entries.length} {entries.length === 1 ? 'heading' : 'headings'}
-        </p>
-      </div>
-      <nav
-        aria-label="Notebook outline"
-        className="min-h-0 flex-1 overflow-y-auto px-2 py-2"
-      >
-        {emptyMessage ? (
-          <div
-            id="notebook-outline-empty"
-            className="rounded-nb-sm border border-dashed border-nb-border bg-white/60 px-3 py-4 text-sm text-nb-text-muted"
-          >
-            {emptyMessage}
-          </div>
-        ) : (
-          <ul className="space-y-0.5">
-            {entries.map((entry) => (
-              <li
-                key={`${entry.cellRefId}:${entry.line}`}
-                className="group flex min-w-0 items-center gap-1"
-              >
-                <button
-                  type="button"
-                  className="block min-w-0 flex-1 truncate rounded-nb-sm py-1.5 pr-2 text-left text-sm text-nb-text-muted transition-colors hover:bg-white/80 hover:text-nb-text focus-visible:bg-white focus-visible:text-nb-text"
-                  data-heading-level={entry.level}
-                  onClick={() => navigateToEntry(entry)}
-                  style={{ paddingLeft: `${8 + (entry.level - 1) * 12}px` }}
-                  title={entry.text}
+      {emptyMessage ? (
+        <p className="p-3 text-sm text-nb-text-muted">{emptyMessage}</p>
+      ) : (
+        <NotebookPageTree
+          key={notebookUri}
+          pages={pages}
+          current={current}
+          defaultId={defaultId}
+          data={data}
+          open={openPage}
+          headings={(id) => (
+            <ul className="space-y-0.5">
+              {(entriesByPage.get(id) ?? []).map((entry) => (
+                <li
+                  key={`${entry.cellRefId}:${entry.line}`}
+                  className="group flex min-w-0 items-center gap-1"
                 >
-                  {entry.text}
-                </button>
-                <button
-                  type="button"
-                  aria-label={`Copy link to ${entry.text}`}
-                  className="icon-btn h-7 w-7 shrink-0 text-nb-text-faint transition-colors hover:bg-white/80 hover:text-nb-accent focus-visible:bg-white focus-visible:text-nb-accent disabled:opacity-40"
-                  disabled={!shareTargetUri}
-                  onClick={() => void copyEntryLink(entry)}
-                  title="Copy link to cell"
-                >
-                  <LinkIcon className="h-4 w-4" />
-                </button>
-              </li>
-            ))}
-          </ul>
-        )}
-      </nav>
+                  <button
+                    type="button"
+                    className="block min-w-0 flex-1 truncate rounded-nb-sm py-1.5 pr-2 text-left text-sm text-nb-text-muted transition-colors hover:bg-white/80 hover:text-nb-text focus-visible:bg-white focus-visible:text-nb-text"
+                    data-heading-level={entry.level}
+                    onClick={() => {
+                      if (id) openPage(id, pages.find((p) => p.id === id)!.name)
+                      requestAnimationFrame(() => navigateToEntry(entry))
+                    }}
+                    style={{ paddingLeft: `${8 + (entry.level - 1) * 12}px` }}
+                    title={entry.text}
+                  >
+                    {entry.text}
+                  </button>
+                  <button
+                    type="button"
+                    aria-label={`Copy link to ${entry.text}`}
+                    className="icon-btn h-7 w-7 shrink-0 text-nb-text-faint transition-colors hover:bg-white/80 hover:text-nb-accent focus-visible:bg-white focus-visible:text-nb-accent disabled:opacity-40"
+                    disabled={!shareTargetUri}
+                    onClick={() => void copyEntryLink(entry)}
+                    title="Copy link to cell"
+                  >
+                    <LinkIcon className="h-4 w-4" />
+                  </button>
+                </li>
+              ))}
+            </ul>
+          )}
+        />
+      )}
     </div>
   )
 }
