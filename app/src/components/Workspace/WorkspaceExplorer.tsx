@@ -33,8 +33,6 @@ import { explorerSync, syncExplorerFolder } from "../../lib/explorerSync";
 import { appLogger } from "../../lib/logging/runtime";
 import {
   type NotebookFileFormat,
-  RUNME_OPERATION_LOG_MIME_TYPE,
-  decodeNotebookFile,
   convertLegacyNotebookFileToRunme,
   isLegacyNotebookFileName,
   isNotebookFileName,
@@ -462,8 +460,6 @@ export function WorkspaceExplorer() {
     [],
   );
 
-  const draftMembers = useRef(new Set<string>());
-  const importInput = useRef<HTMLInputElement>(null);
   const treeRef = useRef<TreeApi<WorkspaceRow<TreeNode>> | undefined>(undefined);
   const { ref: containerRef, width = 0, height = 0 } = useResizeObserver<HTMLDivElement>();
 
@@ -520,10 +516,13 @@ export function WorkspaceExplorer() {
     let cancelled = false;
     (async () => {
       const folderCandidates: WorkspaceFolderCandidate[] = [];
-      for (const uri of new Set([...workspaceUris, LOCAL_FOLDER_URI])) {
+      for (const uri of new Set(workspaceUris)) {
         if (cancelled) {
           return;
         }
+
+        // Older profiles can still have the former browser-only root in their saved list.
+        if (uri === LOCAL_FOLDER_URI) continue;
 
         // fs:// workspace roots are handled by the filesystem store.
         if (uri.startsWith("fs://")) {
@@ -587,12 +586,7 @@ export function WorkspaceExplorer() {
             console.error("Failed to refresh Drive folder name", error);
           }
         }
-        if (localUri === LOCAL_FOLDER_URI) {
-          if (cancelled) return;
-          draftMembers.current = new Set(metadata.children);
-          if (!draftMembers.current.size) continue;
-        }
-        const name = localUri === LOCAL_FOLDER_URI ? "Browser drafts" : metadata.name;
+        const name = metadata.name;
         const type = metadata.type;
         if (type !== NotebookStoreItemType.Folder) {
           continue;
@@ -789,25 +783,8 @@ export function WorkspaceExplorer() {
               createFileNode(metadata, { parentUri }),
             );
           }
-          // Pending Drive creation can also have no public upstream URI. Ask
-          // the virtual folder before changing its visibility or membership.
-          let draftCount: number | undefined;
-          const wasDraft = draftMembers.current.has(eventUri);
-          const membershipMayHaveChanged = wasDraft ? Boolean(metadata.remoteUri) : !metadata.remoteUri;
-          if (metadata.type === NotebookStoreItemType.File && membershipMayHaveChanged) {
-            const drafts = await store.getMetadata(LOCAL_FOLDER_URI);
-            if (drafts) {
-              draftMembers.current = new Set(drafts.children);
-              draftCount = draftMembers.current.size;
-            }
-          }
           setTreeNodes((prev) => {
-            let roots = prev;
-            if (draftCount === 0) roots = prev.filter((node) => node.uri !== LOCAL_FOLDER_URI);
-            else if (draftCount && !prev.some((node) => node.uri === LOCAL_FOLDER_URI)) {
-              roots = [...prev, createFolderNode(LOCAL_FOLDER_URI, "Browser drafts")];
-            }
-            const updated = updateNodeMetadata(roots, eventUri, {
+            const updated = updateNodeMetadata(prev, eventUri, {
               name: metadata.name,
               remoteUri: metadata.remoteUri,
             });
@@ -1073,10 +1050,6 @@ export function WorkspaceExplorer() {
           createInitialExcalidrawDocumentJson(),
           EXCALIDRAW_MIME_TYPE,
         );
-        if (folderUri === LOCAL_FOLDER_URI) {
-          setTreeNodes((nodes) => nodes.some((node) => node.uri === LOCAL_FOLDER_URI)
-            ? nodes : [...nodes, createFolderNode(LOCAL_FOLDER_URI, "Browser drafts")]);
-        }
         await fetchChildren(folderUri);
         setPendingEdit(workspaceRowId(folderRowId, created.uri));
         setErrorMessage(null);
@@ -1592,23 +1565,6 @@ function formatShortTimestamp(date: Date): string {
     ],
   );
 
-  /** A one-time file selection creates an independent draft with its original contents. */
-  async function importNotebookFile(file: File) {
-    if (!store) return;
-    try {
-      const content = await file.text();
-      const { format } = decodeNotebookFile(content, file.name);
-      const mime = format === "runme-operation-log" ? RUNME_OPERATION_LOG_MIME_TYPE
-        : format === "ipynb" ? "application/x-ipynb+json" : "application/json";
-      const item = await store.createContent(LOCAL_FOLDER_URI, file.name, content, mime);
-      const result = await openNotebook(item.uri, { name: item.name });
-      setCurrentDoc(result.localUri);
-      setErrorMessage(null);
-    } catch (error) {
-      setErrorMessage(`Unable to open ${file.name}. ${String(error)}`);
-    }
-  }
-
   const handleOpenLocalFolder = useCallback(async () => {
     if (!fsStore) {
       return;
@@ -1782,17 +1738,6 @@ function formatShortTimestamp(date: Date): string {
           Explorer
         </h2>
         <div id="workspace-explorer-toolbar-actions" className="flex items-center gap-1">
-          <button type="button" title="New browser draft" aria-label="New browser draft"
-            onClick={() => void handleCreateDocument(LOCAL_FOLDER_URI, workspaceRowId("", LOCAL_FOLDER_URI))}>
-            <DocumentTextIcon className="h-5 w-5" />
-          </button>
-          <button type="button" onClick={() => importInput.current?.click()}>Open file</button>
-          <input ref={importInput} type="file" hidden accept=".runme,.json,.ipynb"
-            onChange={(event) => {
-              const file = event.currentTarget.files?.[0];
-              event.currentTarget.value = "";
-              if (file) void importNotebookFile(file);
-            }} />
           <button
             type="button"
             className="flex h-11 w-11 items-center justify-center rounded-nb-sm text-nb-text-muted hover:bg-nb-surface-2 hover:text-nb-text disabled:opacity-50 focus-visible:outline focus-visible:outline-2 focus-visible:outline-nb-accent"
@@ -1979,64 +1924,70 @@ function formatShortTimestamp(date: Date): string {
               >
                 New Notebook (.runme)
               </button>
-              <button
-                type="button"
-                className="ctx-menu-item"
-                onMouseDown={(event) => event.stopPropagation()}
-                onClick={(event) => {
-                  event.stopPropagation()
-                  setContextMenu(null)
-                  if (contextMenu.parentUri) {
-                    void handleCreateDocument(
-                      contextMenu.parentUri,
-                      contextMenu.parentRowId,
-                      'ipynb'
-                    )
-                  }
-                }}
-              >
-                New Jupyter Notebook (.ipynb)
-              </button>
-              <button
-                type="button"
-                className="ctx-menu-item"
-                onMouseDown={(event) => event.stopPropagation()}
-                onClick={(event) => {
-                  event.stopPropagation();
-                  setContextMenu(null);
-                  if (contextMenu.parentUri) {
-                    void handleCreateExcalidrawDocument(
-                      contextMenu.parentUri,
-                      contextMenu.parentRowId,
-                    );
-                  } else {
-                    console.warn(
-                      "Cannot create Excalidraw diagram: no parent folder for",
-                      contextMenu.uri,
-                    );
-                  }
-                }}
-              >
-                New Excalidraw Diagram
-              </button>
-              <button
-                type="button"
-                className="ctx-menu-item"
-                onMouseDown={(event) => event.stopPropagation()}
-                onClick={(event) => {
-                  event.stopPropagation()
-                  setContextMenu(null)
-                  if (contextMenu.parentUri) {
-                    void handleCreateDocument(
-                      contextMenu.parentUri,
-                      contextMenu.parentRowId,
-                      'runme-json'
-                    )
-                  }
-                }}
-              >
-                Legacy Runme Notebook (.json)
-              </button>
+              {!contextMenu.uri.startsWith("fs://") && (
+                <button
+                  type="button"
+                  className="ctx-menu-item"
+                  onMouseDown={(event) => event.stopPropagation()}
+                  onClick={(event) => {
+                    event.stopPropagation()
+                    setContextMenu(null)
+                    if (contextMenu.parentUri) {
+                      void handleCreateDocument(
+                        contextMenu.parentUri,
+                        contextMenu.parentRowId,
+                        'ipynb'
+                      )
+                    }
+                  }}
+                >
+                  New Jupyter Notebook (.ipynb)
+                </button>
+              )}
+              {!contextMenu.uri.startsWith("fs://") && (
+                <button
+                  type="button"
+                  className="ctx-menu-item"
+                  onMouseDown={(event) => event.stopPropagation()}
+                  onClick={(event) => {
+                    event.stopPropagation();
+                    setContextMenu(null);
+                    if (contextMenu.parentUri) {
+                      void handleCreateExcalidrawDocument(
+                        contextMenu.parentUri,
+                        contextMenu.parentRowId,
+                      );
+                    } else {
+                      console.warn(
+                        "Cannot create Excalidraw diagram: no parent folder for",
+                        contextMenu.uri,
+                      );
+                    }
+                  }}
+                >
+                  New Excalidraw Diagram
+                </button>
+              )}
+              {!contextMenu.uri.startsWith("fs://") && (
+                <button
+                  type="button"
+                  className="ctx-menu-item"
+                  onMouseDown={(event) => event.stopPropagation()}
+                  onClick={(event) => {
+                    event.stopPropagation()
+                    setContextMenu(null)
+                    if (contextMenu.parentUri) {
+                      void handleCreateDocument(
+                        contextMenu.parentUri,
+                        contextMenu.parentRowId,
+                        'runme-json'
+                      )
+                    }
+                  }}
+                >
+                  Legacy Runme Notebook (.json)
+                </button>
+              )}
               {contextMenu.remoteUri && (
                 <button
                   type="button"
@@ -2160,22 +2111,24 @@ function formatShortTimestamp(date: Date): string {
               >
                 New Notebook (.runme)
               </button>
-              <button
-                type="button"
-                className="ctx-menu-item"
-                onMouseDown={(event) => event.stopPropagation()}
-                onClick={(event) => {
-                  event.stopPropagation()
-                  setContextMenu(null)
-                  void handleCreateDocument(
-                    contextMenu.uri,
-                    contextMenu.rowId,
-                    'ipynb'
-                  )
-                }}
-              >
-                New Jupyter Notebook (.ipynb)
-              </button>
+              {!contextMenu.uri.startsWith("fs://") && (
+                <button
+                  type="button"
+                  className="ctx-menu-item"
+                  onMouseDown={(event) => event.stopPropagation()}
+                  onClick={(event) => {
+                    event.stopPropagation()
+                    setContextMenu(null)
+                    void handleCreateDocument(
+                      contextMenu.uri,
+                      contextMenu.rowId,
+                      'ipynb'
+                    )
+                  }}
+                >
+                  New Jupyter Notebook (.ipynb)
+                </button>
+              )}
               {contextMenu.remoteUri && (
                 <button
                   type="button"
@@ -2207,22 +2160,24 @@ function formatShortTimestamp(date: Date): string {
                   New Google Drive Folder
                 </button>
               )}
-              <button
-                type="button"
-                className="ctx-menu-item"
-                onMouseDown={(event) => event.stopPropagation()}
-                onClick={(event) => {
-                  event.stopPropagation()
-                  setContextMenu(null)
-                  void handleCreateDocument(
-                    contextMenu.uri,
-                    contextMenu.rowId,
-                    'runme-json'
-                  )
-                }}
-              >
-                Legacy Runme Notebook (.json)
-              </button>
+              {!contextMenu.uri.startsWith("fs://") && (
+                <button
+                  type="button"
+                  className="ctx-menu-item"
+                  onMouseDown={(event) => event.stopPropagation()}
+                  onClick={(event) => {
+                    event.stopPropagation()
+                    setContextMenu(null)
+                    void handleCreateDocument(
+                      contextMenu.uri,
+                      contextMenu.rowId,
+                      'runme-json'
+                    )
+                  }}
+                >
+                  Legacy Runme Notebook (.json)
+                </button>
+              )}
               {contextMenu.remoteUri && (
                 <button
                   type="button"

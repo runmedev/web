@@ -28,10 +28,8 @@ The filename extension selects the storage format:
 - `.ipynb` uses the Jupyter notebook format,
 - `.json` uses the native Runme JSON format.
 
-In the workspace explorer, open a folder's context menu and choose **New
-Jupyter Notebook (.ipynb)**. IPYNB notebooks can be created in Browser drafts,
-a mounted filesystem folder, or Google Drive. Existing `.ipynb` files in those
-locations can be opened directly.
+In Explorer, open a mounted Google Drive folder's context menu and choose
+**New Jupyter Notebook (.ipynb)**. Open existing `.ipynb` files from that folder.
 
 Changing only a filename extension does not perform a separate export step.
 The app writes the notebook in the format selected by the resulting extension

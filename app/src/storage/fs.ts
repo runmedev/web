@@ -10,7 +10,6 @@ import {
   detectNotebookFileFormat,
   encodeIpynbNotebook,
   encodeRunmeNotebook,
-  isNotebookFileName,
   notebookFileExtension,
   validateNotebookRenameFormat,
 } from '../lib/notebookFormat'
@@ -147,13 +146,13 @@ function physicalEntryLockId(
 
 function notebookNameForCreate(name: string): string {
   const trimmed = name.trim()
-  if (detectNotebookFileFormat(trimmed)) {
+  if (detectNotebookFileFormat(trimmed) === 'runme-operation-log') {
     return trimmed
   }
   if (/\.[^/]+$/.test(trimmed)) {
     throw new Error(`Unsupported notebook file extension: ${name}`)
   }
-  return `${trimmed}.json`
+  return `${trimmed}.runme`
 }
 
 function notebookNameForRename(oldName: string, name: string): string {
@@ -247,7 +246,7 @@ async function runFilesystemExclusive<T>(
 /**
  * FilesystemNotebookStore is the local filesystem adapter. The editor works
  * against LocalNotebooks; this class lists/loads/saves upstream files using the
- * File System Access API. Notebooks are stored as `.json` files on the local
+ * File System Access API. Notebooks are stored as `.runme` files on the local
  * filesystem, and workspace/file handle metadata is cached in IndexedDB via
  * `FsDatabase`.
  *
@@ -384,7 +383,7 @@ export class FilesystemNotebookStore {
       if ((error as DOMException).name !== 'NotAllowedError') throw error
       const cached = await this.db.entries.get(cacheId)
       if (!cached?.listedChildren) throw error
-      return cached.listedChildren
+      return cached.listedChildren.filter((child) => child.type === NotebookStoreItemType.Folder || detectNotebookFileFormat(child.name) === 'runme-operation-log')
     }
   }
 
@@ -397,7 +396,7 @@ export class FilesystemNotebookStore {
     const items: NotebookStoreItem[] = [];
     for await (const [name, handle] of dirHandle.entries()) {
       if (handle.kind === 'file') {
-        if (!isNotebookFileName(name)) {
+        if (detectNotebookFileFormat(name) !== 'runme-operation-log') {
           continue
         }
         const relPath = parsed.relativePath
@@ -422,12 +421,7 @@ export class FilesystemNotebookStore {
           name,
           type: NotebookStoreItemType.File,
           children: [],
-          mimeType:
-            detectNotebookFileFormat(name) === 'ipynb'
-              ? IPYNB_MIME_TYPE
-              : detectNotebookFileFormat(name) === 'runme-operation-log'
-                ? RUNME_OPERATION_LOG_MIME_TYPE
-                : 'application/json',
+          mimeType: RUNME_OPERATION_LOG_MIME_TYPE,
           parents: [uri],
         });
       } else if (handle.kind === "directory") {
@@ -643,12 +637,7 @@ export class FilesystemNotebookStore {
           name: safeName,
           type: NotebookStoreItemType.File,
           children: [],
-          mimeType:
-            detectNotebookFileFormat(safeName) === 'ipynb'
-              ? IPYNB_MIME_TYPE
-              : detectNotebookFileFormat(safeName) === 'runme-operation-log'
-                ? RUNME_OPERATION_LOG_MIME_TYPE
-                : 'application/json',
+          mimeType: RUNME_OPERATION_LOG_MIME_TYPE,
           parents: [parentUri],
         };
       } catch (error) {
@@ -806,7 +795,9 @@ export class FilesystemNotebookStore {
       name: safeName,
       type: NotebookStoreItemType.File,
       children: [],
-      mimeType: safeName.toLowerCase().endsWith('.ipynb')
+      mimeType: detectNotebookFileFormat(safeName) === 'runme-operation-log'
+        ? RUNME_OPERATION_LOG_MIME_TYPE
+        : safeName.toLowerCase().endsWith('.ipynb')
         ? IPYNB_MIME_TYPE
         : 'application/json',
       parents: [parentUri],

@@ -18,7 +18,6 @@ The explorer is the user-facing file and notebook navigation surface.
 
 It can show:
 
-- local notebook folders,
 - filesystem workspaces,
 - Drive-backed folders and files,
 - synthetic status items used for link or sync workflows.
@@ -50,7 +49,7 @@ explorer.removeFolder(uri)
 
 ## Explorer behavior details
 
-- **Browser drafts** appears when the browser contains drafts or notebooks from disconnected local folders. Select **New browser draft** to create one, or **Open file** to import an independent copy.
+- Explorer roots are mounted filesystem directories or Drive folders. Local directories list and create `.runme` notebooks.
 - Folder expansion is lazy; children are fetched when the folder opens.
 - Drive links may enqueue coordination work before a notebook becomes editable.
 

@@ -1,42 +1,44 @@
-# Local folders and browser drafts
+# Mounted local folders for Runme notebooks
 
-A user without Google Drive credentials should be able to download a notebook, mount its containing folder, edit it in Runme, and open the updated file from disk. Use the existing filesystem mount and OPFS mirror for this workflow. Show each mount by its directory name. Replace the always-visible **Local Notebooks** root with **Browser drafts**, visible when it contains files. Keep New notebook available from the explorer toolbar when the root is empty.
+**Author** Codex · **Date** November 22, 2026 · **Status** Implemented in draft [PR #454](https://github.com/runmedev/web/pull/454), pending release.
 
-## What the code does today
+## TL;DR
 
-| Path | Behavior | Consequence |
-| --- | --- | --- |
-| `components/Workspace/WorkspaceExplorer.tsx`, `storage/local.ts` | The explorer adds `local://folder/local` automatically and synthesizes it again if absent. Its metadata selects files whose upstream is local. | This is a recovery path for browser-only work. It is neither a disk directory nor the inventory of all OPFS mirrors. |
-| `storage/fs.ts`, `storage/fsdb.ts` | Open local folder uses a read/write directory picker and stores the handle in IndexedDB. Each pick gets a new UUID. Directory expansion lists disk entries. | Picking the same directory twice can create two upstream identities for one file. |
-| `lib/notebookDataController.ts`, `storage/local.ts` | Opening an upstream URI calls `addFile`, which finds or creates a stable local file URI by upstream URI. Filesystem sync initializes a .runme log in OPFS and merges operations by ID. JSON and Jupyter use separate serialized paths. | Reuse the editor, operation log, and format codecs. A second notebook store for editing would split ownership. |
-| `lib/explorerSync.ts`, `storage/storageOwnerRuntime.ts`, `storage/local.ts` | The explorer periodically refreshes listings. The storage owner periodically rescans Drive work. Saves can queue filesystem writes, and the per-file queue gates network availability only for Drive work. | Refreshing a folder does not ingest edits to previously opened files. A Drive-only recovery scan misses filesystem work after restart. |
+Download a `.runme` notebook, choose **Open local folder** in Explorer, grant access to its containing directory, and open the notebook. Runme edits a browser-private working copy. Its storage worker merges changes in both directions with the file on disk. Each Explorer folder represents a directory on the local filesystem or Google Drive.
 
-Paths in the table are relative to `app/src`.
+## Motivation
 
-## Mount, open, save
+People who can download a shared notebook may have no Google Drive OAuth client configured in Runme. A local download gives them a durable file they can edit and share. The former **Local Notebooks** folder looked like a disk location even though its contents lived inside one browser profile. Retire that folder and the proposed **Browser drafts** replacement. Users creating a notebook from Explorer choose its destination by creating it in a mounted folder.
 
-1. **Mount folder** runs from a user gesture. Compare directory handles with `isSameEntry` and reuse the existing workspace ID. Persist the mount selection separately from cached handles so removing a root stops future scans. Keep existing workspace IDs and local notebook URIs valid.
-2. List supported notebook files in expanded directories. Materialize bytes on first open. A folder containing one notebook and a large source tree should cost one notebook import. Persist enough listing metadata to show previously visited directories when permission expires.
-3. Persist editor changes through the storage owner before reporting **Saved in browser**. Drive and disk are separate destinations. Display **Synced to folder** only after successful reconciliation. Show pending writes, the last error, **Sync now**, and **Reconnect folder** on the affected mount or notebook.
-4. On startup and every two minutes while Runme is running, reconcile previously materialized files in active mounts, including closed tabs. Use the existing per-file exclusion and bounded queue. Scan in pages and probe clean files for external edits. Prioritize pending writes. Query permission silently, coalesce concurrent passes, and retry when the user reconnects. No OAuth or network connection is required.
-5. Treat Download as a snapshot. Export the latest committed .runme operation log, including notebook identity and history. A browser file input can reopen the download as an independent browser draft where folder picking is unavailable. In a supported browser, mounting the download directory enables continued writeback.
+## Background
 
-## Reconciliation and failure behavior
+Drive already separates the editable notebook from its upstream file. Runme stores the working operation log in the origin private file system (OPFS). IndexedDB records the link between that log and its upstream. A “closed draft” in the earlier proposal meant a notebook whose only copy was in browser storage after its editor tab closed. That matters for recovering existing work. It supplies no reason to introduce another Explorer location. Existing records and local notebook links survive the change. An open legacy notebook can be downloaded from its tab menu.
 
-For .runme, read and validate both headers, union operations by ID, append missing local operations to OPFS, and write the merged document to disk only if disk is missing operations. Recheck the observed disk revision immediately before replacing the file. A changed revision triggers a fresh read and merge. The browser cannot lock out unrelated desktop editors. Size and modification time alone can miss equal-size changes, so compare content when verifying a write. Advance the baseline only after the write closes and the committed local revision is still current. An interrupted pass can repeat the union.
+## Proposal
 
-For JSON and .ipynb, compare local and disk content with the last agreed baseline. Pull a disk-only change, push a local-only change, and skip an unchanged file. Preserve Jupyter fields using the existing shadow codec. Two differing changes require a visible conflict with both copies available for export. The existing serialized path logs this case and returns normally. Make conflict an explicit result before enabling periodic scans.
+**Mount identity.** Runme stores the selected directory handle under a workspace ID, a browser-generated key. For example, the upstream address for a file is `fs://workspace/<id>/file/notes.runme`. Two directories named “Downloads” can hold different files. Selecting the same directory again reuses its key so the editor finds the same OPFS history. The browser checks directory identity with `isSameEntry`.
 
-If a file disappears or acquires a different notebook ID, retain the last good mirror and mark the upstream missing or replaced. Let the user reconnect or save a copy. Expired permission pauses disk I/O while editing continues in OPFS. Unmounting forgets the active connection and keeps pending edits recoverable under Browser drafts. Recheck mount membership before queued I/O. Scope polling to the lifetime of the running app.
+**Open and edit.** Expand a mounted folder to list directories and `.runme` files. Runme reads the file into OPFS on first open. The editor reads and commits operations there, including when directory permission expires. Local mounts offer creation of `.runme` notebooks only. JSON and Jupyter files stay out of local directory listings, creation menus, and periodic synchronization. Existing mirrors retain their compatibility path.
 
-## Rollout and acceptance
+**Synchronize.** On startup and every two minutes while the app runs, the storage worker queues previously opened notebooks in mounted directories, including those with closed tabs. It reads disk changes into OPFS and writes locally committed operations missing from disk. Merging by operation ID makes retries safe. Before replacement, the adapter rechecks the disk revision and checksum under a file lock. Independent desktop applications can still write during the final replacement. A failed write leaves the browser copy available and the tab shows an error. Reconnect from the folder menu after permission loss. Unmount stops scheduled reconciliation. Remounting the same directory reconnects the existing mirrors.
 
-1. **Identity and recovery.** Deduplicate new mount selections, keep old URIs resolving, and expose reconnect. Surface unbacked drafts by the existing root URI. Verify that an existing draft remains discoverable after closing its tab and reloading.
-2. **Reconciliation.** Extend storage-owner discovery to active filesystem mounts. Reuse the existing filesystem merge and serialized sync paths. Test disk-only, OPFS-only, concurrent edits, unchanged files, interrupted writes, two tabs, and detached mounts. Verify that polling a clean JSON or Jupyter file leaves its modification time unchanged.
-3. **Explorer and portability.** Add Download and Open file entry points independent of Drive configuration. Test with no OAuth client and networking disabled. Download, mount the folder, edit, close the notebook tab, edit on disk, wait for reconciliation, and reopen. Both edits must survive in the same .runme notebook. Repeat with revoked permission and verify recovery from the browser copy.
+## Alternatives
 
-## Implementation in this PR
+Keeping a browser-only Explorer folder would preserve two meanings of “local” and would give users another place to create files they cannot find on disk. Writing editor changes directly to the directory would couple editing to permission and bypass the operation log used by Drive. Extending the new sync loop to JSON and Jupyter would require whole-document conflict handling. Limiting local folders to the native operation-log format keeps the merge policy explicit.
 
-The storage owner discovers mounted mirrors on startup and on its existing two-minute timer. Reads and writes resolve the file relative to the selected directory. Before a write, the adapter checks the observed size, modification time, and content checksum under a lock shared by overlapping mounts. The tab indicator reports sync errors and supports an immediate retry.
+## Implementation, testing, and deployment
 
-The explorer displays browser-only and disconnected notebooks under **Browser drafts**. **Open file** imports a snapshot. **Download notebook** in the tab menu flushes pending editor changes before exporting. The browser scenario in `app/test/browser/test-scenario-mounted-notebooks.ts` exercises these entry points and polls an unopened mirror after an independent filesystem edit.
+The Explorer handles folder selection and lists supported entries. The filesystem adapter persists directory identity and guards replacement writes. The storage owner schedules reconciliation independently of Drive authentication and network availability.
+
+The browser regression mounts an isolated test directory, downloads a notebook, places the download in a second directory and mounts it, and opens the copy through Explorer. It then edits another previously materialized notebook outside its editor and checks that the worker picks up the operation with its tab closed. A subsequent browser edit must reach disk alongside the external operation. It substitutes a real browser directory handle for the native picker. Unit tests cover format filtering, identity reuse, disconnected mounts, and interrupted or conflicting writes.
+
+![A downloaded notebook opened from a mounted Downloads folder](20261122-mounted-folder.png)
+
+Ship through the normal web release after PR review. On an upgraded profile, confirm an old synthetic root stays hidden and a previously mounted directory reconnects. Verify the native picker and permission-recovery prompt on the release build. Rolling back the UI preserves on-disk files and existing OPFS histories.
+
+## References
+
+- [Draft PR and implementation](https://github.com/runmedev/web/pull/454) — Explorer, filesystem adapter, and storage worker changes.
+- [Mounted-folder browser scenario](https://github.com/runmedev/web/blob/codex/local-folder-sync-design/app/test/browser/test-scenario-mounted-notebooks.ts) — reproducible end-to-end checks.
+- [Operation-log concurrency](https://github.com/runmedev/web/blob/main/docs-dev/CUJs/runme-operation-log-concurrency.md) — how independent edits converge.
+- [Codex session](codex://threads/01a203e9-817c-7081-8b44-8e725976f5f6) — design and review history.

@@ -1397,6 +1397,10 @@ export class LocalNotebooks extends Dexie {
       return existing.id
     }
 
+    if (isFilesystemUri(remoteUri) && detectNotebookFileFormat(parseFsUri(remoteUri).relativePath) !== 'runme-operation-log') {
+      throw new Error('Mounted local folders support .runme notebooks only.')
+    }
+
     const id = this.generateLocalUri('file')
     const resolvedName =
       name ?? this.deriveDisplayNameFromUri(remoteUri) ?? 'Untitled Notebook'
@@ -2219,15 +2223,12 @@ export class LocalNotebooks extends Dexie {
 
     if (uri === LOCAL_FOLDER_URI) {
       const children: string[] = []
-      const workspaces = await this.filesystemStore?.listWorkspaces() ?? []
-      const detached = new Set(workspaces.filter((ws) => ws.mounted === false).map((ws) => ws.id))
       for await (const file of scanTable(this.files)) {
-        const disconnected = isFilesystemUri(file.remoteId) && detached.has(parseFsUri(file.remoteId).workspaceId)
-        if (disconnected || isLocalFileUpstream(file.remoteId, file.id)) children.push(file.id)
+        if (isLocalFileUpstream(file.remoteId, file.id)) children.push(file.id)
       }
       return {
         uri,
-        name: 'Browser drafts',
+        name: 'Local Notebooks',
         type: NotebookStoreItemType.Folder,
         children,
         remoteUri: undefined,
@@ -5324,7 +5325,10 @@ export class LocalNotebooks extends Dexie {
     if (!mounted.size) return
     for await (const file of scanTable(this.files)) {
       if (!isFilesystemUri(file.remoteId)) continue
-      if (mounted.has(parseFsUri(file.remoteId).workspaceId)) this.enqueueSync(file.id, true)
+      const { workspaceId, relativePath } = parseFsUri(file.remoteId)
+      if (mounted.has(workspaceId) && detectNotebookFileFormat(relativePath) === 'runme-operation-log') {
+        this.enqueueSync(file.id, true)
+      }
     }
   }
 

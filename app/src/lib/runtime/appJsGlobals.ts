@@ -561,9 +561,6 @@ export function createAppJsGlobals({
       const fileName = toImportedNotebookName(picked.name)
       const created = await store.create(LOCAL_FOLDER_URI, fileName)
       await store.save(created.uri, notebook)
-      if (!getWorkspaceItems().includes(LOCAL_FOLDER_URI)) {
-        addWorkspaceItem(LOCAL_FOLDER_URI)
-      }
       await openNotebookForRuntime(created.uri)
       const message = `Imported ${picked.name} as ${fileName}`
       emitLine(sendOutput, message)
@@ -593,7 +590,7 @@ export function createAppJsGlobals({
       await store.save(created.uri, createEmptyNotebook())
     }
 
-    if (!getWorkspaceItems().includes(folderUri)) {
+    if (folderUri !== LOCAL_FOLDER_URI && !getWorkspaceItems().includes(folderUri)) {
       addWorkspaceItem(folderUri)
     }
 
@@ -2012,7 +2009,7 @@ export function createAppJsGlobals({
         )
       },
       listFolders: () => {
-        const items = getWorkspaceItems()
+        const items = getWorkspaceItems().filter((uri) => uri !== LOCAL_FOLDER_URI)
         if (items.length === 0) {
           return 'No folders in workspace.'
         }
@@ -2059,11 +2056,8 @@ export function createAppJsGlobals({
         const parentUri = targetFolderUri || LOCAL_FOLDER_URI
         const created = await store.create(parentUri, fileName)
         await store.save(created.uri, notebook)
-        if (!getWorkspaceItems().includes(parentUri)) {
+        if (parentUri !== LOCAL_FOLDER_URI && !getWorkspaceItems().includes(parentUri)) {
           addWorkspaceItem(parentUri)
-        }
-        if (!getWorkspaceItems().includes(LOCAL_FOLDER_URI)) {
-          addWorkspaceItem(LOCAL_FOLDER_URI)
         }
         registerImportedMarkdownForUri(created.uri, selection)
         emitLine(sendOutput, `Imported ${selection.name} -> ${created.uri}`)

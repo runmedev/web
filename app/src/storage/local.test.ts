@@ -1313,6 +1313,7 @@ describe('LocalNotebooks operation-log storage', () => {
     const record = (await f.store.files.get(f.uri))!
     await f.store.files.put({ ...record, remoteId: 'fs://workspace/active/file/shared.runme', lastSynced: '' })
     await f.store.files.put({ ...record, id: 'local://file/disconnected', remoteId: 'fs://workspace/old/file/other.runme' })
+    await f.store.files.put({ ...record, id: 'local://file/legacy', remoteId: 'fs://workspace/active/file/legacy.json' })
     f.store.setDriveSyncAvailable(false)
     await f.store.reconcileFilesystemFiles()
     await vi.waitFor(async () => {

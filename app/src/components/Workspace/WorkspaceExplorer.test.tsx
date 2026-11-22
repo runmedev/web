@@ -171,11 +171,11 @@ describe('WorkspaceExplorer current document handling', () => {
     mocks.ensureAccessToken.mockReset()
     mocks.ensureAccessToken.mockResolvedValue('access-token')
     mocks.fsStore = null
-    mocks.workspaceItems = []
+    mocks.workspaceItems = ['local://folder/drive']
     mocks.store.getMetadata.mockReset()
     mocks.store.getMetadata.mockResolvedValue({
-      uri: 'local://folder/local',
-      name: 'Local Notebooks',
+      uri: 'local://folder/drive',
+      name: 'Mounted Drive folder',
       type: NotebookStoreItemType.Folder,
       children: ['local://file/draft'],
       parents: [],
@@ -320,7 +320,7 @@ describe('WorkspaceExplorer current document handling', () => {
     expect(mocks.ensureAccessToken).not.toHaveBeenCalled()
   })
 
-  it('offers open file and a new draft when the saved browser root is empty', async () => {
+  it('ignores the former browser-only root in persisted workspaces', async () => {
     mocks.workspaceItems = ['local://folder/local']
     mocks.store.getMetadata.mockResolvedValue({
       name: 'Local Notebooks', type: NotebookStoreItemType.Folder, children: [], parents: [],
@@ -328,16 +328,17 @@ describe('WorkspaceExplorer current document handling', () => {
     render(<WorkspaceExplorer />)
     await screen.findByText('No notebook locations have been configured yet.')
     expect(screen.queryByText('Browser drafts')).toBeNull()
-    expect(screen.getByRole('button', { name: 'Open file' })).toBeTruthy()
-    expect(screen.getByRole('button', { name: 'New browser draft' })).toBeTruthy()
+    expect(mocks.store.getMetadata).not.toHaveBeenCalledWith('local://folder/local')
+    expect(screen.queryByRole('button', { name: 'New browser draft' })).toBeNull()
   })
 
   it('disables the sync button while a pass is in progress', async () => {
-    mocks.workspaceItems = ['local://folder/local']
+    mocks.workspaceItems = ['local://folder/drive']
+    mocks.store.getMetadata.mockResolvedValue({ name: 'Mounted folder', type: NotebookStoreItemType.Folder, children: [], parents: [], remoteUri: 'https://drive.google.com/drive/folders/folder' })
     let finish!: () => void
     mocks.store.sync.mockImplementation(() => new Promise<void>((resolve) => { finish = resolve }))
     render(<WorkspaceExplorer />)
-    await screen.findByText('Browser drafts')
+    await screen.findByText('Mounted folder')
     const sync = screen.getByRole('button', { name: 'Sync folders' }) as HTMLButtonElement
     fireEvent.click(sync)
     expect(sync.disabled).toBe(true)
@@ -1631,9 +1632,11 @@ describe('WorkspaceExplorer current document handling', () => {
     })
     const rect = vi.spyOn(HTMLElement.prototype, 'getBoundingClientRect')
       .mockReturnValue({ width: 220, height: 300 } as DOMRect)
+    mocks.workspaceItems = ['local://folder/drive']
+    mocks.store.getMetadata.mockResolvedValue({ name: 'Mounted folder', type: NotebookStoreItemType.Folder, children: [], parents: [], remoteUri: 'https://drive.google.com/drive/folders/folder' })
     const { unmount } = render(<WorkspaceExplorer />)
     try {
-      fireEvent.contextMenu(await screen.findByText('Browser drafts'), { clientX: 900, clientY: 700 })
+      fireEvent.contextMenu(await screen.findByText('Mounted folder'), { clientX: 900, clientY: 700 })
       const menu = document.getElementById('workspace-explorer-context-menu')!
       expect(menu.style.top).toBe('460px')
       const observer = observers.find(entry => entry.element === menu)!

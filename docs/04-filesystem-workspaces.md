@@ -35,20 +35,19 @@ This opens the system directory picker and mounts the chosen folder as an
 ## Edit without Google Drive
 
 Choose **Open local folder** in the explorer and grant read/write access. Open a
-`.runme`, `.json`, or `.ipynb` file to create its browser mirror. Runme saves
+`.runme` file to create its browser mirror. Runme saves
 edits there first. While the app runs, the storage worker checks previously
 opened notebooks in mounted folders every two minutes, even after you close a
 notebook tab. A filesystem mount works offline without a Drive OAuth client.
 
-Runme merges operations in matching `.runme` files. For JSON and Jupyter
-notebooks, changes on both sides can require manual resolution. The notebook
+Runme lists and creates only `.runme` notebooks in mounted directories. It
+merges operations from disk and the browser copy. The notebook
 sync indicator shows errors and lets you retry. Use **Reconnect folder** from
 the mounted root's context menu if access expires. Removing a mount leaves the
-files on disk and retains mirrored notebooks under **Browser drafts**.
+files on disk. Select the same directory again to reconnect its mirrors.
 
 ## Download and open a snapshot
 
-Choose **Download notebook** from the notebook tab's context menu. Use **Open
-file** to import the download as an independent browser draft. This works even
-without a directory picker. To keep writing back to the downloaded file, mount
-its containing folder and open that file in the explorer.
+Choose **Download notebook** from the notebook tab's context menu. To edit a
+downloaded `.runme` file, mount its containing directory and open it from
+Explorer. This requires a browser with directory-picker support.
