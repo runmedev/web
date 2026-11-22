@@ -1,10 +1,10 @@
-import { useState, type ReactNode } from 'react'
+import { useRef, useState, type ReactNode } from 'react'
+import { DropdownMenu } from '@radix-ui/themes'
 import {
   ChevronRightIcon,
   DocumentIcon,
   PlusIcon,
   EllipsisHorizontalIcon,
-  Bars3Icon,
 } from '@heroicons/react/20/solid'
 import {
   createPageProperties,
@@ -39,6 +39,7 @@ export function NotebookPageTree({
     rename?: boolean
     name: string
   } | null>(null)
+  const nameInput = useRef<HTMLInputElement>(null)
   const [menu, setMenu] = useState<string | null>(null)
   const [drag, setDrag] = useState<string | null>(null)
   const [over, setOver] = useState<{ id: string; after: boolean } | null>(null)
@@ -54,6 +55,48 @@ export function NotebookPageTree({
       pagePosition(rest[at - 1], rest[at])
     )
   }
+  const nameForm = edit && (
+    <form
+      className="flex flex-wrap gap-2 p-2 text-sm"
+      onSubmit={(event) => {
+        event.preventDefault()
+        if (!edit.name.trim() || !data) return
+        if (edit.id)
+          data.setMetadataProperty(pageNameKey(edit.id), edit.name.trim())
+        else {
+          const { id, changes } = createPageProperties(
+            pages,
+            edit.name,
+            !edit.rename
+          )
+          data.setMetadataProperties(changes)
+          open(id, edit.name.trim())
+        }
+        setEdit(null)
+      }}
+    >
+      <input
+        ref={nameInput}
+        autoFocus
+        onFocus={(event) => event.currentTarget.select()}
+        onKeyDown={(event) => {
+          if (event.key === 'Escape') {
+            event.preventDefault()
+            setEdit(null)
+          }
+        }}
+        aria-label="Page name"
+        placeholder="Page name"
+        className="w-full rounded border border-nb-border px-2 py-1"
+        value={edit.name}
+        onChange={(e) => setEdit({ ...edit, name: e.target.value })}
+      />
+      <button disabled={!edit.name.trim()}>Save</button>
+      <button type="button" onClick={() => setEdit(null)}>
+        Cancel
+      </button>
+    </form>
+  )
   return (
     <>
       <header className="flex items-center justify-between border-b border-nb-border px-3 py-2">
@@ -74,40 +117,7 @@ export function NotebookPageTree({
           </button>
         )}
       </header>
-      {edit && (
-        <form
-          className="flex flex-wrap gap-2 p-2 text-sm"
-          onSubmit={(event) => {
-            event.preventDefault()
-            if (!edit.name.trim() || !data) return
-            if (edit.id)
-              data.setMetadataProperty(pageNameKey(edit.id), edit.name.trim())
-            else {
-              const { id, changes } = createPageProperties(
-                pages,
-                edit.name,
-                !edit.rename
-              )
-              data.setMetadataProperties(changes)
-              open(id, edit.name.trim())
-            }
-            setEdit(null)
-          }}
-        >
-          <input
-            autoFocus
-            aria-label="Page name"
-            placeholder="Page name"
-            className="w-full rounded border border-nb-border px-2 py-1"
-            value={edit.name}
-            onChange={(e) => setEdit({ ...edit, name: e.target.value })}
-          />
-          <button disabled={!edit.name.trim()}>Save</button>
-          <button type="button" onClick={() => setEdit(null)}>
-            Cancel
-          </button>
-        </form>
-      )}
+      {!edit?.rename && nameForm}
       <nav
         aria-label="Notebook outline"
         className="min-h-0 flex-1 overflow-y-auto p-2"
@@ -125,6 +135,11 @@ export function NotebookPageTree({
                     : 'border-transparent') +
                   ((current ?? '') === id ? ' bg-nb-surface-2' : '')
                 }
+                onContextMenu={(event) => {
+                  if (!data) return
+                  event.preventDefault()
+                  setMenu(id)
+                }}
                 onDragStart={(e) => {
                   if (!data || !id) return
                   e.dataTransfer.setData('text/plain', id)
@@ -169,70 +184,75 @@ export function NotebookPageTree({
                     }
                   />
                 </button>
-                <button
-                  draggable={Boolean(data && id)}
-                  title={data && id ? 'Drag to reorder ' + name : undefined}
-                  aria-current={(current ?? '') === id ? 'page' : undefined}
-                  className="flex min-w-0 flex-1 items-center gap-1.5 text-left text-sm font-medium [&[draggable=true]]:cursor-grab [&[draggable=true]]:select-none [&[draggable=true]]:active:cursor-grabbing"
-                  onClick={() => open(id, name)}
-                >
-                  <DocumentIcon className="pointer-events-none h-4 w-4 shrink-0 text-nb-text-faint" />
-                  <span className="truncate">{name}</span>
-                </button>
+                {edit?.rename && edit.id === id ? (
+                  nameForm
+                ) : (
+                  <button
+                    draggable={Boolean(data && id)}
+                    title={data && id ? 'Drag to reorder ' + name : undefined}
+                    aria-current={(current ?? '') === id ? 'page' : undefined}
+                    className="flex min-w-0 flex-1 items-center gap-1.5 text-left text-sm font-medium [&[draggable=true]]:cursor-grab [&[draggable=true]]:select-none [&[draggable=true]]:active:cursor-grabbing"
+                    onClick={() => open(id, name)}
+                  >
+                    <DocumentIcon className="pointer-events-none h-4 w-4 shrink-0 text-nb-text-faint" />
+                    <span className="truncate">{name}</span>
+                  </button>
+                )}
                 {data && (
-                  <>
-                    {id && (
-                      <span
-                        draggable
-                        title={'Drag to reorder ' + name}
-                        className="cursor-grab text-nb-text-faint"
-                      >
-                        <Bars3Icon className="h-4 w-4" />
-                      </span>
-                    )}
-                    <button
-                      aria-label={'Settings for ' + name}
-                      aria-expanded={menu === id}
-                      onClick={() => setMenu(menu === id ? null : id)}
+                  <DropdownMenu.Root
+                    open={menu === id}
+                    onOpenChange={(isOpen) => setMenu(isOpen ? id : null)}
+                  >
+                    <DropdownMenu.Trigger>
+                      <button aria-label={'Settings for ' + name}>
+                        <EllipsisHorizontalIcon className="h-4 w-4" />
+                      </button>
+                    </DropdownMenu.Trigger>
+                    <DropdownMenu.Content
+                      align="end"
+                      size="1"
+                      onCloseAutoFocus={(event) => {
+                        if (nameInput.current) {
+                          event.preventDefault()
+                          nameInput.current.focus()
+                        }
+                      }}
                     >
-                      <EllipsisHorizontalIcon className="h-4 w-4" />
-                    </button>
-                  </>
+                      <DropdownMenu.Item
+                        onSelect={() => setEdit({ id, rename: true, name })}
+                      >
+                        Rename
+                      </DropdownMenu.Item>
+                      {id && (
+                        <>
+                          <DropdownMenu.Item
+                            disabled={!index}
+                            onSelect={() => move(id, rows[index - 1].id, false)}
+                          >
+                            Move earlier
+                          </DropdownMenu.Item>
+                          <DropdownMenu.Item
+                            disabled={index === rows.length - 1}
+                            onSelect={() => move(id, rows[index + 1].id, true)}
+                          >
+                            Move later
+                          </DropdownMenu.Item>
+                          <DropdownMenu.Item
+                            onSelect={() =>
+                              data.setMetadataProperty(
+                                pageDeletedKey(id),
+                                'true'
+                              )
+                            }
+                          >
+                            Remove page and keep cells
+                          </DropdownMenu.Item>
+                        </>
+                      )}
+                    </DropdownMenu.Content>
+                  </DropdownMenu.Root>
                 )}
               </div>
-              {menu === id && data && (
-                <div
-                  className="ml-6 flex flex-col items-start gap-1 border-l border-nb-border px-2 py-1 text-xs"
-                  onClick={() => setMenu(null)}
-                >
-                  <button onClick={() => setEdit({ id, rename: true, name })}>
-                    Rename
-                  </button>
-                  {id && (
-                    <>
-                      <button
-                        disabled={!index}
-                        onClick={() => move(id, rows[index - 1].id, false)}
-                      >
-                        Move earlier
-                      </button>
-                      <button
-                        disabled={index === rows.length - 1}
-                        onClick={() => move(id, rows[index + 1].id, true)}
-                      >
-                        Move later
-                      </button>
-                      <button
-                        onClick={() =>
-                          data.setMetadataProperty(pageDeletedKey(id), 'true')
-                        }
-                      >
-                        Remove page and keep cells
-                      </button>
-                    </>
-                  )}
-                </div>
-              )}
               {!collapsed.has(id) && (
                 <div className="ml-3 border-l border-nb-border pl-2">
                   {headings(id || undefined)}

@@ -1,4 +1,5 @@
 import { fireEvent, render, screen } from '@testing-library/react'
+import { Theme } from '@radix-ui/themes'
 import { useState } from 'react'
 import { expect, it, vi } from 'vitest'
 import { notebookPages, resolvePage } from '../../lib/notebookPages'
@@ -36,7 +37,11 @@ it('adds and renames a page, nests its headings and reorders it by dragging its 
       />
     )
   }
-  render(<Editors />)
+  render(
+    <Theme>
+      <Editors />
+    </Theme>
+  )
   fireEvent.click(screen.getByRole('button', { name: 'Add page' }))
   fireEvent.change(screen.getByLabelText('Page name'), {
     target: { value: 'Investigation' },
@@ -47,7 +52,9 @@ it('adds and renames a page, nests its headings and reorders it by dragging its 
   expect(screen.queryByText('Timeline')).toBeNull()
   fireEvent.click(screen.getByLabelText('Expand Investigation'))
   expect(screen.getByText('Timeline')).toBeTruthy()
-  fireEvent.click(screen.getByLabelText('Settings for Investigation'))
+  fireEvent.keyDown(screen.getByLabelText('Settings for Investigation'), {
+    key: 'Enter',
+  })
   expect(screen.queryByText('Set as default')).toBeNull()
   fireEvent.click(screen.getByText('Rename'))
   fireEvent.change(screen.getByLabelText('Page name'), {
@@ -56,6 +63,19 @@ it('adds and renames a page, nests its headings and reorders it by dragging its 
   fireEvent.click(screen.getByText('Save'))
   const title = screen.getByText('Postmortem', { selector: 'span' })
   expect(title.closest('button')?.draggable).toBe(true)
+  fireEvent.contextMenu(title)
+  expect(
+    screen.getByRole('menu', { name: 'Settings for Postmortem' })
+  ).toBeTruthy()
+  expect(
+    screen.getAllByRole('menuitem').map((item) => item.textContent)
+  ).toEqual([
+    'Rename',
+    'Move earlier',
+    'Move later',
+    'Remove page and keep cells',
+  ])
+  fireEvent.keyDown(screen.getByRole('menu'), { key: 'Escape' })
   const target = screen.getByRole('button', { name: 'Main', exact: true })
   fireEvent.dragStart(title, { dataTransfer: { setData: vi.fn() } })
   fireEvent.dragOver(target)
