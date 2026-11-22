@@ -305,7 +305,7 @@ const Editor = memo(
               },
               minimap: { enabled: false },
               theme: MARIMO_THEME,
-              wordWrap: "wordWrapColumn",
+              wordWrap: language === "markdown" ? "on" : "wordWrapColumn",
               fontSize,
               fontFamily,
               lineHeight: 18,
