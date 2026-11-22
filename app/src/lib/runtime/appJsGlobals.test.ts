@@ -1055,3 +1055,77 @@ it('exposes the shared autosaved output-link action and rejects implicit targets
     })
   ).rejects.toThrow('output changed')
 })
+
+it('manages page order and cell membership through notebook helpers', async () => {
+  const { NotebookData } = await import('../notebookData')
+  const notebook = new NotebookData({
+    uri: 'local://file/incident',
+    name: 'incident.runme',
+    notebook: create(parser_pb.NotebookSchema),
+    notebookStore: null,
+    loaded: true,
+  })
+  const first = notebook.appendCell()
+  const target = { uri: notebook.getUri() }
+  const flushPendingPersist = vi.spyOn(notebook, 'flushPendingPersist')
+  const { notebooks } = createAppJsGlobals({
+    runme: createRunme(notebook),
+    resolveNotebook: () => notebook,
+  })
+  const layout = await notebooks.listPages({ target })
+  expect(layout.pages).toEqual([
+    { id: null, name: 'Main', cellRefIds: [first.refId] },
+  ])
+  const page = await notebooks.createPage({
+    target,
+    name: 'Postmortem',
+    expectedRevision: layout.handle.revision,
+  })
+  const main = (await notebooks.listPages({ target })).pages[0]
+  await expect(
+    notebooks.renamePage({
+      target,
+      pageId: page.id,
+      name: 'Wrong',
+      expectedRevision: layout.handle.revision,
+    })
+  ).rejects.toThrow('Revision mismatch')
+  const added = await notebooks.appendCell({
+    target,
+    pageId: page.id,
+    kind: 'markup',
+    value: '## Follow-up actions',
+  })
+  await notebooks.renamePage({ target, pageId: page.id, name: 'Review' })
+  await notebooks.movePage({ target, pageId: page.id, beforePageId: main.id })
+  expect((await notebooks.listPages({ target })).pages[0]).toEqual({
+    id: page.id,
+    name: 'Review',
+    cellRefIds: [first.refId, added.cell.refId],
+  })
+  await notebooks.moveCellToPage({
+    target,
+    refId: first.refId,
+    pageId: main.id,
+  })
+  await expect(
+    notebooks.moveCellToPage({ target, refId: first.refId, pageId: 'missing' })
+  ).rejects.toThrow('Unknown page')
+  await notebooks.moveCellToPage({ target, refId: first.refId, pageId: null })
+  expect(await notebooks.showPage({ target, pageId: page.id })).toEqual({
+    uri: expect.stringContaining(page.id),
+  })
+  await notebooks.removePage({ target, pageId: page.id })
+  expect((await notebooks.listPages({ target })).pages).toEqual([
+    { ...main, cellRefIds: [first.refId, added.cell.refId] },
+  ])
+  expect(flushPendingPersist).toHaveBeenCalled()
+  vi.spyOn(notebook, 'isReadOnly').mockReturnValue(true)
+  await expect(
+    notebooks.removePage({ target, pageId: main.id! })
+  ).rejects.toThrow('not writable')
+  await expect(
+    notebooks.listPages({ target: { uri: 'local://file/other' } })
+  ).rejects.toThrow('Open the target')
+  expect(await notebooks.help('pages')).toContain('moveCellToPage')
+})

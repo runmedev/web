@@ -270,6 +270,12 @@ console.log(JSON.stringify({
 
 If the user's notebook reference is ambiguous, ask which notebook to use before making a change.
 
+## Work with notebook pages
+
+In \`ExecuteCode\`, call \`await notebooks.help('pages')\` for signatures. Bind \`const target = { uri: notebookUri }\` to the source notebook, even when viewing a page tab. Use \`const {pages, handle} = await notebooks.listPages({target})\`. Pages are in Outline order; each has a stable ID, a display name, and ordered \`cellRefIds\`. Read content with \`notebooks.get(target)\` and match cell refIds. Names can repeat.
+
+Use \`createPage\`, \`renamePage\`, \`movePage\`, and \`removePage\` on the \`notebooks\` object. Pass the page ID to \`notebooks.appendCell({target, pageId, kind:'markup', value})\` or \`notebooks.moveCellToPage({target, refId, pageId})\`. The first page is the default; unassigned cells follow it when reordered. An unpaged notebook has an implicit Main with ID \`null\`. Removing a page preserves its cells. Page edits run in the background; call \`notebooks.showPage({target,pageId})\` when the user asks to see a page. Use the latest \`handle.revision\` as \`expectedRevision\` on page mutations; reread after a conflict or uncertain outcome before retrying. See \`documentation.get('webmcp-external-control')\` for an example.
+
 ## Preserve cell identity
 
 - Treat a cell's \`refId\` as an opaque canonical identifier. Do not infer the cell kind or storage format from prefixes such as \`code_\` or \`markup_\`.

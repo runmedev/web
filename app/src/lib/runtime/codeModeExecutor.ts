@@ -709,8 +709,6 @@ async function handleSandboxAppKernelBridgeCall({
     case 'trainingExamples.help':
       return globals.trainingExamples.help()
     default:
-      if (method === 'notebooks.createPage')
-        return globals.notebooks.createPage(args[0] as any)
       if (method === 'notebooks.createLocal') {
         return (globals.notebooks as any).createLocal(args[0], args[1])
       }

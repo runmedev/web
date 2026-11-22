@@ -26,6 +26,7 @@ function isRunnableNotebookCodeCell(
 }
 
 export type NotebookDataLike = {
+  getSnapshot?: NotebookData['getSnapshot']
   setMetadataProperties?: NotebookData['setMetadataProperties']
   setNotebookStore?: NotebookData['setNotebookStore']
   setReviewPending?: NotebookData['setReviewPending']
@@ -304,7 +305,7 @@ function createRevision(notebook: parser_pb.Notebook): string {
   return md5(stringifyJsonSafe(notebook))
 }
 
-function makeHandle(notebook: NotebookDataLike): NotebookHandle {
+export function makeHandle(notebook: NotebookDataLike): NotebookHandle {
   return {
     uri: notebook.getUri(),
     revision: createRevision(notebook.getNotebook()),

@@ -23,8 +23,11 @@ type CodeModeNotebookAdapterSource = Pick<
       | 'addCellAfter'
       | 'addCellBefore'
       | 'removeCell'
+      | 'isReleasePending'
+      | 'isReviewPending'
       | 'isReadOnly'
       | 'flushPendingPersist'
+      | 'getSnapshot'
       | 'setMetadataProperties'
       | 'loadNotebook'
     >
@@ -37,6 +40,8 @@ export function createCodeModeNotebookAdapter(
     getUri: () => data.getUri(),
     getName: () => data.getName(),
     getNotebook: () => data.getNotebook(),
+    isReleasePending: data.isReleasePending?.bind(data),
+    isReviewPending: data.isReviewPending?.bind(data),
     isReadOnly: data.isReadOnly?.bind(data),
     updateCell: (cell: parser_pb.Cell) => data.updateCell(cell),
     getCell: (refId: string) => data.getCell(refId),
@@ -44,6 +49,7 @@ export function createCodeModeNotebookAdapter(
     addCellAfter: data.addCellAfter?.bind(data),
     addCellBefore: data.addCellBefore?.bind(data),
     removeCell: data.removeCell?.bind(data),
+    getSnapshot: data.getSnapshot?.bind(data),
     setMetadataProperties: data.setMetadataProperties?.bind(data),
     flushPendingPersist: data.flushPendingPersist?.bind(data),
     loadNotebook: data.loadNotebook?.bind(data),

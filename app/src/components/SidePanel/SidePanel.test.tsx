@@ -37,6 +37,7 @@ let notebookSnapshotState: {
   loaded: boolean
   notebook: {
     cells: {
+      metadata: Record<string, string>
       kind: number
       languageId: string
       refId: string
@@ -122,6 +123,8 @@ vi.mock('../../contexts/GoogleAuthContext', () => ({
 vi.mock('../../contexts/NotebookContext', () => ({
   useNotebookContext: () => ({
     useNotebookSnapshot: () => notebookSnapshotState,
+    useNotebookList: () => [],
+    getNotebookData: () => null,
   }),
 }))
 
@@ -725,12 +728,14 @@ describe('SidePanelContent', () => {
       notebook: {
         cells: [
           {
+            metadata: {},
             kind: 1,
             languageId: 'markdown',
             refId: 'cell-one',
             value: '# Title\n\n### Details',
           },
           {
+            metadata: {},
             kind: 2,
             languageId: 'markdown',
             refId: 'cell-two',
@@ -756,15 +761,15 @@ describe('SidePanelContent', () => {
 
     render(<SidePanelContent />)
 
-    expect(screen.getByText('3 headings')).toBeTruthy()
+    expect(screen.getByRole('button', { name: 'Main' })).toBeTruthy()
     expect(
       screen.getByRole('button', { name: 'Details' }).dataset.headingLevel
     ).toBe('3')
     fireEvent.click(screen.getByRole('button', { name: 'Second cell' }))
-    expect(secondCellElement.scrollIntoView).toHaveBeenCalledWith({
+    await waitFor(() => expect(secondCellElement.scrollIntoView).toHaveBeenCalledWith({
       behavior: 'smooth',
       block: 'center',
-    })
+    }))
     expect(document.activeElement).toBe(secondCellFocusTarget)
 
     fireEvent.click(
@@ -779,7 +784,7 @@ describe('SidePanelContent', () => {
     notebookElement.remove()
   })
 
-  it('shows an outline empty state for notebooks without headings', () => {
+  it('shows the implicit Main page for notebooks without headings', () => {
     activePanelState = 'outline'
     currentDocUri = 'local://file/outline.json'
     notebookSnapshotState = {
@@ -787,6 +792,7 @@ describe('SidePanelContent', () => {
       notebook: {
         cells: [
           {
+            metadata: {},
             kind: 1,
             languageId: 'markdown',
             refId: 'cell-one',
@@ -799,7 +805,7 @@ describe('SidePanelContent', () => {
     render(<SidePanelContent />)
 
     expect(
-      screen.getByText('Add Markdown headings to build an outline.')
+      screen.getByRole('button', { name: 'Main' })
     ).toBeTruthy()
   })
 

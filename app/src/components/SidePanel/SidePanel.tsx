@@ -6,7 +6,6 @@ import {
   DocumentTextIcon,
   InformationCircleIcon,
   Bars3Icon,
-  Bars3BottomLeftIcon,
   QueueListIcon,
   ServerStackIcon,
   UserCircleIcon,
@@ -508,13 +507,18 @@ export function SidePanelToolbar() {
           type="button"
           data-tour-id="left-nav.outline"
           className={`${sideButtonBase} ${
-            activePanel === 'outline' ? sideButtonActive : sideButtonInactive
+            activePanel === 'outline' ? 'rounded-full bg-blue-100 text-sky-900' : sideButtonInactive
           }`}
           aria-pressed={activePanel === 'outline'}
           aria-label="Toggle Outline panel"
           onClick={() => togglePanel('outline')}
         >
-          <Bars3BottomLeftIcon className="h-5 w-5" />
+          <svg aria-hidden="true" viewBox="0 0 24 24" fill="currentColor" className="h-6 w-6">
+            <circle cx="4" cy="5" r="2" />
+            <circle cx="4" cy="12" r="2" />
+            <circle cx="4" cy="19" r="2" />
+            <path d="M9 4h13v2H9zM9 11h13v2H9zM9 18h13v2H9z" />
+          </svg>
           <span className={tooltipBase}>Outline</span>
         </button>
         <OpenNotebookLink />
