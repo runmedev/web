@@ -53,6 +53,7 @@ export class StorageOwnerHost {
   private configuredBaseUrl: string | undefined
   private credentialBoundary: string | undefined
   private available = false
+  private filesystemScan?: Promise<void>
   private scanning: Promise<unknown> | undefined
   private readonly startedAt = Date.now()
   private initialization: StorageOwnerDiagnostics['initialization'] = 'pending'
@@ -356,6 +357,20 @@ export class StorageOwnerHost {
     this.available = available
     this.store.setDriveSyncAvailable(available)
     if (recovered) void this.rescan(true).catch(() => {})
+  }
+
+  /** Include mount scans in the same shutdown barrier as active storage requests. */
+  rescanFilesystem(): Promise<void> {
+    if (this.releaseDraining || this.recovery?.draining) return Promise.resolve()
+    if (!this.filesystemScan) {
+      const scan = this.store.reconcileFilesystemFiles().finally(() => {
+        this.inFlight.delete(scan)
+        this.filesystemScan = undefined
+      })
+      this.inFlight.add(scan)
+      this.filesystemScan = scan
+    }
+    return this.filesystemScan
   }
 
   /** Recover keys from durable state; concurrent tab wake-ups share one scan. */

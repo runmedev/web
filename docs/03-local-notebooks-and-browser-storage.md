@@ -14,10 +14,11 @@ description: >-
 
 ## What "local" means
 
-Local notebooks are stored in the browser and are available without Google
-Drive or the File System Access API.
-
-These notebooks are a first-class backend, not just a temporary cache.
+Runme assigns a local URI to each editable notebook. Mounted `.runme` files
+have an OPFS working copy and a backing file in Google Drive or on disk.
+Older browser-only notebooks can also have a local URI. Explorer shows
+mounted folders. An existing browser-only notebook can be reopened through
+its saved local link in the same profile and downloaded from the tab menu.
 
 ## Important behaviors
 
@@ -26,9 +27,9 @@ These notebooks are a first-class backend, not just a temporary cache.
 - imported markdown usually lands here first,
 - Drive-backed notebooks are often edited through a local mirror.
 
-## App Console creation path
+## Compatibility with existing App Console scripts
 
-In App Console, the fastest way to create a local notebook is:
+Existing scripts can still create a browser-only notebook with this call.
 
 ```js
 const created = await notebooks.createLocal('helloworld')

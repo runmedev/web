@@ -18,6 +18,7 @@ async function main() {
     )
     await page.goto(`${base}/owner-test`)
     const result = await page.evaluate(async () => {
+      let version = 0
       const worker = new SharedWorker('/storage-owner.js', {
         type: 'module',
         name: 'runme-storage-owner',
@@ -58,22 +59,24 @@ async function main() {
           })
           worker.port.postMessage({
             type: 'request',
-            version: 1,
+            version,
             id,
             method,
             args,
           })
         })
+      version = (await call('handshake')).rpcVersion
       await call('hello', [{ attempts: [] }])
+      const directory = await (await navigator.storage.getDirectory()).getDirectoryHandle('Test notebooks', { create: true })
       const notebook = await call('create', [
-        'local://folder/local',
+        await call('mountFilesystemFolder', [directory]),
         'production-worker.runme',
       ])
       const bytes = await call('loadContent', [notebook.uri])
       const snapshot = await call('loadOperationLogSnapshot', [notebook.uri])
       worker.port.postMessage({
         type: 'request',
-        version: 1,
+        version,
         id: 'end',
         method: 'disconnect',
         args: [],

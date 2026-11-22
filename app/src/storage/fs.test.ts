@@ -347,48 +347,30 @@ describe('FilesystemNotebookStore', () => {
       expect(second.getFile).not.toHaveBeenCalled()
     })
 
-    it('returns .json files and directories', async () => {
+    it('returns .runme files and directories', async () => {
       const nbJson = makeEmptyNotebookJson()
       rootEntries.set(
-        'notebook.json',
-        createMockFileHandle('notebook.json', nbJson)
+        'notebook.runme',
+        createMockFileHandle('notebook.runme', nbJson)
       )
       rootEntries.set('readme.md', createMockFileHandle('readme.md', '# Hello'))
       rootEntries.set('sub', createMockDirectoryHandle('sub', new Map()))
 
       const items = await store.list(ROOT_URI)
 
-      // Should have the directory first, then the .json file. readme.md is filtered out.
+      // Should have the directory first, then the .runme file. readme.md is filtered out.
       expect(items).toHaveLength(2)
       expect(items[0].type).toBe(NotebookStoreItemType.Folder)
       expect(items[0].name).toBe('sub')
       expect(items[1].type).toBe(NotebookStoreItemType.File)
-      expect(items[1].name).toBe('notebook.json')
+      expect(items[1].name).toBe('notebook.runme')
     })
 
-    it('returns .ipynb files with the Jupyter MIME type', async () => {
-      rootEntries.set(
-        'notebook.ipynb',
-        createMockFileHandle(
-          'notebook.ipynb',
-          JSON.stringify({
-            cells: [],
-            metadata: {},
-            nbformat: 4,
-            nbformat_minor: 5,
-          })
-        )
-      )
-
-      const items = await store.list(ROOT_URI)
-
-      expect(items).toEqual([
-        expect.objectContaining({
-          name: 'notebook.ipynb',
-          mimeType: 'application/x-ipynb+json',
-          type: NotebookStoreItemType.File,
-        }),
-      ])
+    it('omits JSON and Jupyter files in mounted directories', async () => {
+      for (const name of ['notes.json', 'notes.ipynb']) {
+        rootEntries.set(name, createMockFileHandle(name, '{}'))
+      }
+      expect(await store.list(ROOT_URI)).toEqual([])
     })
 
     it('returns .runme files with the operation-log MIME type', async () => {
@@ -411,7 +393,7 @@ describe('FilesystemNotebookStore', () => {
       ])
     })
 
-    it('filters out non-.json files', async () => {
+    it('filters out non-.runme files', async () => {
       rootEntries.set('readme.md', createMockFileHandle('readme.md', '# Hi'))
       rootEntries.set('image.png', createMockFileHandle('image.png', 'binary'))
 
@@ -421,12 +403,12 @@ describe('FilesystemNotebookStore', () => {
 
     it('sorts folders before files, then alphabetically', async () => {
       rootEntries.set(
-        'b.json',
-        createMockFileHandle('b.json', makeEmptyNotebookJson())
+        'b.runme',
+        createMockFileHandle('b.runme', makeEmptyNotebookJson())
       )
       rootEntries.set(
-        'a.json',
-        createMockFileHandle('a.json', makeEmptyNotebookJson())
+        'a.runme',
+        createMockFileHandle('a.runme', makeEmptyNotebookJson())
       )
       rootEntries.set('z-dir', createMockDirectoryHandle('z-dir', new Map()))
       rootEntries.set('a-dir', createMockDirectoryHandle('a-dir', new Map()))
@@ -435,20 +417,20 @@ describe('FilesystemNotebookStore', () => {
       expect(items.map((i) => i.name)).toEqual([
         'a-dir',
         'z-dir',
-        'a.json',
-        'b.json',
+        'a.runme',
+        'b.runme',
       ])
     })
 
     it('builds correct URIs for files', async () => {
       rootEntries.set(
-        'test.json',
-        createMockFileHandle('test.json', makeEmptyNotebookJson())
+        'test.runme',
+        createMockFileHandle('test.runme', makeEmptyNotebookJson())
       )
 
       const items = await store.list(ROOT_URI)
       expect(items[0].uri).toBe(
-        `fs://workspace/${WORKSPACE_ID}/file/${encodeURIComponent('test.json')}`
+        `fs://workspace/${WORKSPACE_ID}/file/${encodeURIComponent('test.runme')}`
       )
     })
 
@@ -463,8 +445,8 @@ describe('FilesystemNotebookStore', () => {
 
     it('sets parent URI to the listed directory', async () => {
       rootEntries.set(
-        'test.json',
-        createMockFileHandle('test.json', makeEmptyNotebookJson())
+        'test.runme',
+        createMockFileHandle('test.runme', makeEmptyNotebookJson())
       )
 
       const items = await store.list(ROOT_URI)
@@ -473,14 +455,14 @@ describe('FilesystemNotebookStore', () => {
 
     it('throws when given a file URI', async () => {
       await expect(
-        store.list(`fs://workspace/${WORKSPACE_ID}/file/test.json`)
+        store.list(`fs://workspace/${WORKSPACE_ID}/file/test.runme`)
       ).rejects.toThrow('expects a directory URI')
     })
 
     it('caches entries in the DB', async () => {
       rootEntries.set(
-        'test.json',
-        createMockFileHandle('test.json', makeEmptyNotebookJson())
+        'test.runme',
+        createMockFileHandle('test.runme', makeEmptyNotebookJson())
       )
 
       await store.list(ROOT_URI)
@@ -498,16 +480,7 @@ describe('FilesystemNotebookStore', () => {
       const fileHandle = createMockFileHandle('notebook.json', nbJson)
       const fileUri = `fs://workspace/${WORKSPACE_ID}/file/${encodeURIComponent('notebook.json')}`
 
-      // Put the file entry in the DB so resolve works.
-      ;(db.entries as any)._store.set(`${WORKSPACE_ID}:notebook.json`, {
-        id: `${WORKSPACE_ID}:notebook.json`,
-        workspaceId: WORKSPACE_ID,
-        relativePath: 'notebook.json',
-        kind: 'file',
-        handle: fileHandle,
-        lastKnownMtime: 0,
-        lastKnownSize: 0,
-      })
+      rootEntries.set('notebook.json', fileHandle)
 
       const notebook = await store.load(fileUri)
       expect(notebook).toBeDefined()
@@ -535,15 +508,7 @@ describe('FilesystemNotebookStore', () => {
         JSON.stringify(source)
       )
       const fileUri = `fs://workspace/${WORKSPACE_ID}/file/${encodeURIComponent('notebook.ipynb')}`
-      ;(db.entries as any)._store.set(`${WORKSPACE_ID}:notebook.ipynb`, {
-        id: `${WORKSPACE_ID}:notebook.ipynb`,
-        workspaceId: WORKSPACE_ID,
-        relativePath: 'notebook.ipynb',
-        kind: 'file',
-        handle: fileHandle,
-        lastKnownMtime: 0,
-        lastKnownSize: 0,
-      })
+      rootEntries.set('notebook.ipynb', fileHandle)
 
       const notebook = await store.load(fileUri)
       notebook.cells[0]!.value = "print('after')\n"
@@ -576,15 +541,7 @@ describe('FilesystemNotebookStore', () => {
         JSON.stringify(source)
       )
       const fileUri = `fs://workspace/${WORKSPACE_ID}/file/${encodeURIComponent('notebook.ipynb')}`
-      ;(db.entries as any)._store.set(`${WORKSPACE_ID}:notebook.ipynb`, {
-        id: `${WORKSPACE_ID}:notebook.ipynb`,
-        workspaceId: WORKSPACE_ID,
-        relativePath: 'notebook.ipynb',
-        kind: 'file',
-        handle: fileHandle,
-        lastKnownMtime: 0,
-        lastKnownSize: 0,
-      })
+      rootEntries.set('notebook.ipynb', fileHandle)
 
       const notebook = await store.load(fileUri)
       const rawUpdate = structuredClone(source)
@@ -601,20 +558,23 @@ describe('FilesystemNotebookStore', () => {
       expect(saved.metadata.colab.provenance).toEqual(['raw-update'])
     })
 
+    it('preserves an external edit with unchanged timestamp and size', async () => {
+      const file = createMockFileHandle('draft.runme', 'one')
+      const uri = `fs://workspace/${WORKSPACE_ID}/file/draft.runme`
+      rootEntries.set(file.name, file)
+      expect(await store.loadContent(uri)).toBe('one')
+      const first = await file.getFile()
+      file.getFile = vi.fn(async () => ({ ...first, text: async () => 'two' }) as File)
+      await expect(store.saveContent(uri, 'new')).rejects.toThrow('modified externally')
+      expect(file.createWritable).not.toHaveBeenCalled()
+    })
+
     it('records base revision after load', async () => {
       const nbJson = makeEmptyNotebookJson()
       const fileHandle = createMockFileHandle('notebook.json', nbJson)
       const fileUri = `fs://workspace/${WORKSPACE_ID}/file/${encodeURIComponent('notebook.json')}`
 
-      ;(db.entries as any)._store.set(`${WORKSPACE_ID}:notebook.json`, {
-        id: `${WORKSPACE_ID}:notebook.json`,
-        workspaceId: WORKSPACE_ID,
-        relativePath: 'notebook.json',
-        kind: 'file',
-        handle: fileHandle,
-        lastKnownMtime: 0,
-        lastKnownSize: 0,
-      })
+      rootEntries.set('notebook.json', fileHandle)
 
       await store.load(fileUri)
 
@@ -657,15 +617,7 @@ describe('FilesystemNotebookStore', () => {
       const fileHandle = createMockFileHandle('notebook.json', nbJson)
       const fileUri = `fs://workspace/${WORKSPACE_ID}/file/${encodeURIComponent('notebook.json')}`
 
-      ;(db.entries as any)._store.set(`${WORKSPACE_ID}:notebook.json`, {
-        id: `${WORKSPACE_ID}:notebook.json`,
-        workspaceId: WORKSPACE_ID,
-        relativePath: 'notebook.json',
-        kind: 'file',
-        handle: fileHandle,
-        lastKnownMtime: 0,
-        lastKnownSize: 0,
-      })
+      rootEntries.set('notebook.json', fileHandle)
 
       const notebook = create(parser_pb.NotebookSchema, { cells: [] })
       await store.save(fileUri, notebook)
@@ -678,15 +630,7 @@ describe('FilesystemNotebookStore', () => {
       const fileHandle = createMockFileHandle('notebook.json', nbJson)
       const fileUri = `fs://workspace/${WORKSPACE_ID}/file/${encodeURIComponent('notebook.json')}`
 
-      ;(db.entries as any)._store.set(`${WORKSPACE_ID}:notebook.json`, {
-        id: `${WORKSPACE_ID}:notebook.json`,
-        workspaceId: WORKSPACE_ID,
-        relativePath: 'notebook.json',
-        kind: 'file',
-        handle: fileHandle,
-        lastKnownMtime: 0,
-        lastKnownSize: 0,
-      })
+      rootEntries.set('notebook.json', fileHandle)
 
       // Load first to record base revision.
       await store.load(fileUri)
@@ -721,15 +665,7 @@ describe('FilesystemNotebookStore', () => {
       const fileHandle = createMockFileHandle('notebook.json', nbJson)
       const fileUri = `fs://workspace/${WORKSPACE_ID}/file/${encodeURIComponent('notebook.json')}`
 
-      ;(db.entries as any)._store.set(`${WORKSPACE_ID}:notebook.json`, {
-        id: `${WORKSPACE_ID}:notebook.json`,
-        workspaceId: WORKSPACE_ID,
-        relativePath: 'notebook.json',
-        kind: 'file',
-        handle: fileHandle,
-        lastKnownMtime: 0,
-        lastKnownSize: 0,
-      })
+      rootEntries.set('notebook.json', fileHandle)
 
       const notebook = create(parser_pb.NotebookSchema, { cells: [] })
 
@@ -759,31 +695,21 @@ describe('FilesystemNotebookStore', () => {
 
   describe('create', () => {
     it('creates a new file with empty notebook content', async () => {
-      const item = await store.create(ROOT_URI, 'new-notebook.json')
+      const item = await store.create(ROOT_URI, 'new-notebook.runme')
 
-      expect(item.name).toBe('new-notebook.json')
+      expect(item.name).toBe('new-notebook.runme')
       expect(item.type).toBe(NotebookStoreItemType.File)
       expect(item.uri).toBe(
-        `fs://workspace/${WORKSPACE_ID}/file/${encodeURIComponent('new-notebook.json')}`
+        `fs://workspace/${WORKSPACE_ID}/file/${encodeURIComponent('new-notebook.runme')}`
       )
       expect(item.parents).toEqual([ROOT_URI])
     })
 
-    it('creates a valid empty ipynb document', async () => {
-      const item = await store.create(ROOT_URI, 'new-notebook.ipynb')
-      const file = await rootEntries.get('new-notebook.ipynb').getFile()
-      const document = JSON.parse(await file.text())
-
-      expect(item).toMatchObject({
-        name: 'new-notebook.ipynb',
-        mimeType: 'application/x-ipynb+json',
-      })
-      expect(document).toMatchObject({
-        cells: [],
-        metadata: {},
-        nbformat: 4,
-        nbformat_minor: 5,
-      })
+    it('rejects creating unsupported formats before writing to disk', async () => {
+      for (const name of ['notes.json', 'notes.ipynb']) {
+        await expect(store.create(ROOT_URI, name)).rejects.toThrow('Unsupported notebook file extension')
+      }
+      expect(rootEntries.size).toBe(0)
     })
 
     it('creates a valid empty .runme operation log', async () => {
@@ -1024,51 +950,51 @@ describe('FilesystemNotebookStore', () => {
     })
 
     it('calls getFileHandle with create: true', async () => {
-      await store.create(ROOT_URI, 'new-notebook.json')
+      await store.create(ROOT_URI, 'new-notebook.runme')
       expect(rootHandle.getFileHandle).toHaveBeenCalledWith(
-        'new-notebook.json',
+        'new-notebook.runme',
         { create: true }
       )
     })
 
     it('writes content to the new file', async () => {
-      await store.create(ROOT_URI, 'new-notebook.json')
+      await store.create(ROOT_URI, 'new-notebook.runme')
 
       // The file should have been created in rootEntries.
-      const fh = rootEntries.get('new-notebook.json')
+      const fh = rootEntries.get('new-notebook.runme')
       expect(fh).toBeDefined()
       expect(fh.createWritable).toHaveBeenCalled()
     })
 
     it('caches the entry in the DB', async () => {
-      await store.create(ROOT_URI, 'new-notebook.json')
+      await store.create(ROOT_URI, 'new-notebook.runme')
 
       expect(db.entries.put).toHaveBeenCalledWith(
         expect.objectContaining({
-          id: `${WORKSPACE_ID}:new-notebook.json`,
+          id: `${WORKSPACE_ID}:new-notebook.runme`,
           workspaceId: WORKSPACE_ID,
-          relativePath: 'new-notebook.json',
+          relativePath: 'new-notebook.runme',
           kind: 'file',
         })
       )
     })
 
-    it('auto-appends .json extension when missing', async () => {
+    it('auto-appends .runme extension when missing', async () => {
       const item = await store.create(ROOT_URI, 'my-notebook')
 
-      expect(item.name).toBe('my-notebook.json')
-      expect(item.uri).toContain(encodeURIComponent('my-notebook.json'))
+      expect(item.name).toBe('my-notebook.runme')
+      expect(item.uri).toContain(encodeURIComponent('my-notebook.runme'))
       expect(rootHandle.getFileHandle).toHaveBeenCalledWith(
-        'my-notebook.json',
+        'my-notebook.runme',
         { create: true }
       )
     })
 
-    it('does not double .json extension', async () => {
-      const item = await store.create(ROOT_URI, 'already.json')
+    it('does not double .runme extension', async () => {
+      const item = await store.create(ROOT_URI, 'already.runme')
 
-      expect(item.name).toBe('already.json')
-      expect(rootHandle.getFileHandle).toHaveBeenCalledWith('already.json', {
+      expect(item.name).toBe('already.runme')
+      expect(rootHandle.getFileHandle).toHaveBeenCalledWith('already.runme', {
         create: true,
       })
     })
@@ -1076,8 +1002,8 @@ describe('FilesystemNotebookStore', () => {
     it('throws when given a file URI as parent', async () => {
       await expect(
         store.create(
-          `fs://workspace/${WORKSPACE_ID}/file/existing.json`,
-          'new.json'
+          `fs://workspace/${WORKSPACE_ID}/file/existing.runme`,
+          'new.runme'
         )
       ).rejects.toThrow('expects a directory URI')
     })
@@ -1088,6 +1014,18 @@ describe('FilesystemNotebookStore', () => {
   // -------------------------------------------------------------------------
 
   describe('rename', () => {
+    it('preserves both files when an outside edit lands during rename', async () => {
+      const old = createMockFileHandle('old.runme', 'before')
+      rootEntries.set('old.runme', old)
+      const original = await old.getFile()
+      vi.mocked(old.getFile).mockResolvedValueOnce({ ...original, text: async () => 'before' } as File)
+      await (await old.createWritable()).write('outside edit')
+      const uri = `fs://workspace/${WORKSPACE_ID}/file/old.runme`
+      await expect(store.rename(uri, 'new.runme')).rejects.toThrow('source changed')
+      expect(await (await old.getFile()).text()).toBe('outside edit')
+      expect(await (await rootEntries.get('new.runme').getFile()).text()).toBe('before')
+    })
+
     it('rejects changing formats by rename', async () => {
       const oldHandle = createMockFileHandle(
         'old.ipynb',
@@ -1384,6 +1322,18 @@ describe('FilesystemNotebookStore', () => {
           permissionState: 'granted',
         })
       )
+    })
+
+    it('reconnects the same directory without changing its file identities', async () => {
+      const directory = createMockDirectoryHandle('picked-dir', new Map())
+      directory.isSameEntry = async (other) => directory === other
+      window.showDirectoryPicker = async () => directory
+      const root = await store.openWorkspace()
+      await store.unmount(root)
+      expect(await store.openWorkspace()).toBe(root)
+      expect(await store.listWorkspaces()).toContainEqual(expect.objectContaining({
+        name: 'picked-dir', mounted: true,
+      }))
     })
 
     it('caches root directory entry', async () => {

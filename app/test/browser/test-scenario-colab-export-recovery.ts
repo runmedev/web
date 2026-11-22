@@ -61,14 +61,14 @@ try {
   const fixture = evaluate(`
     const { DriveNotebookStore } = await import('/src/storage/drive.ts');
     const { setGoogleDriveBaseUrl } = await import('/src/lib/googleDriveRuntime.ts');
-    const { LOCAL_FOLDER_URI } = await import('/src/storage/local.ts');
     const { AUTO_IPYNB_KEY } = await import('/src/lib/derivedNotebook.ts');
     const { parseOperationLog, serializeOperationLog, createRunmeOperation, causalHeads } = await import('/src/lib/operationLog/index.ts');
     setGoogleDriveBaseUrl(${JSON.stringify(fakeDrive)});
     const drive = new DriveNotebookStore(async () => 'fake-drive-access-token');
     const db = window.app.localNotebooks;
-    if (!await db.folders.get(LOCAL_FOLDER_URI)) await db.folders.put({ id: LOCAL_FOLDER_URI, name: 'Local', remoteId: '', children: [], lastSynced: '' });
-    const file = await db.create(LOCAL_FOLDER_URI, ${JSON.stringify(name)});
+    const dir = await (await navigator.storage.getDirectory()).getDirectoryHandle('Test notebooks', { create: true });
+    const folderUri = await db.mountFilesystemFolder(dir);
+    const file = await db.create(folderUri, ${JSON.stringify(name)});
     const notebook = await db.load(file.uri);
     notebook.metadata[AUTO_IPYNB_KEY] = 'true';
     const journal = await db.createOperationLogSaveStore(file.uri);

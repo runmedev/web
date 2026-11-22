@@ -2037,7 +2037,7 @@ describe('Actions tabs', () => {
     ).toContain('OPFS unavailable')
   })
 
-  it('does not make non-Drive status indicators trigger upstream sync', async () => {
+  it('syncs mounted notebooks on click and leaves browser-only drafts local', async () => {
     const localUri = 'local://file/local-runme'
     const filesystemUri = 'local://file/filesystem-runme'
     const sync = vi.fn(async () => undefined)
@@ -2078,13 +2078,13 @@ describe('Actions tabs', () => {
       name: 'Notebook is stored only in this browser',
     })
     const filesystemStatus = await screen.findByRole('button', {
-      name: 'Notebook is synced',
+      name: 'Notebook is synced with the local folder. Click to sync now.',
     })
     fireEvent.click(localStatus)
     fireEvent.click(filesystemStatus)
 
-    expect(sync).not.toHaveBeenCalled()
-    expect(screen.queryByLabelText(/Click to sync now/)).toBeNull()
+    expect(sync.mock.calls).toEqual([[filesystemUri]])
+    expect(screen.getAllByLabelText(/Click to sync now/)).toEqual([filesystemStatus])
   })
 
   it('defers rendering inactive read-only notebook cells', () => {

@@ -61,26 +61,18 @@ try {
   const files = await page.evaluate(async () => {
     const db = (window as any).app.localNotebooks
     // Browser-side imports are served by Vite, not resolved by the Node driver.
-    const storageModule = '/src/storage/local.ts'
     const logModule = '/src/lib/operationLog/index.ts'
-    const { LOCAL_FOLDER_URI } = await import(storageModule)
     const {
       parseOperationLog,
       serializeOperationLog,
       createRunmeOperation,
       causalHeads,
     } = await import(logModule)
-    if (!(await db.folders.get(LOCAL_FOLDER_URI)))
-      await db.folders.put({
-        id: LOCAL_FOLDER_URI,
-        name: 'Local',
-        remoteId: '',
-        children: [],
-        lastSynced: '',
-      })
+    const dir = await (await navigator.storage.getDirectory()).getDirectoryHandle('Test notebooks', { create: true })
+    const folderUri = await db.mountFilesystemFolder(dir)
     const files = []
     for (const name of ['first', 'second']) {
-      const file = await db.create(LOCAL_FOLDER_URI, name + '.runme')
+      const file = await db.create(folderUri, name + '.runme')
       await (
         await db.createOperationLogSaveStore(file.uri)
       ).save(file.uri, await db.load(file.uri))

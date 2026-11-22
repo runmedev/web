@@ -86,10 +86,10 @@ try {
   inputPage.setDefaultTimeout(15000)
   const fixture = await evaluate(`
     const db = window.app.localNotebooks;
-    const { LOCAL_FOLDER_URI } = await import('/src/storage/local.ts');
     const { parseOperationLog, serializeOperationLog, createRunmeOperation, causalHeads } = await import('/src/lib/operationLog/index.ts');
-    if (!await db.folders.get(LOCAL_FOLDER_URI)) await db.folders.put({id:LOCAL_FOLDER_URI,name:'Local',remoteId:'',children:[],lastSynced:''});
-    const file = await db.create(LOCAL_FOLDER_URI, 'editor-range-comments.runme');
+    const dir = await (await navigator.storage.getDirectory()).getDirectoryHandle('Test notebooks', { create: true });
+    const folderUri = await db.mountFilesystemFolder(dir);
+    const file = await db.create(folderUri, 'editor-range-comments.runme');
     const notebook = await db.load(file.uri);
     await (await db.createOperationLogSaveStore(file.uri)).save(file.uri, notebook);
     const log = parseOperationLog(await db.loadContent(file.uri));

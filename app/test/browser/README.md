@@ -136,3 +136,17 @@ The tests rely on notebooks in `../fixtures/notebooks/`:
 - `cell-types-test.runme.md` - bash/python/js cells
 - `ui-test.runme.md` - visual/UX testing
 - `large-payload-test.runme.md` - >100KB payload test
+
+## Mounted filesystem notebooks
+
+Run the Vite frontend and execute the following from `app/`. The test uses an
+isolated Chromium profile and a real directory handle backed by test-origin
+storage in place of the native picker. It verifies download, reopening the downloaded file in a mounted directory,
+and a disk-only edit reaching a closed notebook on the storage worker's timer.
+Allow up to four and a half minutes for the periodic check. Set `CHROMIUM_PATH`
+to an installed Chromium executable and `CUJ_FRONTEND_URL` for a custom port.
+
+```sh
+pnpm exec tsc --target es2022 --module nodenext --moduleResolution nodenext --esModuleInterop --skipLibCheck --outDir test/browser/.generated test/browser/test-scenario-mounted-notebooks.ts
+node test/browser/.generated/test-scenario-mounted-notebooks.js
+```

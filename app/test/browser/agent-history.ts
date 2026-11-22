@@ -1,3 +1,4 @@
+import { notebookDestination } from './mounted-folder-fixture.js'
 import assert from 'node:assert/strict'
 import { mkdir, writeFile } from 'node:fs/promises'
 import { chromium } from 'playwright-core'
@@ -84,7 +85,7 @@ async function main() {
 const widget = agents.monitor('sess_demo', {pageSize:5});`
     const seeded = JSON.parse(
       await execute(`
-      const doc = await notebooks.createLocal('agent-history.runme');
+      const doc = await notebooks.createLocal('agent-history.runme', ${JSON.stringify(await notebookDestination(page))});
       const added = await notebooks.appendCell({target:{uri:doc.handle.uri},kind:'code',languageId:'javascript',value:${JSON.stringify(source)},metadata:{'runme.dev/runnerName':'appkernel-js'}});
       await notebooks.show(doc.handle.uri);
       console.log(JSON.stringify({uri:doc.handle.uri, refId:added.cell.refId}));
