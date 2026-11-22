@@ -18,6 +18,8 @@ export interface WorkspaceRecord {
   lastOpened: number;
   /** Last known permission state for the handle: 'granted' | 'prompt' | 'denied'. */
   permissionState: string;
+  /** Undefined on legacy handles until a saved workspace restores its root. */
+  mounted?: boolean;
 }
 
 /**
@@ -42,6 +44,7 @@ export interface FsEntryRecord {
   lastKnownSize: number;
   /** Optional cached notebook JSON for quick loads without hitting disk. */
   cachedDoc?: string;
+  listedChildren?: import('./notebook').NotebookStoreItem[];
 }
 
 /**

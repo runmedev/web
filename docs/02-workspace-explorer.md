@@ -50,7 +50,7 @@ explorer.removeFolder(uri)
 
 ## Explorer behavior details
 
-- `Local Notebooks` is always expected as a baseline workspace root.
+- **Browser drafts** appears when the browser contains drafts or notebooks from disconnected local folders. Select **New browser draft** to create one, or **Open file** to import an independent copy.
 - Folder expansion is lazy; children are fetched when the folder opens.
 - Drive links may enqueue coordination work before a notebook becomes editable.
 

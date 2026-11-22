@@ -89,7 +89,7 @@ import {
   parseNotebookCellFragment,
   parseNotebookShareLink,
 } from '../../lib/shareLinks'
-import { detectNotebookFileFormat } from '../../lib/notebookFormat'
+import { detectNotebookFileFormat, encodeIpynbNotebook, encodeRunmeNotebook } from '../../lib/notebookFormat'
 import { isHtmlLanguageId, isMarkdownLanguageId } from '../../lib/cellContent'
 import { isLinkedResourceCell } from '../../lib/linkedResource'
 import { PlayIcon, PlusIcon, SpinnerIcon, TrashIcon } from './icons'
@@ -402,11 +402,12 @@ function NotebookSyncIndicator({ docUri }: { docUri: string }) {
 
   const presentation = syncIndicatorPresentation(syncState)
   const canSyncDrive = isDriveItemUri(syncState?.remoteId)
+  const syncDestination = canSyncDrive ? 'Google Drive' : syncState?.remoteId.startsWith('fs://') ? 'the local folder' : null
   const clickable =
-    presentation.clickable || (canSyncDrive && syncState?.status === 'synced')
+    presentation.clickable || (syncDestination !== null && syncState?.status === 'synced')
   const label =
-    syncState?.status === 'synced' && canSyncDrive
-      ? 'Notebook is synced with Google Drive. Click to sync now.'
+    syncState?.status === 'synced' && syncDestination
+      ? `Notebook is synced with ${syncDestination}. Click to sync now.`
       : presentation.label
   const handleClick = useCallback(
     (event: ReactMouseEvent<HTMLButtonElement>) => {
@@ -5209,6 +5210,31 @@ export default function Actions() {
     }
   }, [store, colabSourceUri])
 
+  /** Export the committed mirror even when upstream credentials or a mount are unavailable. */
+  async function downloadTab() {
+    if (!store || !tabContextMenu) return
+    const { docUri, title } = tabContextMenu
+    setTabContextMenu(null)
+    try {
+      await getNotebookData(docUri)?.flushPendingPersist()
+      let content = await store.loadContent(docUri)
+      const format = detectNotebookFileFormat(title)
+      if (format === 'runme-json' && !content) content = encodeRunmeNotebook(await store.load(docUri))
+      if (format === 'ipynb') {
+        const record = await store.getFileRecord(docUri)
+        content = encodeIpynbNotebook(await store.load(docUri), content, record?.ipynbPreservation).text
+      }
+      const url = URL.createObjectURL(new Blob([content], { type: 'application/octet-stream' }))
+      const link = document.createElement('a')
+      link.href = url
+      link.download = title
+      link.click()
+      setTimeout(() => URL.revokeObjectURL(url), 1000)
+    } catch (error) {
+      showToast({ message: String(error), tone: 'error' })
+    }
+  }
+
   const handleRenameTab = useCallback(async () => {
     if (!tabContextMenu) {
       return
@@ -5716,6 +5742,11 @@ export default function Actions() {
               >
                 Rename
               </button>
+              {detectNotebookFileFormat(adjustedTabContextMenu.title) && (
+                <button type="button" className="ctx-menu-item" onClick={() => void downloadTab()}>
+                  Download notebook
+                </button>
+              )}
               {adjustedTabContextMenu.canReviewSuggestions && (
                 <button
                   type="button"

@@ -1301,6 +1301,28 @@ describe('LocalNotebooks operation-log storage', () => {
     actor.mockRestore()
   })
 
+  it('reconciles a closed filesystem log with Drive disabled and skips disconnected roots', async () => {
+    const f = await createRecoveryFixture()
+    const disk = f.document([f.a, f.b])
+    const loadContent = vi.fn(async () => disk)
+    f.store.setFilesystemStore({
+      listWorkspaces: async () => [{ id: 'active', mounted: true }, { id: 'old', mounted: false }],
+      loadContent,
+      saveContent: vi.fn(),
+    } as never)
+    const record = (await f.store.files.get(f.uri))!
+    await f.store.files.put({ ...record, remoteId: 'fs://workspace/active/file/shared.runme', lastSynced: '' })
+    await f.store.files.put({ ...record, id: 'local://file/disconnected', remoteId: 'fs://workspace/old/file/other.runme' })
+    f.store.setDriveSyncAvailable(false)
+    await f.store.reconcileFilesystemFiles()
+    await vi.waitFor(async () => {
+      expect(parseOperationLog(await f.store.loadContent(f.uri)).operations.map(op => op.op_id))
+        .toContain(f.b.op_id)
+    })
+    expect(loadContent.mock.calls).toEqual([['fs://workspace/active/file/shared.runme']])
+    f.store.stopSyncQueue()
+  })
+
   it.each(['local', 'upstream'])(
     'synchronizes a header-only filesystem upgrade from %s',
     async (side) => {
@@ -5661,6 +5683,25 @@ describe('LocalNotebooks ipynb conversion', () => {
     })
   })
 
+  it('keeps both versions and reports a conflict for divergent filesystem JSON', async () => {
+    const store = createTestStore({})
+    const local = notebookJson('browser')
+    const disk = create(parser_pb.NotebookSchema, { metadata: { edited: 'on disk' } })
+    const filesystem = { load: vi.fn(async () => disk), save: vi.fn() }
+    store.setFilesystemStore(filesystem as never)
+    const uri = 'local://file/conflict-json'
+    await store.files.put({
+      id: uri, name: 'conflict.json', remoteId: 'fs://workspace/test/file/conflict.json',
+      lastRemoteChecksum: md5(notebookJson('baseline')), md5Checksum: md5(local),
+      lastSynced: '', doc: local,
+    })
+    await expect(store.sync(uri)).rejects.toThrow('Both the browser copy and the filesystem notebook changed')
+    expect((await store.getSyncState(uri)).status).toBe('error')
+    expect(await store.loadContent(uri)).toEqual(local)
+    expect(filesystem.save).not.toHaveBeenCalled()
+    store.stopSyncQueue()
+  })
+
   it('merges filesystem ipynb changes from the freshly read shadow', async () => {
     const localUri = 'local://file/ipynb'
     const remoteUri = 'fs://workspace/test/file/notebook.ipynb'
@@ -5704,7 +5745,10 @@ describe('LocalNotebooks ipynb conversion', () => {
     filesystemText = makeSource('external-update')
     await store.sync(localUri)
 
-    expect(filesystemStore.saveContent).toHaveBeenCalled()
+    expect(filesystemStore.saveContent).not.toHaveBeenCalled()
+    expect(JSON.parse(await store.loadContent(localUri)).metadata.colab.provenance).toEqual([
+      'external-update',
+    ])
     expect(JSON.parse(filesystemText).metadata.colab.provenance).toEqual([
       'external-update',
     ])

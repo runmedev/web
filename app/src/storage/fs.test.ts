@@ -482,16 +482,7 @@ describe('FilesystemNotebookStore', () => {
       const fileHandle = createMockFileHandle('notebook.json', nbJson)
       const fileUri = `fs://workspace/${WORKSPACE_ID}/file/${encodeURIComponent('notebook.json')}`
 
-      // Put the file entry in the DB so resolve works.
-      ;(db.entries as any)._store.set(`${WORKSPACE_ID}:notebook.json`, {
-        id: `${WORKSPACE_ID}:notebook.json`,
-        workspaceId: WORKSPACE_ID,
-        relativePath: 'notebook.json',
-        kind: 'file',
-        handle: fileHandle,
-        lastKnownMtime: 0,
-        lastKnownSize: 0,
-      })
+      rootEntries.set('notebook.json', fileHandle)
 
       const notebook = await store.load(fileUri)
       expect(notebook).toBeDefined()
@@ -519,15 +510,7 @@ describe('FilesystemNotebookStore', () => {
         JSON.stringify(source)
       )
       const fileUri = `fs://workspace/${WORKSPACE_ID}/file/${encodeURIComponent('notebook.ipynb')}`
-      ;(db.entries as any)._store.set(`${WORKSPACE_ID}:notebook.ipynb`, {
-        id: `${WORKSPACE_ID}:notebook.ipynb`,
-        workspaceId: WORKSPACE_ID,
-        relativePath: 'notebook.ipynb',
-        kind: 'file',
-        handle: fileHandle,
-        lastKnownMtime: 0,
-        lastKnownSize: 0,
-      })
+      rootEntries.set('notebook.ipynb', fileHandle)
 
       const notebook = await store.load(fileUri)
       notebook.cells[0]!.value = "print('after')\n"
@@ -560,15 +543,7 @@ describe('FilesystemNotebookStore', () => {
         JSON.stringify(source)
       )
       const fileUri = `fs://workspace/${WORKSPACE_ID}/file/${encodeURIComponent('notebook.ipynb')}`
-      ;(db.entries as any)._store.set(`${WORKSPACE_ID}:notebook.ipynb`, {
-        id: `${WORKSPACE_ID}:notebook.ipynb`,
-        workspaceId: WORKSPACE_ID,
-        relativePath: 'notebook.ipynb',
-        kind: 'file',
-        handle: fileHandle,
-        lastKnownMtime: 0,
-        lastKnownSize: 0,
-      })
+      rootEntries.set('notebook.ipynb', fileHandle)
 
       const notebook = await store.load(fileUri)
       const rawUpdate = structuredClone(source)
@@ -585,20 +560,23 @@ describe('FilesystemNotebookStore', () => {
       expect(saved.metadata.colab.provenance).toEqual(['raw-update'])
     })
 
+    it('preserves an external edit with unchanged timestamp and size', async () => {
+      const file = createMockFileHandle('draft.runme', 'one')
+      const uri = `fs://workspace/${WORKSPACE_ID}/file/draft.runme`
+      rootEntries.set(file.name, file)
+      expect(await store.loadContent(uri)).toBe('one')
+      const first = await file.getFile()
+      file.getFile = vi.fn(async () => ({ ...first, text: async () => 'two' }) as File)
+      await expect(store.saveContent(uri, 'new')).rejects.toThrow('modified externally')
+      expect(file.createWritable).not.toHaveBeenCalled()
+    })
+
     it('records base revision after load', async () => {
       const nbJson = makeEmptyNotebookJson()
       const fileHandle = createMockFileHandle('notebook.json', nbJson)
       const fileUri = `fs://workspace/${WORKSPACE_ID}/file/${encodeURIComponent('notebook.json')}`
 
-      ;(db.entries as any)._store.set(`${WORKSPACE_ID}:notebook.json`, {
-        id: `${WORKSPACE_ID}:notebook.json`,
-        workspaceId: WORKSPACE_ID,
-        relativePath: 'notebook.json',
-        kind: 'file',
-        handle: fileHandle,
-        lastKnownMtime: 0,
-        lastKnownSize: 0,
-      })
+      rootEntries.set('notebook.json', fileHandle)
 
       await store.load(fileUri)
 
@@ -641,15 +619,7 @@ describe('FilesystemNotebookStore', () => {
       const fileHandle = createMockFileHandle('notebook.json', nbJson)
       const fileUri = `fs://workspace/${WORKSPACE_ID}/file/${encodeURIComponent('notebook.json')}`
 
-      ;(db.entries as any)._store.set(`${WORKSPACE_ID}:notebook.json`, {
-        id: `${WORKSPACE_ID}:notebook.json`,
-        workspaceId: WORKSPACE_ID,
-        relativePath: 'notebook.json',
-        kind: 'file',
-        handle: fileHandle,
-        lastKnownMtime: 0,
-        lastKnownSize: 0,
-      })
+      rootEntries.set('notebook.json', fileHandle)
 
       const notebook = create(parser_pb.NotebookSchema, { cells: [] })
       await store.save(fileUri, notebook)
@@ -662,15 +632,7 @@ describe('FilesystemNotebookStore', () => {
       const fileHandle = createMockFileHandle('notebook.json', nbJson)
       const fileUri = `fs://workspace/${WORKSPACE_ID}/file/${encodeURIComponent('notebook.json')}`
 
-      ;(db.entries as any)._store.set(`${WORKSPACE_ID}:notebook.json`, {
-        id: `${WORKSPACE_ID}:notebook.json`,
-        workspaceId: WORKSPACE_ID,
-        relativePath: 'notebook.json',
-        kind: 'file',
-        handle: fileHandle,
-        lastKnownMtime: 0,
-        lastKnownSize: 0,
-      })
+      rootEntries.set('notebook.json', fileHandle)
 
       // Load first to record base revision.
       await store.load(fileUri)
@@ -705,15 +667,7 @@ describe('FilesystemNotebookStore', () => {
       const fileHandle = createMockFileHandle('notebook.json', nbJson)
       const fileUri = `fs://workspace/${WORKSPACE_ID}/file/${encodeURIComponent('notebook.json')}`
 
-      ;(db.entries as any)._store.set(`${WORKSPACE_ID}:notebook.json`, {
-        id: `${WORKSPACE_ID}:notebook.json`,
-        workspaceId: WORKSPACE_ID,
-        relativePath: 'notebook.json',
-        kind: 'file',
-        handle: fileHandle,
-        lastKnownMtime: 0,
-        lastKnownSize: 0,
-      })
+      rootEntries.set('notebook.json', fileHandle)
 
       const notebook = create(parser_pb.NotebookSchema, { cells: [] })
 
@@ -1368,6 +1322,18 @@ describe('FilesystemNotebookStore', () => {
           permissionState: 'granted',
         })
       )
+    })
+
+    it('reconnects the same directory without changing its file identities', async () => {
+      const directory = createMockDirectoryHandle('picked-dir', new Map())
+      directory.isSameEntry = async (other) => directory === other
+      window.showDirectoryPicker = async () => directory
+      const root = await store.openWorkspace()
+      await store.unmount(root)
+      expect(await store.openWorkspace()).toBe(root)
+      expect(await store.listWorkspaces()).toContainEqual(expect.objectContaining({
+        name: 'picked-dir', mounted: true,
+      }))
     })
 
     it('caches root directory entry', async () => {

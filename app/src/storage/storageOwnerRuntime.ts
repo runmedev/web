@@ -57,18 +57,25 @@ export async function startStorageOwner(
     identity ? { ...identity, capabilities: RELEASE_CAPABILITIES } : undefined,
     instanceId
   )
+  const scanFilesystem = () => host.rescanFilesystem().catch((error) =>
+    appLogger.warn('Filesystem reconciliation failed', {
+      attrs: { scope: 'storage.filesystem.sync', error: String(error) },
+    }))
   const timer = setInterval(
-    () =>
+    () => {
+      void scanFilesystem()
       void host.rescan().catch((error) =>
         appLogger.warn('Storage owner rescan failed', {
           attrs: { scope: 'storage.owner', error: String(error) },
         })
-      ),
+      )
+    },
     120_000
   )
 
   try {
     await traceStorage('local-notebooks-ready', () => store.ready)
+    void scanFilesystem()
   } catch (error) {
     clearInterval(timer)
     await traceStorage('failed-startup-drain', () =>

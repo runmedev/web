@@ -177,7 +177,7 @@ describe('WorkspaceExplorer current document handling', () => {
       uri: 'local://folder/local',
       name: 'Local Notebooks',
       type: NotebookStoreItemType.Folder,
-      children: [],
+      children: ['local://file/draft'],
       parents: [],
     })
     mocks.store.createFolder.mockReset()
@@ -320,12 +320,24 @@ describe('WorkspaceExplorer current document handling', () => {
     expect(mocks.ensureAccessToken).not.toHaveBeenCalled()
   })
 
+  it('offers open file and a new draft when the saved browser root is empty', async () => {
+    mocks.workspaceItems = ['local://folder/local']
+    mocks.store.getMetadata.mockResolvedValue({
+      name: 'Local Notebooks', type: NotebookStoreItemType.Folder, children: [], parents: [],
+    })
+    render(<WorkspaceExplorer />)
+    await screen.findByText('No notebook locations have been configured yet.')
+    expect(screen.queryByText('Browser drafts')).toBeNull()
+    expect(screen.getByRole('button', { name: 'Open file' })).toBeTruthy()
+    expect(screen.getByRole('button', { name: 'New browser draft' })).toBeTruthy()
+  })
+
   it('disables the sync button while a pass is in progress', async () => {
     mocks.workspaceItems = ['local://folder/local']
     let finish!: () => void
     mocks.store.sync.mockImplementation(() => new Promise<void>((resolve) => { finish = resolve }))
     render(<WorkspaceExplorer />)
-    await screen.findByText('Local Notebooks')
+    await screen.findByText('Browser drafts')
     const sync = screen.getByRole('button', { name: 'Sync folders' }) as HTMLButtonElement
     fireEvent.click(sync)
     expect(sync.disabled).toBe(true)
@@ -382,7 +394,7 @@ describe('WorkspaceExplorer current document handling', () => {
       mocks.treeProps.onToggle(JSON.stringify(['local://folder/root']))
     })
     await waitFor(() => expect(screen.getAllByText('Nested mount')).toHaveLength(2))
-    const [, root, shortcut] = mocks.treeProps.data
+    const [root, shortcut] = mocks.treeProps.data
     expect(root.children[0].uri).toBe(shortcut.uri)
     expect(root.children[0].id).toBe(JSON.stringify([root.uri, shortcut.uri]))
     expect(shortcut.id).toBe(JSON.stringify([shortcut.uri]))
@@ -1621,7 +1633,7 @@ describe('WorkspaceExplorer current document handling', () => {
       .mockReturnValue({ width: 220, height: 300 } as DOMRect)
     const { unmount } = render(<WorkspaceExplorer />)
     try {
-      fireEvent.contextMenu(await screen.findByText('Local Notebooks'), { clientX: 900, clientY: 700 })
+      fireEvent.contextMenu(await screen.findByText('Browser drafts'), { clientX: 900, clientY: 700 })
       const menu = document.getElementById('workspace-explorer-context-menu')!
       expect(menu.style.top).toBe('460px')
       const observer = observers.find(entry => entry.element === menu)!

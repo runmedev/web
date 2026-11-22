@@ -32,20 +32,23 @@ explorer.addFolder()
 This opens the system directory picker and mounts the chosen folder as an
 `fs://...` workspace.
 
-## What users should expect
+## Edit without Google Drive
 
-- folders and `.json` notebook files appear in the explorer,
-- the app can create notebook files in mounted folders,
-- access can fail later if the browser revokes or loses permission.
+Choose **Open local folder** in the explorer and grant read/write access. Open a
+`.runme`, `.json`, or `.ipynb` file to create its browser mirror. Runme saves
+edits there first. While the app runs, the storage worker checks previously
+opened notebooks in mounted folders every two minutes, even after you close a
+notebook tab. A filesystem mount works offline without a Drive OAuth client.
 
-## Important limitations
+Runme merges operations in matching `.runme` files. For JSON and Jupyter
+notebooks, changes on both sides can require manual resolution. The notebook
+sync indicator shows errors and lets you retry. Use **Reconnect folder** from
+the mounted root's context menu if access expires. Removing a mount leaves the
+files on disk and retains mirrored notebooks under **Browser drafts**.
 
-- the browser mediates file access and permissions,
-- this is not a raw shell filesystem mount,
-- unsupported browsers should fall back to local notebooks or Drive.
+## Download and open a snapshot
 
-## Key facts
-
-- If a user asks to mount a filesystem path directly, the current UX still goes
-  through the picker rather than accepting an arbitrary path string.
-- `fs://...` items are upstream filesystem objects, not just browser-local copies.
+Choose **Download notebook** from the notebook tab's context menu. Use **Open
+file** to import the download as an independent browser draft. This works even
+without a directory picker. To keep writing back to the downloaded file, mount
+its containing folder and open that file in the explorer.

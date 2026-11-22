@@ -1957,6 +1957,14 @@ export function createAppJsGlobals({
         if (!uri) {
           return 'Usage: explorer.removeFolder(uri)'
         }
+        if (uri.startsWith('fs://')) {
+          const store = ensureFilesystemStore()
+          if (!store) throw new Error('Filesystem storage is unavailable')
+          return store.unmount(uri).then(() => {
+            removeWorkspaceItem(uri)
+            return `Removed: ${uri}`
+          })
+        }
         removeWorkspaceItem(uri)
         return `Removed: ${uri}`
       },

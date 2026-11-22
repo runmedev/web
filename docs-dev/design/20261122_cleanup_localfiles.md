@@ -34,3 +34,9 @@ If a file disappears or acquires a different notebook ID, retain the last good m
 1. **Identity and recovery.** Deduplicate new mount selections, keep old URIs resolving, and expose reconnect. Surface unbacked drafts by the existing root URI. Verify that an existing draft remains discoverable after closing its tab and reloading.
 2. **Reconciliation.** Extend storage-owner discovery to active filesystem mounts. Reuse the existing filesystem merge and serialized sync paths. Test disk-only, OPFS-only, concurrent edits, unchanged files, interrupted writes, two tabs, and detached mounts. Verify that polling a clean JSON or Jupyter file leaves its modification time unchanged.
 3. **Explorer and portability.** Add Download and Open file entry points independent of Drive configuration. Test with no OAuth client and networking disabled. Download, mount the folder, edit, close the notebook tab, edit on disk, wait for reconciliation, and reopen. Both edits must survive in the same .runme notebook. Repeat with revoked permission and verify recovery from the browser copy.
+
+## Implementation in this PR
+
+The storage owner discovers mounted mirrors on startup and on its existing two-minute timer. Reads and writes resolve the file relative to the selected directory. Before a write, the adapter checks the observed size, modification time, and content checksum under a lock shared by overlapping mounts. The tab indicator reports sync errors and supports an immediate retry.
+
+The explorer displays browser-only and disconnected notebooks under **Browser drafts**. **Open file** imports a snapshot. **Download notebook** in the tab menu flushes pending editor changes before exporting. The browser scenario in `app/test/browser/test-scenario-mounted-notebooks.ts` exercises these entry points and polls an unopened mirror after an independent filesystem edit.

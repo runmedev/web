@@ -129,6 +129,7 @@ import {
 } from './filePayloads'
 import {
   FilesystemEntryAlreadyExistsError,
+  parseFsUri,
   type FilesystemNotebookStore,
 } from './fs'
 import {
@@ -2218,12 +2219,15 @@ export class LocalNotebooks extends Dexie {
 
     if (uri === LOCAL_FOLDER_URI) {
       const children: string[] = []
+      const workspaces = await this.filesystemStore?.listWorkspaces() ?? []
+      const detached = new Set(workspaces.filter((ws) => ws.mounted === false).map((ws) => ws.id))
       for await (const file of scanTable(this.files)) {
-        if (isLocalFileUpstream(file.remoteId, file.id)) children.push(file.id)
+        const disconnected = isFilesystemUri(file.remoteId) && detached.has(parseFsUri(file.remoteId).workspaceId)
+        if (disconnected || isLocalFileUpstream(file.remoteId, file.id)) children.push(file.id)
       }
       return {
         uri,
-        name: 'Local Notebooks',
+        name: 'Browser drafts',
         type: NotebookStoreItemType.Folder,
         children,
         remoteUri: undefined,
@@ -5310,6 +5314,20 @@ export class LocalNotebooks extends Dexie {
     )
   }
 
+  /** Poll materialized notebooks, including clean mirrors changed by a desktop editor. */
+  async reconcileFilesystemFiles(): Promise<void> {
+    if (!this.filesystemStore) return
+    const mounted = new Set<string>()
+    for (const ws of await this.filesystemStore.listWorkspaces()) {
+      if (ws.mounted) mounted.add(ws.id)
+    }
+    if (!mounted.size) return
+    for await (const file of scanTable(this.files)) {
+      if (!isFilesystemUri(file.remoteId)) continue
+      if (mounted.has(parseFsUri(file.remoteId).workspaceId)) this.enqueueSync(file.id, true)
+    }
+  }
+
   /**
    * Enqueue durable source/creation work for the single delaying worker. The timer is only a wake-up:
    * pending work is reconstructed from IndexedDB; retry deadlines remain in memory.
@@ -5362,7 +5380,7 @@ export class LocalNotebooks extends Dexie {
 
   private enqueueSync(uri: string, discovered = false): void {
     void this.queueDriveWork('source', uri, () => this.performSyncFile(uri), {
-      delayMs: 20_000,
+      delayMs: discovered ? 0 : 20_000,
       discovered,
     })
   }
@@ -6012,7 +6030,14 @@ export class LocalNotebooks extends Dexie {
         await this.syncOperationLogFilesystem(localUri, record)
         return
       }
-      await this.syncSerializedNotebookUpstream(localUri, record)
+      // Serial formats replace the entire document. Order a disk pull with editor
+      // saves and read the local snapshot only after acquiring their shared queue.
+      const upstreamUri = record.remoteId
+      await this.serializeLocalSave(localUri, async () => {
+        const latest = await this.getFileRecord(localUri)
+        if (latest && latest.remoteId === upstreamUri)
+          await this.syncSerializedNotebookUpstream(localUri, latest)
+      })
       return
     }
 
@@ -6817,23 +6842,25 @@ export class LocalNotebooks extends Dexie {
     }
     if (!record.operationLogRef) {
       const upstreamDocument = await upstreamStore.loadContent(record.remoteId)
-      const upstream = parseOperationLog(upstreamDocument)
-      const stored = await this.operationLogStorage.initialize(
-        localUri,
-        serializeOperationLog(upstream.header, upstream.operations, {
-          canonicalOrder: true,
-        })
-      )
-      const checksum = md5(upstreamDocument)
-      await this.updateFile(localUri, {
-        doc: '',
-        operationLogRef: stored.ref,
-        md5Checksum: this.localWriteChecksum(stored),
-        lastRemoteChecksum: checksum,
-        lastUpstreamVersion: { checksum },
+      parseOperationLog(upstreamDocument)
+      const stored = await this.operationLogStorage.initialize(localUri, upstreamDocument)
+      const baseline = {
+        lastUpstreamVersion: { checksum: md5(upstreamDocument) },
         lastSynced: nowIsoString(),
         lastSyncError: undefined,
-      })
+      }
+      if (this.ownedLogs) {
+        const current = await this.ownedLogs.acknowledge(localUri, stored, record.remoteId, baseline)
+        if (!current) this.enqueueSync(localUri)
+      } else {
+        await this.updateFile(localUri, {
+          ...baseline,
+          doc: '',
+          operationLogRef: stored.ref,
+          md5Checksum: stored.checksum,
+          lastRemoteChecksum: stored.checksum,
+        })
+      }
       return
     }
 
@@ -7001,6 +7028,16 @@ export class LocalNotebooks extends Dexie {
     const upstreamDoc = upstream.serialized
     const upstreamChecksum = checksumForSerializedNotebook(upstreamDoc)
 
+    if (upstreamChecksum === localChecksum) {
+      await this.updateFile(localUri, {
+        lastRemoteChecksum: localChecksum, lastUpstreamVersion: { checksum: localChecksum },
+        lastSynced: nowIsoString(), lastSyncError: undefined,
+        ...(upstream.ipynbPreservation ? { ipynbPreservation: upstream.ipynbPreservation } : {}),
+      })
+      await this.deleteReplacedIpynbShadow(record.ipynbPreservation, upstream.ipynbPreservation)
+      return
+    }
+
     if (upstreamChecksum !== lastRemoteChecksum) {
       if (localChecksum === lastRemoteChecksum) {
         logRemoteOverwriteLocalDoc({
@@ -7047,7 +7084,7 @@ export class LocalNotebooks extends Dexie {
         upstream.ipynbPreservation,
         record.ipynbPreservation
       )
-      return
+      throw new Error('Both the browser copy and the filesystem notebook changed. Download the browser copy before resolving the conflict.')
     }
 
     const parseResult = parseSerializedNotebook(localDoc)

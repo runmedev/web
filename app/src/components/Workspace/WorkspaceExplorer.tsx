@@ -33,6 +33,8 @@ import { explorerSync, syncExplorerFolder } from "../../lib/explorerSync";
 import { appLogger } from "../../lib/logging/runtime";
 import {
   type NotebookFileFormat,
+  RUNME_OPERATION_LOG_MIME_TYPE,
+  decodeNotebookFile,
   convertLegacyNotebookFileToRunme,
   isLegacyNotebookFileName,
   isNotebookFileName,
@@ -52,6 +54,7 @@ import {
 import type { StorageBrowser } from "../../storage/browser";
 import {
   FilesystemEntryAlreadyExistsError,
+  parseFsUri,
   isFileSystemAccessSupported,
 } from "../../storage/fs";
 import {
@@ -459,6 +462,8 @@ export function WorkspaceExplorer() {
     [],
   );
 
+  const draftMembers = useRef(new Set<string>());
+  const importInput = useRef<HTMLInputElement>(null);
   const treeRef = useRef<TreeApi<WorkspaceRow<TreeNode>> | undefined>(undefined);
   const { ref: containerRef, width = 0, height = 0 } = useResizeObserver<HTMLDivElement>();
 
@@ -507,23 +512,15 @@ export function WorkspaceExplorer() {
   }, [contextMenu]);
 
   useEffect(() => {
-    if (!workspaceUris.includes(LOCAL_FOLDER_URI)) {
-      addItem(LOCAL_FOLDER_URI);
-    }
-  }, [workspaceUris, addItem]);
-
-  useEffect(() => {
     if (!store) {
-      setTreeNodes([
-        createFolderNode(LOCAL_FOLDER_URI, "Local Notebooks"),
-      ]);
+      setTreeNodes([]);
       return;
     }
 
     let cancelled = false;
     (async () => {
       const folderCandidates: WorkspaceFolderCandidate[] = [];
-      for (const uri of workspaceUris) {
+      for (const uri of new Set([...workspaceUris, LOCAL_FOLDER_URI])) {
         if (cancelled) {
           return;
         }
@@ -590,7 +587,12 @@ export function WorkspaceExplorer() {
             console.error("Failed to refresh Drive folder name", error);
           }
         }
-        const name = metadata.name;
+        if (localUri === LOCAL_FOLDER_URI) {
+          if (cancelled) return;
+          draftMembers.current = new Set(metadata.children);
+          if (!draftMembers.current.size) continue;
+        }
+        const name = localUri === LOCAL_FOLDER_URI ? "Browser drafts" : metadata.name;
         const type = metadata.type;
         if (type !== NotebookStoreItemType.Folder) {
           continue;
@@ -607,12 +609,6 @@ export function WorkspaceExplorer() {
           remoteUri: folder.remoteUri,
         }),
       );
-
-      if (!folderNodes.some((node) => node.uri === LOCAL_FOLDER_URI)) {
-        folderNodes.push(
-          createFolderNode(LOCAL_FOLDER_URI, "Local Notebooks"),
-        );
-      }
 
       if (cancelled) {
         return;
@@ -793,8 +789,25 @@ export function WorkspaceExplorer() {
               createFileNode(metadata, { parentUri }),
             );
           }
+          // Pending Drive creation can also have no public upstream URI. Ask
+          // the virtual folder before changing its visibility or membership.
+          let draftCount: number | undefined;
+          const wasDraft = draftMembers.current.has(eventUri);
+          const membershipMayHaveChanged = wasDraft ? Boolean(metadata.remoteUri) : !metadata.remoteUri;
+          if (metadata.type === NotebookStoreItemType.File && membershipMayHaveChanged) {
+            const drafts = await store.getMetadata(LOCAL_FOLDER_URI);
+            if (drafts) {
+              draftMembers.current = new Set(drafts.children);
+              draftCount = draftMembers.current.size;
+            }
+          }
           setTreeNodes((prev) => {
-            const updated = updateNodeMetadata(prev, eventUri, {
+            let roots = prev;
+            if (draftCount === 0) roots = prev.filter((node) => node.uri !== LOCAL_FOLDER_URI);
+            else if (draftCount && !prev.some((node) => node.uri === LOCAL_FOLDER_URI)) {
+              roots = [...prev, createFolderNode(LOCAL_FOLDER_URI, "Browser drafts")];
+            }
+            const updated = updateNodeMetadata(roots, eventUri, {
               name: metadata.name,
               remoteUri: metadata.remoteUri,
             });
@@ -1060,6 +1073,10 @@ export function WorkspaceExplorer() {
           createInitialExcalidrawDocumentJson(),
           EXCALIDRAW_MIME_TYPE,
         );
+        if (folderUri === LOCAL_FOLDER_URI) {
+          setTreeNodes((nodes) => nodes.some((node) => node.uri === LOCAL_FOLDER_URI)
+            ? nodes : [...nodes, createFolderNode(LOCAL_FOLDER_URI, "Browser drafts")]);
+        }
         await fetchChildren(folderUri);
         setPendingEdit(workspaceRowId(folderRowId, created.uri));
         setErrorMessage(null);
@@ -1575,6 +1592,23 @@ function formatShortTimestamp(date: Date): string {
     ],
   );
 
+  /** A one-time file selection creates an independent draft with its original contents. */
+  async function importNotebookFile(file: File) {
+    if (!store) return;
+    try {
+      const content = await file.text();
+      const { format } = decodeNotebookFile(content, file.name);
+      const mime = format === "runme-operation-log" ? RUNME_OPERATION_LOG_MIME_TYPE
+        : format === "ipynb" ? "application/x-ipynb+json" : "application/json";
+      const item = await store.createContent(LOCAL_FOLDER_URI, file.name, content, mime);
+      const result = await openNotebook(item.uri, { name: item.name });
+      setCurrentDoc(result.localUri);
+      setErrorMessage(null);
+    } catch (error) {
+      setErrorMessage(`Unable to open ${file.name}. ${String(error)}`);
+    }
+  }
+
   const handleOpenLocalFolder = useCallback(async () => {
     if (!fsStore) {
       return;
@@ -1732,7 +1766,7 @@ function formatShortTimestamp(date: Date): string {
     return (
       <div className="flex h-full min-h-0 flex-col gap-3">
         <h2 className="text-base font-semibold text-nb-text">
-          Google Drive
+          Explorer
         </h2>
         <p className="text-sm text-nb-text-muted">
           Notebook storage is not initialized.
@@ -1748,6 +1782,17 @@ function formatShortTimestamp(date: Date): string {
           Explorer
         </h2>
         <div id="workspace-explorer-toolbar-actions" className="flex items-center gap-1">
+          <button type="button" title="New browser draft" aria-label="New browser draft"
+            onClick={() => void handleCreateDocument(LOCAL_FOLDER_URI, workspaceRowId("", LOCAL_FOLDER_URI))}>
+            <DocumentTextIcon className="h-5 w-5" />
+          </button>
+          <button type="button" onClick={() => importInput.current?.click()}>Open file</button>
+          <input ref={importInput} type="file" hidden accept=".runme,.json,.ipynb"
+            onChange={(event) => {
+              const file = event.currentTarget.files?.[0];
+              event.currentTarget.value = "";
+              if (file) void importNotebookFile(file);
+            }} />
           <button
             type="button"
             className="flex h-11 w-11 items-center justify-center rounded-nb-sm text-nb-text-muted hover:bg-nb-surface-2 hover:text-nb-text disabled:opacity-50 focus-visible:outline focus-visible:outline-2 focus-visible:outline-nb-accent"
@@ -2192,6 +2237,16 @@ function formatShortTimestamp(date: Date): string {
                   Copy Share Link
                 </button>
               )}
+              {!contextMenu.parentUri && contextMenu.uri.startsWith("fs://") && fsStore && (
+                <button type="button" className="ctx-menu-item" onClick={() => {
+                  setContextMenu(null);
+                  void fsStore.requestPermission(parseFsUri(contextMenu.uri).workspaceId)
+                    .then((granted) => {
+                      if (!granted) throw new Error("Folder permission was denied.");
+                      return refreshFolder(contextMenu.uri);
+                    }).catch((error) => setErrorMessage(String(error)));
+                }}>Reconnect folder</button>
+              )}
               {!contextMenu.parentUri && contextMenu.uri !== LOCAL_FOLDER_URI && (
                 <button
                   type="button"
@@ -2199,7 +2254,10 @@ function formatShortTimestamp(date: Date): string {
                   onMouseDown={(event) => event.stopPropagation()}
                   onClick={(event) => {
                     event.stopPropagation();
-                    removeItem(contextMenu.uri);
+                    if (contextMenu.uri.startsWith("fs://") && fsStore) {
+                      void fsStore.unmount(contextMenu.uri).then(() => removeItem(contextMenu.uri))
+                        .catch((error) => setErrorMessage(String(error)));
+                    } else removeItem(contextMenu.uri);
                     setContextMenu(null);
                   }}
                 >
