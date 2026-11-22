@@ -507,13 +507,13 @@ export function SidePanelToolbar() {
           type="button"
           data-tour-id="left-nav.outline"
           className={`${sideButtonBase} ${
-            activePanel === 'outline' ? 'rounded-full bg-blue-100 text-sky-900' : sideButtonInactive
+            activePanel === 'outline' ? sideButtonActive : sideButtonInactive
           }`}
           aria-pressed={activePanel === 'outline'}
           aria-label="Toggle Outline panel"
           onClick={() => togglePanel('outline')}
         >
-          <svg aria-hidden="true" viewBox="0 0 24 24" fill="currentColor" className="h-6 w-6">
+          <svg aria-hidden="true" viewBox="0 0 24 24" fill="currentColor" className="h-5 w-5">
             <circle cx="4" cy="5" r="2" />
             <circle cx="4" cy="12" r="2" />
             <circle cx="4" cy="19" r="2" />
