@@ -128,6 +128,7 @@ import {
   filePayloadChecksum,
 } from './filePayloads'
 import {
+  buildFsUri,
   buildWorkspaceRootUri,
   FilesystemEntryAlreadyExistsError,
   parseFsUri,
@@ -1809,7 +1810,7 @@ export class LocalNotebooks extends Dexie {
 
   async unmountFolder(localUri: string): Promise<void> {
     const folder = await this.folders.get(localUri)
-    if (folder && isFilesystemUri(folder.remoteId)) {
+    if (folder && isFilesystemUri(folder.remoteId) && !parseFsUri(folder.remoteId).relativePath) {
       if (!this.filesystemStore) throw new Error('Filesystem storage is unavailable')
       await this.filesystemStore.unmount(folder.remoteId)
     }
@@ -1944,7 +1945,22 @@ export class LocalNotebooks extends Dexie {
       await this.ensureFolderMirror(remoteUri, name)
     // Refresh only the requested level for explorer polling. Child mirrors keep
     // their existing membership until expanded, avoiding a full Drive crawl.
-    const items = await this.folderUpstream(remoteUri).list(remoteUri)
+    let items: NotebookStoreItem[]
+    try {
+      items = await this.folderUpstream(remoteUri).list(remoteUri)
+    } catch (error) {
+      // During a crawl a child can disappear or have stricter permissions.
+      // Preserve its last membership and continue indexing accessible siblings.
+      if (isFilesystemUri(remoteUri) && parseFsUri(remoteUri).relativePath &&
+          error instanceof DOMException &&
+          (error.name === 'NotAllowedError' || error.name === 'NotFoundError')) {
+        appLogger.warn('Skipped unavailable mounted subdirectory', {
+          attrs: { scope: 'storage.filesystem.sync', remoteUri, error: error.name },
+        })
+        return folderId
+      }
+      throw error
+    }
     const childUris: string[] = []
 
     for (const item of items) {
@@ -4929,14 +4945,29 @@ export class LocalNotebooks extends Dexie {
       },
     })
 
-    const upstream = isFilesystemUri(record.remoteId) ? record.remoteId : remoteUri
-    if (upstream) {
-      const remoteItem = await this.folderUpstream(upstream).rename(upstream, nextName)
-      nextName = remoteItem.name || nextName
-      nextRemoteId = remoteItem.remoteUri ?? remoteItem.uri ?? record.remoteId
+    if (isFilesystemUri(record.remoteId)) {
+      const { workspaceId, relativePath } = parseFsUri(record.remoteId)
+      const parentUri = buildFsUri(workspaceId, relativePath.split('/').slice(0, -1).join('/'), 'directory')
+      // A scan must not publish a second mirror between a disk rename and its
+      // index update. Likewise, a queued write must use the updated disk path.
+      await this.driveSyncCoordinator.runExclusive(this.folderMembershipLockKey(parentUri), () =>
+        this.driveSyncCoordinator.runExclusive(uri, async () => {
+          const current = await this.files.get(uri)
+          if (!current || current.remoteId !== record.remoteId) throw new Error('Notebook changed during rename')
+          const renamed = await this.folderUpstream(current.remoteId).rename(current.remoteId, nextName)
+          nextName = renamed.name
+          nextRemoteId = renamed.uri
+          await this.updateFile(uri, { name: nextName, remoteId: nextRemoteId })
+        })
+      )
+    } else {
+      if (remoteUri) {
+        const remoteItem = await this.driveStore.rename(remoteUri, nextName)
+        nextName = remoteItem.name || nextName
+        nextRemoteId = remoteItem.remoteUri ?? remoteItem.uri ?? record.remoteId
+      }
+      await this.updateFile(uri, { name: nextName, remoteId: nextRemoteId })
     }
-
-    await this.updateFile(uri, { name: nextName, remoteId: nextRemoteId })
     if (record.operationLogRef) this.enqueueIpynbSync(uri)
 
     const parentFolder = await this.findParentFolder(uri)

@@ -1308,8 +1308,12 @@ describe('LocalNotebooks operation-log storage', () => {
     f.store.setFilesystemStore({
       listWorkspaces: async () => [{ id: 'active', name: 'Active', mounted: true }, { id: 'old', mounted: false }],
       list: async (uri: string) => {
+        if (uri.endsWith('/dir/private')) throw new DOMException('Access denied', 'NotAllowedError')
         expect(uri).toBe('fs://workspace/active/dir/')
-        return [{ type: NotebookStoreItemType.File, uri: 'fs://workspace/active/file/shared.runme', name: 'shared.runme' }]
+        return [
+          { type: NotebookStoreItemType.Folder, uri: 'fs://workspace/active/dir/private', name: 'private' },
+          { type: NotebookStoreItemType.File, uri: 'fs://workspace/active/file/shared.runme', name: 'shared.runme' },
+        ]
       },
       loadContent,
       saveContent: vi.fn(),

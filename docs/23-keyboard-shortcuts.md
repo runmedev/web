@@ -39,7 +39,7 @@ Click the rendered text of a Markdown cell, or press **Tab** until the cell has 
 
 | Focus | Keys | Action |
 | --- | --- | --- |
-| Workspace | **⌘+O** on macOS, **Ctrl+O** on Windows or Linux | Open a notebook link. |
+| Workspace | **⌘+O** on macOS, **Ctrl+O** on Windows or Linux | Search Explorer notebooks by name or paste a notebook link. |
 | Workspace tab strip | **←** / **→**, **Home** / **End** | Navigate between tabs or jump to the first / last tab. |
 | Page rename field | **Enter** / **Esc** | Save / cancel the rename. |
 | Drive status, account button, or diff comment control | **Shift+F10** or **Menu** | Open the control’s context actions or authentication details. |

@@ -302,6 +302,7 @@ export function validateManifest(value: unknown): Manifest {
     m.storageCompatibilityId !== STORAGE_COMPATIBILITY ||
     !Number.isInteger(m.owner?.rpcMin) ||
     !Number.isInteger(m.owner?.rpcMax) ||
+    m.owner?.rpcMin > m.owner?.rpcMax ||
     m.owner?.rpcMin > STORAGE_OWNER_VERSION ||
     m.owner?.rpcMax < 8 ||
     !Array.isArray(m.assets) ||

@@ -331,6 +331,22 @@ describe('FilesystemNotebookStore', () => {
   // -------------------------------------------------------------------------
 
   describe('list', () => {
+    it('stops reading directory entries when a notebook search is cancelled', async () => {
+      const controller = new AbortController()
+      const first = createMockFileHandle('first.runme', '')
+      const second = createMockFileHandle('second.runme', '')
+      vi.spyOn(first, 'getFile').mockImplementationOnce(async () => {
+        controller.abort()
+        return new File([], 'first.runme')
+      })
+      rootEntries.set(first.name, first)
+      rootEntries.set(second.name, second)
+
+      await store.list(ROOT_URI, controller.signal)
+      expect(first.getFile).toHaveBeenCalledOnce()
+      expect(second.getFile).not.toHaveBeenCalled()
+    })
+
     it('returns .runme files and directories', async () => {
       const nbJson = makeEmptyNotebookJson()
       rootEntries.set(
@@ -998,6 +1014,18 @@ describe('FilesystemNotebookStore', () => {
   // -------------------------------------------------------------------------
 
   describe('rename', () => {
+    it('preserves both files when an outside edit lands during rename', async () => {
+      const old = createMockFileHandle('old.runme', 'before')
+      rootEntries.set('old.runme', old)
+      const original = await old.getFile()
+      vi.mocked(old.getFile).mockResolvedValueOnce({ ...original, text: async () => 'before' } as File)
+      await (await old.createWritable()).write('outside edit')
+      const uri = `fs://workspace/${WORKSPACE_ID}/file/old.runme`
+      await expect(store.rename(uri, 'new.runme')).rejects.toThrow('source changed')
+      expect(await (await old.getFile()).text()).toBe('outside edit')
+      expect(await (await rootEntries.get('new.runme').getFile()).text()).toBe('before')
+    })
+
     it('rejects changing formats by rename', async () => {
       const oldHandle = createMockFileHandle(
         'old.ipynb',
