@@ -128,6 +128,16 @@ export function NotebookPageTree({
                     : 'border-transparent') +
                   ((current ?? '') === id ? ' bg-nb-surface-2' : '')
                 }
+                onDragStart={(e) => {
+                  if (!data || !id) return
+                  e.dataTransfer.setData('text/plain', id)
+                  e.dataTransfer.effectAllowed = 'move'
+                  setDrag(id)
+                }}
+                onDragEnd={() => {
+                  setDrag(null)
+                  setOver(null)
+                }}
                 onDragOver={(e) => {
                   if (!drag || drag === id) return
                   e.preventDefault()
@@ -167,7 +177,21 @@ export function NotebookPageTree({
                   className="flex min-w-0 flex-1 items-center gap-1.5 text-left text-sm font-medium"
                   onClick={() => open(id, name)}
                 >
-                  <DocumentIcon className="h-4 w-4 shrink-0 text-nb-text-faint" />
+                  <span
+                    draggable={Boolean(data && id)}
+                    title={
+                      data && id
+                        ? 'Drag page icon to reorder ' + name
+                        : undefined
+                    }
+                    className={
+                      data && id
+                        ? 'inline-flex shrink-0 cursor-grab active:cursor-grabbing'
+                        : 'inline-flex shrink-0'
+                    }
+                  >
+                    <DocumentIcon className="pointer-events-none h-4 w-4 text-nb-text-faint" />
+                  </span>
                   <span className="truncate">{name}</span>
                 </button>
                 {data && (
@@ -177,15 +201,6 @@ export function NotebookPageTree({
                         draggable
                         title={'Drag to reorder ' + name}
                         className="cursor-grab text-nb-text-faint"
-                        onDragStart={(e) => {
-                          e.dataTransfer.setData('text/plain', id)
-                          e.dataTransfer.effectAllowed = 'move'
-                          setDrag(id)
-                        }}
-                        onDragEnd={() => {
-                          setDrag(null)
-                          setOver(null)
-                        }}
                       >
                         <Bars3Icon className="h-4 w-4" />
                       </span>

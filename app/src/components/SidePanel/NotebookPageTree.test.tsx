@@ -8,7 +8,7 @@ import {
 } from '../../lib/notebookPages'
 import { NotebookPageTree } from './NotebookPageTree'
 
-it('adds and renames a page, nests its headings and reorders it by drag handle', () => {
+it('adds and renames a page, nests its headings and reorders it by dragging its page icon', () => {
   const open = vi.fn()
   function Editors() {
     const [metadata, setMetadata] = useState<Record<string, string>>({})
@@ -58,10 +58,16 @@ it('adds and renames a page, nests its headings and reorders it by drag handle',
     target: { value: 'Postmortem' },
   })
   fireEvent.click(screen.getByText('Save'))
-  const handle = screen.getByTitle('Drag to reorder Postmortem')
+  const icon = screen.getByTitle('Drag page icon to reorder Postmortem')
+  expect(icon.draggable).toBe(true)
   const target = screen.getByRole('button', { name: 'Main', exact: true })
-  fireEvent.dragStart(handle, { dataTransfer: { setData: vi.fn() } })
+  fireEvent.dragStart(icon, { dataTransfer: { setData: vi.fn() } })
   fireEvent.dragOver(target)
   fireEvent.drop(target)
   expect(screen.getAllByRole('listitem')[0].textContent).toContain('Postmortem')
+  fireEvent.dragStart(icon, { dataTransfer: { setData: vi.fn() } })
+  fireEvent(target, new MouseEvent('dragover', { bubbles: true, clientY: 10 }))
+  fireEvent.drop(target)
+  expect(screen.getAllByRole('listitem')[1].textContent).toContain('Postmortem')
+  expect(open).toHaveBeenCalledTimes(1)
 })
