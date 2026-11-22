@@ -5089,8 +5089,8 @@ export default function Actions() {
     if (typeof window === 'undefined') {
       return tabContextMenu
     }
-    const itemCount =
-      7 +
+    const notebookItemCount =
+      5 +
       (tabContextMenu.googleDriveUri ? 1 : 0) +
       (tabContextMenu.googleDriveUri && tabContextMenu.isIpynb ? 1 : 0) +
       (tabContextMenu.autoIpynb ? 1 : 0) +
@@ -5098,7 +5098,9 @@ export default function Actions() {
       (tabContextMenu.canOpenUpstreamDiff ? 1 : 0) +
       (tabContextMenu.canReviewSuggestions ? 1 : 0)
     const menuWidth = 220
-    const menuHeight = itemCount * 36 + 8
+    const isNotebook = isNotebookDocumentUri(tabContextMenu.docUri)
+    const itemCount = 2 + (isNotebook ? notebookItemCount : 0)
+    const menuHeight = itemCount * 36 + 10 + (isNotebook ? 9 : 0)
     return {
       ...tabContextMenu,
       x: Math.max(0, Math.min(tabContextMenu.x, window.innerWidth - menuWidth)),
@@ -5682,7 +5684,10 @@ export default function Actions() {
                           onDragStart={(e) => {
                             draggingTab.current = doc.uri
                             e.dataTransfer.effectAllowed = 'move'
-                            e.dataTransfer.setData('text/plain', doc.title)
+                            e.dataTransfer.setData(
+                              'application/x-runme-workspace-tab',
+                              doc.uri
+                            )
                           }}
                           onDragOver={(e) => {
                             if (
@@ -5700,9 +5705,8 @@ export default function Actions() {
                           }}
                           onDragLeave={(e) => {
                             if (
-                              !e.currentTarget.contains(
-                                e.relatedTarget as Node | null
-                              )
+                              !(e.relatedTarget instanceof Node) ||
+                              !e.currentTarget.contains(e.relatedTarget)
                             )
                               setDropMark(null)
                           }}
@@ -5774,7 +5778,7 @@ export default function Actions() {
           </div>
           {adjustedTabContextMenu && (
             <div
-              className="ctx-menu"
+              className="ctx-menu max-h-[100dvh] overflow-y-auto"
               style={{
                 top: adjustedTabContextMenu.y,
                 left: adjustedTabContextMenu.x,
