@@ -1,3 +1,4 @@
+import { notebookDestination } from './mounted-folder-fixture.js'
 import assert from 'node:assert/strict'
 import { mkdir, readFile, readdir, writeFile } from 'node:fs/promises'
 import path from 'node:path'
@@ -139,7 +140,7 @@ export async function runSingleOriginBundle(development = false) {
       }
       console.log(failure, 'app and tools ready')
       const seeded = await execute(`
-        const d=await notebooks.createLocal('single-origin.runme');
+        const d=await notebooks.createLocal('single-origin.runme', ${JSON.stringify(await notebookDestination(page))});
         await notebooks.appendCell({target:{uri:d.handle.uri},kind:'code',languageId:'typescript',value:'const answer: number = 42'});
         await notebooks.show(d.handle.uri);
         console.log(d.handle.uri);
@@ -159,8 +160,18 @@ export async function runSingleOriginBundle(development = false) {
         `const deadline=Date.now()+10000; while(!(await documents.get(${JSON.stringify(notebookUri)})).content.includes('const answer: number = 42')) { if(Date.now()>deadline) throw new Error('Local save did not finish'); await new Promise(resolve=>setTimeout(resolve,100)); }`
       )
       // Excalidraw receives real locally persisted scene data through the public document API.
+      const diagramFolder = await page.evaluate(async () => {
+        // The bundle runs offline. Seed a previously mounted Drive folder to
+        // exercise pending document creation without pointing at a real account.
+        const id = 'local://folder/offline-diagrams'
+        await (window as any).app.localNotebooks.folders.put({
+          id, name: 'Diagrams', remoteId: 'https://drive.google.com/drive/folders/test-diagrams',
+          children: [], lastSynced: '',
+        })
+        return id
+      })
       await execute(`
-        const d=await notebooks.createLocal('single-origin.excalidraw');
+        const d=await notebooks.createLocal('single-origin.excalidraw', {folderUri:${JSON.stringify(diagramFolder)}});
         await documents.update(d.handle.uri, JSON.stringify({type:'excalidraw',version:2,source:'test',elements:[{id:'local-text',type:'text',x:100,y:100,width:220,height:25,angle:0,strokeColor:'#222222',backgroundColor:'transparent',fillStyle:'solid',strokeWidth:1,strokeStyle:'solid',roughness:1,opacity:100,groupIds:[],frameId:null,roundness:null,seed:1,version:1,versionNonce:1,isDeleted:false,boundElements:null,updated:1,link:null,locked:false,text:'Runme local fonts',originalText:'Runme local fonts',fontSize:20,fontFamily:5,textAlign:'left',verticalAlign:'top',containerId:null,lineHeight:1.25,autoResize:true}],appState:{viewBackgroundColor:'#ffffff'},files:{}}), {mimeType:'application/vnd.excalidraw+json'});
         await notebooks.show(d.handle.uri);
       `)

@@ -1,3 +1,4 @@
+import { notebookDestination } from './mounted-folder-fixture.js'
 import assert from 'node:assert/strict'
 import { mkdir, writeFile } from 'node:fs/promises'
 import { type Page, chromium } from 'playwright-core'
@@ -410,7 +411,7 @@ async function main() {
         assert.match(
           await execute(
             late,
-            "const d=await notebooks.createLocal('readonly-startup.runme'); console.log(d.handle.uri)"
+            `const d=await notebooks.createLocal('readonly-startup.runme', ${JSON.stringify(await notebookDestination(late))}); console.log(d.handle.uri)`
           ),
           /local:\/\/file\//
         )
@@ -454,7 +455,7 @@ async function main() {
         assert.match(
           await execute(
             unavailable,
-            "const d=await notebooks.createLocal('fallback-settings.runme'); console.log(d.handle.uri)"
+            `const d=await notebooks.createLocal('fallback-settings.runme', ${JSON.stringify(await notebookDestination(unavailable))}); console.log(d.handle.uri)`
           ),
           /local:\/\/file\//
         )
@@ -510,7 +511,7 @@ async function main() {
       const savedUri = (
         await execute(
           original,
-          `const d=await notebooks.createLocal('settings-recovery.runme'); await notebooks.show(d.handle.uri); await notebooks.appendCell({target:{uri:d.handle.uri},kind:'markup',value:'Preserve this notebook through settings recovery'}); console.log(d.handle.uri)`
+          `const d=await notebooks.createLocal('settings-recovery.runme', ${JSON.stringify(await notebookDestination(original))}); await notebooks.show(d.handle.uri); await notebooks.appendCell({target:{uri:d.handle.uri},kind:'markup',value:'Preserve this notebook through settings recovery'}); console.log(d.handle.uri)`
         )
       ).trim()
       // Seed a mounted folder in the real notebook database, independently of
@@ -709,7 +710,7 @@ async function main() {
       const saved = (
         await execute(
           two,
-          `const d=await notebooks.createLocal('registration-migration.runme'); await notebooks.appendCell({target:{uri:d.handle.uri},kind:'markup',value:'Survives registration-free migration'}); console.log(d.handle.uri)`
+          `const d=await notebooks.createLocal('registration-migration.runme', ${JSON.stringify(await notebookDestination(two))}); await notebooks.appendCell({target:{uri:d.handle.uri},kind:'markup',value:'Survives registration-free migration'}); console.log(d.handle.uri)`
         )
       ).trim()
       const oldTab = await two.evaluate(
@@ -1027,12 +1028,12 @@ async function main() {
 
     const created = await execute(
       one,
-      `const d=await notebooks.createLocal('upgrade-one.runme'); await notebooks.appendCell({target:{uri:d.handle.uri},kind:'markup',value:'Before upgrade: durable edit'}); await notebooks.show(d.handle.uri); console.log(d.handle.uri);`
+      `const d=await notebooks.createLocal('upgrade-one.runme', ${JSON.stringify(await notebookDestination(one))}); await notebooks.appendCell({target:{uri:d.handle.uri},kind:'markup',value:'Before upgrade: durable edit'}); await notebooks.show(d.handle.uri); console.log(d.handle.uri);`
     )
     const uri = created.match(/local:\/\/file\/[^\s]+/)![0]
     const secondCreated = await execute(
       two,
-      `const d=await notebooks.createLocal('upgrade-two.runme');await notebooks.appendCell({target:{uri:d.handle.uri},kind:'markup',value:'Second tab survives'});await notebooks.show(d.handle.uri);console.log(d.handle.uri);`
+      `const d=await notebooks.createLocal('upgrade-two.runme', ${JSON.stringify(await notebookDestination(two))});await notebooks.appendCell({target:{uri:d.handle.uri},kind:'markup',value:'Second tab survives'});await notebooks.show(d.handle.uri);console.log(d.handle.uri);`
     )
     const secondUri = secondCreated.match(/local:\/\/file\/[^\s]+/)![0]
     await one.screenshot({ path: output + '/01-two-tabs-a.png' })
@@ -1045,7 +1046,7 @@ async function main() {
       await ready(incompatible)
       await execute(
         incompatible,
-        `const d=await notebooks.createLocal('incompatible.runme');await notebooks.appendCell({target:{uri:d.handle.uri},kind:'markup',value:'Preserved during compatibility recovery'});await notebooks.show(d.handle.uri);`
+        `const d=await notebooks.createLocal('incompatible.runme', ${JSON.stringify(await notebookDestination(incompatible))});await notebooks.appendCell({target:{uri:d.handle.uri},kind:'markup',value:'Preserved during compatibility recovery'});await notebooks.show(d.handle.uri);`
       )
       await incompatible.evaluate(() => {
         // Inject only the stable capability reply, leaving the actual worker,
@@ -1267,7 +1268,7 @@ async function main() {
       )
       await execute(
         rollbackPeer,
-        `const d=await notebooks.createLocal('rollback-peer.runme');await notebooks.appendCell({target:{uri:d.handle.uri},kind:'markup',value:'Keep this editor alive during historical rollback'});await notebooks.show(d.handle.uri);`
+        `const d=await notebooks.createLocal('rollback-peer.runme', ${JSON.stringify(await notebookDestination(rollbackPeer))});await notebooks.appendCell({target:{uri:d.handle.uri},kind:'markup',value:'Keep this editor alive during historical rollback'});await notebooks.show(d.handle.uri);`
       )
     }
     await context.setOffline(true)

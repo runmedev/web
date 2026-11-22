@@ -166,9 +166,9 @@ async function main() {
           previousPath: before.contentRef.path,
         })
       }
-      // .runme initialization persists its recovery payload inside a Dexie transaction.
+      const dir = await (await navigator.storage.getDirectory()).getDirectoryHandle('Test notebooks', { create: true })
       const created = await store.create(
-        'local://folder/local',
+        await store.mountFilesystemFolder(dir),
         'transaction.runme'
       )
       const raw = await store.files.get(created.uri)
