@@ -1175,9 +1175,9 @@ describe('Actions tabs', () => {
         )
       } else {
         if (surface === 'markdown-source')
-          fireEvent.click(
-            await screen.findByRole('button', { name: 'Edit Markdown' })
-          )
+          fireEvent.keyDown(await screen.findByTestId('markdown-rendered'), {
+            key: 'Escape',
+          })
         fireEvent.click(
           await screen.findByRole('button', {
             name: 'Mock editor selection comment',

@@ -319,7 +319,10 @@ describe("MarkdownCell", () => {
 
     renderMarkdownCell(stub as unknown as CellData);
 
-    fireEvent.click(screen.getByRole("button", { name: "Edit Markdown" }));
+    expect(screen.queryByRole("button", {name: "Edit Markdown"})).toBeNull();
+    const rendered = screen.getByTestId("markdown-rendered");
+    rendered.focus();
+    fireEvent.keyDown(rendered, {key: "Escape"});
 
     await act(async () => {
       await Promise.resolve();

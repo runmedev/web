@@ -235,8 +235,8 @@ const Editor = memo(
           onEnterRef.current();
         }
       });
-      // if the value is empty, focus the editor
-      if (!readOnly && autoFocusWhenEmpty && value === "") {
+      // Monaco may mount after the parent has already requested editor focus.
+      if (shouldFocus || (!readOnly && autoFocusWhenEmpty && value === "")) {
         editor.focus();
       }
 
