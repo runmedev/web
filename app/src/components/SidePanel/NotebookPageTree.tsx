@@ -7,7 +7,6 @@ import {
   Bars3Icon,
 } from '@heroicons/react/20/solid'
 import {
-  DEFAULT_PAGE,
   createPageProperties,
   pageNameKey,
   pageDeletedKey,
@@ -21,14 +20,12 @@ import type { NotebookData } from '../../lib/notebookData'
 export function NotebookPageTree({
   pages,
   current,
-  defaultId,
   data,
   open,
   headings,
 }: {
   pages: NotebookPage[]
   current?: string
-  defaultId?: string
   data?: Pick<
     NotebookData,
     'setMetadataProperty' | 'setMetadataProperties'
@@ -173,25 +170,13 @@ export function NotebookPageTree({
                   />
                 </button>
                 <button
+                  draggable={Boolean(data && id)}
+                  title={data && id ? 'Drag to reorder ' + name : undefined}
                   aria-current={(current ?? '') === id ? 'page' : undefined}
-                  className="flex min-w-0 flex-1 items-center gap-1.5 text-left text-sm font-medium"
+                  className="flex min-w-0 flex-1 items-center gap-1.5 text-left text-sm font-medium [&[draggable=true]]:cursor-grab [&[draggable=true]]:select-none [&[draggable=true]]:active:cursor-grabbing"
                   onClick={() => open(id, name)}
                 >
-                  <span
-                    draggable={Boolean(data && id)}
-                    title={
-                      data && id
-                        ? 'Drag page icon to reorder ' + name
-                        : undefined
-                    }
-                    className={
-                      data && id
-                        ? 'inline-flex shrink-0 cursor-grab active:cursor-grabbing'
-                        : 'inline-flex shrink-0'
-                    }
-                  >
-                    <DocumentIcon className="pointer-events-none h-4 w-4 text-nb-text-faint" />
-                  </span>
+                  <DocumentIcon className="pointer-events-none h-4 w-4 shrink-0 text-nb-text-faint" />
                   <span className="truncate">{name}</span>
                 </button>
                 {data && (
@@ -236,14 +221,6 @@ export function NotebookPageTree({
                         onClick={() => move(id, rows[index + 1].id, true)}
                       >
                         Move later
-                      </button>
-                      <button
-                        disabled={id === defaultId}
-                        onClick={() =>
-                          data.setMetadataProperty(DEFAULT_PAGE, id)
-                        }
-                      >
-                        Set as default
                       </button>
                       <button
                         onClick={() =>

@@ -13,12 +13,7 @@ import { copyNotebookCellShareUrl } from '../../lib/shareLinks'
 import { showToast } from '../../lib/toast'
 import { useWorkspaceDocumentContext } from '../../contexts/WorkspaceDocumentContext'
 import { NotebookPageTree } from './NotebookPageTree'
-import {
-  CELL_PAGE,
-  DEFAULT_PAGE,
-  notebookPages,
-  resolvePage,
-} from '../../lib/notebookPages'
+import { CELL_PAGE, notebookPages, resolvePage } from '../../lib/notebookPages'
 import {
   notebookPageUri,
   parseNotebookPageUri,
@@ -74,8 +69,7 @@ export default function NotebookOutlinePanel() {
   const entry = useNotebookList().find((n) => n.uri === notebookUri)
   const metadata = notebookSnapshot?.notebook.metadata
   const pages = useMemo(() => notebookPages(metadata ?? {}), [metadata])
-  const defaultId = resolvePage(undefined, pages, metadata?.[DEFAULT_PAGE])
-  const current = resolvePage(view?.pageId, pages, defaultId)
+  const current = resolvePage(view?.pageId, pages)
   const data =
     entry?.readOnly ||
     entry?.releasePending ||
@@ -101,13 +95,13 @@ export default function NotebookOutlinePanel() {
   const entriesByPage = useMemo(() => {
     const result = new Map<string | undefined, NotebookOutlineEntry[]>()
     for (const cell of notebookSnapshot?.notebook.cells ?? []) {
-      const id = resolvePage(cell.metadata[CELL_PAGE], pages, defaultId)
+      const id = resolvePage(cell.metadata[CELL_PAGE], pages)
       const entries = result.get(id) ?? []
       entries.push(...extractNotebookOutline([cell]))
       result.set(id, entries)
     }
     return result
-  }, [notebookSnapshot, pages, defaultId])
+  }, [notebookSnapshot, pages])
 
   useEffect(() => {
     const fallbackUri = notebookUri || null
@@ -200,7 +194,6 @@ export default function NotebookOutlinePanel() {
           key={notebookUri}
           pages={pages}
           current={current}
-          defaultId={defaultId}
           data={data}
           open={openPage}
           headings={(id) => (

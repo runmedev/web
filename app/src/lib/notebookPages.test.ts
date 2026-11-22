@@ -1,7 +1,6 @@
 import { describe, expect, it } from 'vitest'
 
 import {
-  DEFAULT_PAGE,
   createPageProperties,
   notebookPages,
   pageDeletedKey,
@@ -12,14 +11,16 @@ import {
 } from './notebookPages'
 
 describe('notebook pages', () => {
-  it('keeps unassigned cells on the same page through rename and reorder', () => {
+  it('uses the first page for unassigned cells even with a legacy default', () => {
     const { id, changes } = createPageProperties([], 'Investigation')
-    const main = changes[DEFAULT_PAGE]!
+    const main = notebookPages(changes)[0]!.id
+    expect(changes).not.toHaveProperty('runme.dev/pages/defaultPageId')
     expect(main).not.toBe('default')
     const original = notebookPages(changes)
     expect(original.map((p) => p.name)).toEqual(['Main', 'Investigation'])
     const metadata = {
       ...changes,
+      'runme.dev/pages/defaultPageId': main,
       [pageNameKey(main)]: 'Notes',
       [pagePositionKey(id)]: pagePosition(undefined, original[0]),
     }
@@ -27,7 +28,8 @@ describe('notebook pages', () => {
       'Investigation',
       'Notes',
     ])
-    expect(resolvePage(undefined, notebookPages(metadata), main)).toBe(main)
+    expect(resolvePage(undefined, notebookPages(metadata))).toBe(id)
+    expect(resolvePage(main, notebookPages(metadata))).toBe(main)
   })
   it('recovers dangling references and keeps a deleted page hidden after concurrent renaming', () => {
     const { id, changes } = createPageProperties([], 'Temporary')
@@ -36,7 +38,7 @@ describe('notebook pages', () => {
       [pageDeletedKey(id)]: 'true',
       [pageNameKey(id)]: 'Renamed',
     })
-    expect(resolvePage(id, live, id)).toBe(changes[DEFAULT_PAGE])
-    expect(resolvePage(undefined, [], undefined)).toBeUndefined()
+    expect(resolvePage(id, live)).toBe(notebookPages(changes)[0]!.id)
+    expect(resolvePage(undefined, [])).toBeUndefined()
   })
 })

@@ -1,9 +1,4 @@
-import {
-  CELL_PAGE,
-  DEFAULT_PAGE,
-  notebookPages,
-  resolvePage,
-} from '../../lib/notebookPages'
+import { CELL_PAGE, notebookPages, resolvePage } from '../../lib/notebookPages'
 import {
   notebookPageUri,
   parseNotebookPageUri,
@@ -2573,12 +2568,7 @@ function NotebookTabContent({
     () => notebookPages(notebookSnapshot?.notebook.metadata ?? {}),
     [notebookSnapshot?.notebook.metadata]
   )
-  const defaultPage = resolvePage(
-    undefined,
-    pages,
-    notebookSnapshot?.notebook.metadata[DEFAULT_PAGE]
-  )
-  const currentPage = resolvePage(selectedPage, pages, defaultPage)
+  const currentPage = resolvePage(selectedPage, pages)
   const pageTitle = pages.find((page) => page.id === currentPage)?.name
   useEffect(() => {
     if (initialPage && pageTitle)
@@ -2603,20 +2593,11 @@ function NotebookTabContent({
     }
     return (notebookSnapshot.notebook.cells ?? [])
       .filter(
-        (c) =>
-          resolvePage(c?.metadata?.[CELL_PAGE], pages, defaultPage) ===
-          currentPage
+        (c) => resolvePage(c?.metadata?.[CELL_PAGE], pages) === currentPage
       )
       .map((c) => (c?.refId ? notebookData.getCell(c.refId) : null))
       .filter((c): c is CellData => Boolean(c))
-  }, [
-    notebookData,
-    notebookSnapshot,
-    shouldRenderCells,
-    pages,
-    defaultPage,
-    currentPage,
-  ])
+  }, [notebookData, notebookSnapshot, shouldRenderCells, pages, currentPage])
   const cellDatasRef = useRef(cellDatas)
   cellDatasRef.current = cellDatas
   const [commentsRemoteUri, setCommentsRemoteUri] = useState<string | null>(

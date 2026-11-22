@@ -6,7 +6,6 @@ import {
 import type { PositionId } from './operationLog/types'
 
 export const PAGE_PREFIX = 'runme.dev/pages/'
-export const DEFAULT_PAGE = PAGE_PREFIX + 'defaultPageId'
 export const CELL_PAGE = 'runme.dev/pageId'
 export const pageDeletedKey = (id: string) => PAGE_PREFIX + id + '/deleted'
 export const pageNameKey = (id: string) => PAGE_PREFIX + id + '/name'
@@ -61,17 +60,12 @@ export function pagePosition(
   )
 }
 
-/** Missing and deleted page references always resolve to a visible page. */
+/** Missing and deleted page references resolve to the first page in notebook order. */
 export function resolvePage(
   id: string | undefined,
-  pages: NotebookPage[],
-  defaultId?: string
+  pages: NotebookPage[]
 ): string | undefined {
-  return (
-    pages.find((p) => p.id === id)?.id ??
-    pages.find((p) => p.id === defaultId)?.id ??
-    pages[0]?.id
-  )
+  return pages.find((p) => p.id === id)?.id ?? pages[0]?.id
 }
 
 /** Create an ordinary stable ID and preserve preexisting unassigned cells on Main. */
@@ -89,10 +83,8 @@ export function createPageProperties(
     const position = pagePosition()
     changes[pageNameKey(main)] = 'Main'
     changes[pagePositionKey(main)] = position
-    changes[DEFAULT_PAGE] = main
     left = { id: main, name: 'Main', position: JSON.parse(position) }
   }
   changes[pagePositionKey(id)] = pagePosition(left)
-  if (!left) changes[DEFAULT_PAGE] = id
   return { id, changes }
 }

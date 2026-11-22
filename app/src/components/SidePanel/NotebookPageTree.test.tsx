@@ -1,14 +1,10 @@
 import { fireEvent, render, screen } from '@testing-library/react'
 import { useState } from 'react'
 import { expect, it, vi } from 'vitest'
-import {
-  notebookPages,
-  resolvePage,
-  DEFAULT_PAGE,
-} from '../../lib/notebookPages'
+import { notebookPages, resolvePage } from '../../lib/notebookPages'
 import { NotebookPageTree } from './NotebookPageTree'
 
-it('adds and renames a page, nests its headings and reorders it by dragging its page icon', () => {
+it('adds and renames a page, nests its headings and reorders it by dragging its title', () => {
   const open = vi.fn()
   function Editors() {
     const [metadata, setMetadata] = useState<Record<string, string>>({})
@@ -31,8 +27,7 @@ it('adds and renames a page, nests its headings and reorders it by dragging its 
       <NotebookPageTree
         data={data}
         pages={pages}
-        defaultId={metadata[DEFAULT_PAGE]}
-        current={resolvePage(first, pages, metadata[DEFAULT_PAGE])}
+        current={resolvePage(first, pages)}
         open={(id, name) => {
           open(id, name)
           selectFirst(id)
@@ -53,19 +48,20 @@ it('adds and renames a page, nests its headings and reorders it by dragging its 
   fireEvent.click(screen.getByLabelText('Expand Investigation'))
   expect(screen.getByText('Timeline')).toBeTruthy()
   fireEvent.click(screen.getByLabelText('Settings for Investigation'))
+  expect(screen.queryByText('Set as default')).toBeNull()
   fireEvent.click(screen.getByText('Rename'))
   fireEvent.change(screen.getByLabelText('Page name'), {
     target: { value: 'Postmortem' },
   })
   fireEvent.click(screen.getByText('Save'))
-  const icon = screen.getByTitle('Drag page icon to reorder Postmortem')
-  expect(icon.draggable).toBe(true)
+  const title = screen.getByText('Postmortem', { selector: 'span' })
+  expect(title.closest('button')?.draggable).toBe(true)
   const target = screen.getByRole('button', { name: 'Main', exact: true })
-  fireEvent.dragStart(icon, { dataTransfer: { setData: vi.fn() } })
+  fireEvent.dragStart(title, { dataTransfer: { setData: vi.fn() } })
   fireEvent.dragOver(target)
   fireEvent.drop(target)
   expect(screen.getAllByRole('listitem')[0].textContent).toContain('Postmortem')
-  fireEvent.dragStart(icon, { dataTransfer: { setData: vi.fn() } })
+  fireEvent.dragStart(title, { dataTransfer: { setData: vi.fn() } })
   fireEvent(target, new MouseEvent('dragover', { bubbles: true, clientY: 10 }))
   fireEvent.drop(target)
   expect(screen.getAllByRole('listitem')[1].textContent).toContain('Postmortem')

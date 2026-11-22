@@ -16,7 +16,6 @@ import {
 } from '../../runme/client'
 import {
   CELL_PAGE,
-  DEFAULT_PAGE,
   notebookPages,
   pageNameKey,
   pagePositionKey,
@@ -263,7 +262,6 @@ describe('editor operation-log journal', () => {
 it('merges page organization separately from source edits in either delivery order', async () => {
   const initial = notebook([{ id: 'a', value: 'Timeline' }])
   initial.metadata[pageNameKey('invest')] = 'Investigation'
-  initial.metadata[DEFAULT_PAGE] = 'invest'
   const seed = await apply(notebook([]), initial, [], 'seed')
   const moved = cloneNotebook(initial)
   moved.cells[0]!.metadata[CELL_PAGE] = 'report'
@@ -287,12 +285,8 @@ it('merges page organization separately from source edits in either delivery ord
     expect(result.metadata[pagePositionKey('invest')]).toBe(
       moved.metadata[pagePositionKey('invest')]
     )
-    expect(
-      resolvePage(
-        'deleted-page',
-        notebookPages(result.metadata),
-        result.metadata[DEFAULT_PAGE]
-      )
-    ).toBe('invest')
+    expect(resolvePage('deleted-page', notebookPages(result.metadata))).toBe(
+      'invest'
+    )
   }
 })
