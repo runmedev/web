@@ -339,7 +339,7 @@ export class FilesystemNotebookStore {
   // File/directory operations
   // -----------------------------------------------------------------------
 
-  async list(uri: string): Promise<NotebookStoreItem[]> {
+  async list(uri: string, signal?: AbortSignal): Promise<NotebookStoreItem[]> {
     const parsed = parseFsUri(uri);
     if (parsed.kind !== "directory") {
       throw new Error("FilesystemNotebookStore.list expects a directory URI");
@@ -352,6 +352,7 @@ export class FilesystemNotebookStore {
 
     const items: NotebookStoreItem[] = [];
     for await (const [name, handle] of dirHandle.entries()) {
+      if (signal?.aborted) break;
       if (handle.kind === 'file') {
         if (!isNotebookFileName(name)) {
           continue
