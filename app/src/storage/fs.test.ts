@@ -331,6 +331,22 @@ describe('FilesystemNotebookStore', () => {
   // -------------------------------------------------------------------------
 
   describe('list', () => {
+    it('stops reading directory entries when a notebook search is cancelled', async () => {
+      const controller = new AbortController()
+      const first = createMockFileHandle('first.runme', '')
+      const second = createMockFileHandle('second.runme', '')
+      vi.spyOn(first, 'getFile').mockImplementationOnce(async () => {
+        controller.abort()
+        return new File([], 'first.runme')
+      })
+      rootEntries.set(first.name, first)
+      rootEntries.set(second.name, second)
+
+      await store.list(ROOT_URI, controller.signal)
+      expect(first.getFile).toHaveBeenCalledOnce()
+      expect(second.getFile).not.toHaveBeenCalled()
+    })
+
     it('returns .json files and directories', async () => {
       const nbJson = makeEmptyNotebookJson()
       rootEntries.set(
