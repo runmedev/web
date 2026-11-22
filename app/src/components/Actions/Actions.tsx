@@ -1,3 +1,4 @@
+import { NotebookPageTabMenu } from './NotebookPageTabMenu'
 import { CELL_PAGE, notebookPages, resolvePage } from '../../lib/notebookPages'
 import {
   notebookPageUri,
@@ -5658,9 +5659,10 @@ export default function Actions() {
             >
               {tabGroups.map(([source, members]) => {
                 const grouped = members.some((doc) => doc.uri !== source)
-                const title =
-                  openNotebooks.find((entry) => entry.uri === source)?.name ??
-                  members[0].title
+                const sourceEntry = openNotebooks.find(
+                  (entry) => entry.uri === source
+                )
+                const title = sourceEntry?.name ?? members[0].title
                 return (
                   <div
                     key={source}
@@ -5683,6 +5685,26 @@ export default function Actions() {
                         doc.title
                       )
                       const isNotebook = isNotebookDocumentUri(doc.uri)
+                      const pageView = parseNotebookPageUri(doc.uri)
+                      const trigger = (
+                        <Tabs.Trigger
+                          value={doc.uri}
+                          title={doc.title}
+                          onContextMenu={
+                            isNotebook
+                              ? (event) => handleTabContextMenu(event, doc.uri)
+                              : undefined
+                          }
+                          className="group flex shrink-0 items-center gap-2 rounded-nb-sm border border-transparent px-3 py-1.5 text-sm font-medium text-nb-text-muted transition-all duration-150 data-[state=active]:border-nb-border data-[state=active]:bg-nb-surface data-[state=active]:text-nb-text data-[state=active]:shadow-nb-xs data-[state=inactive]:hover:bg-nb-surface/60 data-[state=inactive]:hover:text-nb-text focus:outline-none"
+                        >
+                          <span className="max-w-[140px] truncate">
+                            {displayName}
+                          </span>
+                          {doc.readOnly && (
+                            <ReadOnlyTabIndicator uri={doc.uri} />
+                          )}
+                        </Tabs.Trigger>
+                      )
                       return (
                         <div
                           key={`tab-${doc.uri}`}
@@ -5695,24 +5717,19 @@ export default function Actions() {
                           }}
                           className="flex shrink-0 items-center gap-1"
                         >
-                          <Tabs.Trigger
-                            value={doc.uri}
-                            title={doc.title}
-                            onContextMenu={
-                              isNotebook
-                                ? (event) =>
-                                    handleTabContextMenu(event, doc.uri)
-                                : undefined
-                            }
-                            className="group flex shrink-0 items-center gap-2 rounded-nb-sm border border-transparent px-3 py-1.5 text-sm font-medium text-nb-text-muted transition-all duration-150 data-[state=active]:border-nb-border data-[state=active]:bg-nb-surface data-[state=active]:text-nb-text data-[state=active]:shadow-nb-xs data-[state=inactive]:hover:bg-nb-surface/60 data-[state=inactive]:hover:text-nb-text focus:outline-none"
-                          >
-                            <span className="max-w-[140px] truncate">
-                              {displayName}
-                            </span>
-                            {doc.readOnly && (
-                              <ReadOnlyTabIndicator uri={doc.uri} />
-                            )}
-                          </Tabs.Trigger>
+                          {pageView ? (
+                            <NotebookPageTabMenu
+                              {...pageView}
+                              readOnly={Boolean(
+                                sourceEntry?.readOnly ||
+                                  sourceEntry?.releasePending
+                              )}
+                            >
+                              {trigger}
+                            </NotebookPageTabMenu>
+                          ) : (
+                            trigger
+                          )}
                           {isNotebook &&
                             detectNotebookFileFormat(doc.title) ===
                               'runme-operation-log' && (

@@ -1,4 +1,8 @@
 import { useRef, useState, type ReactNode } from 'react'
+import {
+  NotebookPageMenuItems,
+  moveNotebookPage,
+} from '../NotebookPageMenuItems'
 import { DropdownMenu } from '@radix-ui/themes'
 import {
   ChevronRightIcon,
@@ -9,9 +13,6 @@ import {
 import {
   createPageProperties,
   pageNameKey,
-  pageDeletedKey,
-  pagePositionKey,
-  pagePosition,
   type NotebookPage,
 } from '../../lib/notebookPages'
 import type { NotebookData } from '../../lib/notebookData'
@@ -44,17 +45,6 @@ export function NotebookPageTree({
   const [drag, setDrag] = useState<string | null>(null)
   const [over, setOver] = useState<{ id: string; after: boolean } | null>(null)
   const rows = pages.length ? pages : [{ id: '', name: 'Main' }]
-  function move(id: string, target: string, after: boolean) {
-    if (id === target) return
-    const rest = pages.filter((p) => p.id !== id)
-    const index = rest.findIndex((p) => p.id === target)
-    if (index < 0) return
-    const at = index + Number(after)
-    data?.setMetadataProperty(
-      pagePositionKey(id),
-      pagePosition(rest[at - 1], rest[at])
-    )
-  }
   const nameForm = edit && (
     <form
       className="flex flex-wrap gap-2 p-2 text-sm"
@@ -123,7 +113,7 @@ export function NotebookPageTree({
         className="min-h-0 flex-1 overflow-y-auto p-2"
       >
         <ul>
-          {rows.map(({ id, name }, index) => (
+          {rows.map(({ id, name }) => (
             <li key={id}>
               <div
                 className={
@@ -157,9 +147,9 @@ export function NotebookPageTree({
                   setOver({ id, after: e.clientY > r.top + r.height / 2 })
                 }}
                 onDrop={(e) => {
-                  if (!drag || !over || over.id !== id) return
+                  if (!data || !drag || !over || over.id !== id) return
                   e.preventDefault()
-                  move(drag, id, over.after)
+                  moveNotebookPage(data, pages, drag, id, over.after)
                   setDrag(null)
                   setOver(null)
                 }}
@@ -218,37 +208,12 @@ export function NotebookPageTree({
                         }
                       }}
                     >
-                      <DropdownMenu.Item
-                        onSelect={() => setEdit({ id, rename: true, name })}
-                      >
-                        Rename
-                      </DropdownMenu.Item>
-                      {id && (
-                        <>
-                          <DropdownMenu.Item
-                            disabled={!index}
-                            onSelect={() => move(id, rows[index - 1].id, false)}
-                          >
-                            Move earlier
-                          </DropdownMenu.Item>
-                          <DropdownMenu.Item
-                            disabled={index === rows.length - 1}
-                            onSelect={() => move(id, rows[index + 1].id, true)}
-                          >
-                            Move later
-                          </DropdownMenu.Item>
-                          <DropdownMenu.Item
-                            onSelect={() =>
-                              data.setMetadataProperty(
-                                pageDeletedKey(id),
-                                'true'
-                              )
-                            }
-                          >
-                            Remove page and keep cells
-                          </DropdownMenu.Item>
-                        </>
-                      )}
+                      <NotebookPageMenuItems
+                        pages={pages}
+                        id={id}
+                        data={data}
+                        rename={() => setEdit({ id, rename: true, name })}
+                      />
                     </DropdownMenu.Content>
                   </DropdownMenu.Root>
                 )}
