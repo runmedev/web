@@ -163,7 +163,7 @@ describe('WorkspaceExplorer current document handling', () => {
       type: NotebookStoreItemType.File,
     })
     mocks.isDriveItemUri.mockReset()
-    mocks.isDriveItemUri.mockReturnValue(false)
+    mocks.isDriveItemUri.mockImplementation((uri: string) => uri.startsWith('https://drive.google.com/'))
     mocks.openNotebook.mockReset()
     mocks.showDocument.mockReset()
     mocks.addItem.mockReset()
@@ -1127,49 +1127,19 @@ describe('WorkspaceExplorer current document handling', () => {
     })
   })
 
-  it('rejects a non-notebook JSON file from a filesystem workspace', async () => {
-    const rootUri = 'fs://workspace/test/dir/'
-    const fileUri = 'fs://workspace/test/file/unrelated.json'
-    mocks.workspaceItems = [rootUri]
-    mocks.fsStore = {
-      getMetadata: vi.fn(async () => ({
-        uri: rootUri,
-        name: 'Filesystem Root',
-        type: NotebookStoreItemType.Folder,
-        children: [],
-        parents: [],
-      })),
-      list: vi.fn(async () => [
-        {
-          uri: fileUri,
-          name: 'unrelated.json',
-          type: NotebookStoreItemType.File,
-          children: [],
-          parents: [rootUri],
-        },
-      ]),
-      loadContent: vi.fn(async () => JSON.stringify({ unrelated: 'document' })),
-      createContent: vi.fn(),
-    }
-
-    render(<WorkspaceExplorer />)
-
-    await screen.findByText('Filesystem Root')
-    fireEvent.click(screen.getAllByRole('button', { name: 'Collapse folder' })[0])
-    fireEvent.contextMenu(await screen.findByText('unrelated.json'))
-    fireEvent.click(
-      screen.getByRole('button', {
-        name: 'Save as Runme Notebook (.runme)',
-      })
-    )
-
-    await waitFor(() => {
-      expect(mocks.fsStore.loadContent).toHaveBeenCalledWith(fileUri)
-      expect(mocks.fsStore.createContent).not.toHaveBeenCalled()
+  it('reads a mounted filesystem directory through its local mirror', async () => {
+    const root = 'local://folder/mounted'
+    mocks.workspaceItems = [root]
+    mocks.store.getMetadata.mockResolvedValue({
+      uri: root, name: 'Filesystem Root', type: NotebookStoreItemType.Folder,
+      remoteUri: 'fs://workspace/test/dir/', children: [], parents: [],
     })
-    expect(
-      await screen.findByText('Legacy .json file is not a Runme notebook')
-    ).toBeTruthy()
+    mocks.fsStore = { list: vi.fn() }
+    render(<WorkspaceExplorer />)
+    fireEvent.contextMenu(await screen.findByText('Filesystem Root'))
+    expect(screen.getByText('New Notebook (.runme)')).toBeTruthy()
+    expect(screen.queryByText('New Google Drive Folder')).toBeNull()
+    expect(mocks.fsStore.list).not.toHaveBeenCalled()
   })
 
   it('does not offer conversion for an existing .runme notebook', async () => {

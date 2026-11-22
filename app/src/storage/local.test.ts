@@ -1306,7 +1306,11 @@ describe('LocalNotebooks operation-log storage', () => {
     const disk = f.document([f.a, f.b])
     const loadContent = vi.fn(async () => disk)
     f.store.setFilesystemStore({
-      listWorkspaces: async () => [{ id: 'active', mounted: true }, { id: 'old', mounted: false }],
+      listWorkspaces: async () => [{ id: 'active', name: 'Active', mounted: true }, { id: 'old', mounted: false }],
+      list: async (uri: string) => {
+        expect(uri).toBe('fs://workspace/active/dir/')
+        return [{ type: NotebookStoreItemType.File, uri: 'fs://workspace/active/file/shared.runme', name: 'shared.runme' }]
+      },
       loadContent,
       saveContent: vi.fn(),
     } as never)

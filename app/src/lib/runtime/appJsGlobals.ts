@@ -515,9 +515,11 @@ export function createAppJsGlobals({
       return message
     }
 
-    void store
-      .openWorkspace()
-      .then((workspaceRootUri) => {
+    void window.showDirectoryPicker!({ mode: "readwrite" })
+      .then(async (handle) => {
+        const owner = resolveLocalMirrorStore()
+        if (!owner) throw new Error("Notebook storage is unavailable")
+        const workspaceRootUri = await owner.mountFilesystemFolder(handle)
         if (!getWorkspaceItems().includes(workspaceRootUri)) {
           addWorkspaceItem(workspaceRootUri)
         }
@@ -532,6 +534,13 @@ export function createAppJsGlobals({
       })
 
     return 'Opening directory picker...'
+  }
+
+  const destinationFolder = async (requested?: string) => {
+    const candidates = requested ? [requested] : getWorkspaceItems().filter(uri => uri.startsWith('local://folder/') && uri !== LOCAL_FOLDER_URI)
+    if (candidates.length === 1 && candidates[0] !== LOCAL_FOLDER_URI &&
+        (await resolveLocalMirrorStore().getMetadata(candidates[0]))?.remoteUri) return candidates[0]
+    throw new Error('Choose a mounted local or Google Drive folder as the destination')
   }
 
   const importMarkdownAndOpen = async () => {
@@ -558,8 +567,8 @@ export function createAppJsGlobals({
     try {
       const selection = getPickedMarkdownSelection(picked.sourceUri)
       const notebook = await deserializeMarkdownToNotebook(selection)
-      const fileName = toImportedNotebookName(picked.name)
-      const created = await store.create(LOCAL_FOLDER_URI, fileName)
+      const fileName = toImportedNotebookName(picked.name).replace(/\.json$/, ".runme")
+      const created = await store.create(await destinationFolder(), fileName)
       await store.save(created.uri, notebook)
       await openNotebookForRuntime(created.uri)
       const message = `Imported ${picked.name} as ${fileName}`
@@ -574,7 +583,7 @@ export function createAppJsGlobals({
 
   const createLocalNotebookAndOpen = async (
     name: string,
-    folderUri: string = LOCAL_FOLDER_URI
+    requestedFolder?: string
   ) => {
     const trimmedName = name?.trim()
     if (!trimmedName) {
@@ -585,6 +594,7 @@ export function createAppJsGlobals({
       throw new Error('Notebook store is not initialized yet.')
     }
 
+    const folderUri = await destinationFolder(requestedFolder)
     const created = await store.create(folderUri, trimmedName)
     if (detectNotebookFileFormat(trimmedName) !== 'runme-operation-log') {
       await store.save(created.uri, createEmptyNotebook())
@@ -942,7 +952,7 @@ export function createAppJsGlobals({
       source:
         remoteUri && isDriveItemUri(remoteUri)
           ? 'drive'
-          : localUri?.startsWith('fs://')
+          : remoteUri?.startsWith('fs://')
             ? 'fs'
             : localUri?.startsWith('local://')
               ? 'local'
@@ -1115,7 +1125,7 @@ export function createAppJsGlobals({
       if (topic && Object.prototype.hasOwnProperty.call(pageHelp, topic))
         return pageHelp[topic as keyof typeof pageHelp]
       if (topic === 'createLocal') {
-        return 'notebooks.createLocal(name, options?: { folderUri?: string }): Promise<NotebookDocument>. Creates a new local notebook, adds it to the open notebook list without changing focus, and returns the notebook document.'
+        return 'notebooks.createLocal(name, options?: { folderUri?: string }): Promise<NotebookDocument>. Creates a notebook in the specified mounted folder (or the only mounted folder), adds it to the open notebook list without changing focus, and returns the notebook document.'
       }
       if (topic === 'appendCell') {
         return 'notebooks.appendCell({ target?, pageId?, at?, kind, languageId?, value?, metadata?, execute?, reason? }): Promise<{ handle, cell }>. Inserts a cell into the current or targeted notebook. kind must be "code" or "markup".'
@@ -1912,7 +1922,7 @@ export function createAppJsGlobals({
         '  await app.getSessionId()',
         '  await app.getSessionID()',
         '  tour.show({ target: "left-nav.google-drive", message: "Click here to connect Google Drive." })',
-        '  await notebooks.createLocal("hello")',
+        '  await notebooks.createLocal("hello.runme", { folderUri })',
         '  console.table(documents.list())',
         '  const doc = await documents.get("local://file/...")',
         '  console.table(await documentation.list())',
@@ -1950,18 +1960,11 @@ export function createAppJsGlobals({
         void importMarkdownAndOpen()
         return 'Opening markdown file picker...'
       },
-      removeFolder: (uri: string) => {
+      removeFolder: async (uri: string) => {
         if (!uri) {
           return 'Usage: explorer.removeFolder(uri)'
         }
-        if (uri.startsWith('fs://')) {
-          const store = ensureFilesystemStore()
-          if (!store) throw new Error('Filesystem storage is unavailable')
-          return store.unmount(uri).then(() => {
-            removeWorkspaceItem(uri)
-            return `Removed: ${uri}`
-          })
-        }
+        await resolveLocalMirrorStore().unmountFolder(uri)
         removeWorkspaceItem(uri)
         return `Removed: ${uri}`
       },
@@ -2052,8 +2055,8 @@ export function createAppJsGlobals({
           throw new Error('Notebook store is not initialized yet.')
         }
         const notebook = await deserializeMarkdownToNotebook(selection)
-        const fileName = toImportedNotebookName(selection.name)
-        const parentUri = targetFolderUri || LOCAL_FOLDER_URI
+        const fileName = toImportedNotebookName(selection.name).replace(/\.json$/, ".runme")
+        const parentUri = await destinationFolder(targetFolderUri)
         const created = await store.create(parentUri, fileName)
         await store.save(created.uri, notebook)
         if (parentUri !== LOCAL_FOLDER_URI && !getWorkspaceItems().includes(parentUri)) {

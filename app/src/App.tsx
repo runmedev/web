@@ -196,7 +196,7 @@ function NotebookStoreInitializer() {
   const { ensureAccessToken, isDriveSyncing } = useGoogleAuth()
   const { store, setStore } = useNotebookStore()
   const { fsStore, setFsStore } = useFilesystemStore()
-  const { state: workspace } = useWorkspace()
+  const { state: workspace, addItem, removeItem } = useWorkspace()
   const instanceRef = useRef<LocalNotebooks | null>(null)
   const previousDriveAvailable = useRef(isDriveSyncing)
   const fsInstanceRef = useRef<FilesystemNotebookStore | null>(null)
@@ -253,13 +253,17 @@ function NotebookStoreInitializer() {
 
   // Migrate pre-existing mounted handles without reviving folders removed in another tab.
   useEffect(() => {
-    if (!fsStore) return
+    if (!fsStore || !store) return
+    let active = true
     for (const uri of workspace.items.filter((item) => item.startsWith('fs://'))) {
-      void fsStore.restoreWorkspace(uri).catch((error) => appLogger.warn('Could not restore mounted folder', {
+      void store.restoreFilesystemFolder(uri).then(localUri => {
+        if (active) { addItem(localUri); removeItem(uri) }
+      }).catch((error) => appLogger.warn('Could not restore mounted folder', {
         attrs: { scope: 'storage.filesystem.sync', error: String(error) },
       }))
     }
-  }, [fsStore, workspace.items])
+    return () => { active = false }
+  }, [fsStore, workspace.items, store, addItem, removeItem])
 
   return null
 }

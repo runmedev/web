@@ -33,7 +33,6 @@ import { explorerSync, syncExplorerFolder } from "../../lib/explorerSync";
 import { appLogger } from "../../lib/logging/runtime";
 import {
   type NotebookFileFormat,
-  convertLegacyNotebookFileToRunme,
   isLegacyNotebookFileName,
   isNotebookFileName,
   notebookFileExtension,
@@ -49,7 +48,6 @@ import {
   NotebookStoreItem,
   NotebookStoreItemType,
 } from "../../storage/notebook";
-import type { StorageBrowser } from "../../storage/browser";
 import {
   FilesystemEntryAlreadyExistsError,
   parseFsUri,
@@ -398,22 +396,6 @@ function EditableTreeNode({
 // in the workspace.
 // In addition to viewing Google Drive folders it also supports "local://" URIs
 // which are stored in the browser's IndexedDB.
-/**
- * Return the explorer source for a given URI.
- * Workspace folder browsing can still target raw upstream adapters. Opening an
- * upstream file mirrors it through LocalNotebooks before an editor tab loads.
- */
-function storeForUri(
-  uri: string,
-  localStore: StorageBrowser | null,
-  fsStoreInstance: StorageBrowser | null,
-): StorageBrowser | null {
-  if (uri.startsWith("fs://")) {
-    return fsStoreInstance;
-  }
-  return localStore;
-}
-
 export function WorkspaceExplorer() {
   const { getItems, addItem, removeItem, persistenceError } = useWorkspace();
   const { store } = useNotebookStore();
@@ -524,27 +506,7 @@ export function WorkspaceExplorer() {
         // Older profiles can still have the former browser-only root in their saved list.
         if (uri === LOCAL_FOLDER_URI) continue;
 
-        // fs:// workspace roots are handled by the filesystem store.
-        if (uri.startsWith("fs://")) {
-          if (!fsStore) {
-            continue;
-          }
-          try {
-            const metadata = await fsStore.getMetadata(uri);
-            const name = metadata?.name ?? uri;
-            const type = metadata?.type ?? NotebookStoreItemType.Folder;
-            if (type !== NotebookStoreItemType.Folder) {
-              continue;
-            }
-            folderCandidates.push({
-              uri,
-              name,
-            });
-          } catch (error) {
-            console.error("Failed to load fs workspace metadata", uri, error);
-          }
-          continue;
-        }
+        if (uri.startsWith("fs://")) continue; // Migrated by NotebookStoreInitializer.
 
         const localUri = uri;
         if (!uri.startsWith("local://")) {
@@ -616,7 +578,7 @@ export function WorkspaceExplorer() {
     return () => {
       cancelled = true;
     };
-  }, [addItem, fsStore, removeItem, store, workspaceUris]);
+  }, [addItem, removeItem, store, workspaceUris]);
 
   useEffect(() => {
     // Coordinate with the global current-doc context. Whenever a Drive-backed
@@ -705,6 +667,7 @@ export function WorkspaceExplorer() {
             name: targetItemUri,
             type: NotebookStoreItemType.File,
             children: [],
+            parents: [],
             remoteUri: undefined,
           } as NotebookStoreItem);
 
@@ -826,8 +789,7 @@ export function WorkspaceExplorer() {
     ) => {
       const request = (listingRequests.current.get(uri) ?? 0) + 1;
       listingRequests.current.set(uri, request);
-      const targetStore = storeForUri(uri, store, fsStore);
-      if (!targetStore) {
+      if (!store) {
         return;
       }
 
@@ -838,49 +800,33 @@ export function WorkspaceExplorer() {
       );
 
       try {
-        let childNodes: TreeNode[];
+        const folderMetadata = await store.getMetadata(uri);
+        if (!folderMetadata || folderMetadata.type !== NotebookStoreItemType.Folder) {
+          throw new Error(`URI ${uri} is not a folder or metadata is missing.`);
+        }
 
-        if (uri.startsWith("fs://")) {
-          // Filesystem store: use list() which returns items directly.
-          const items = await targetStore.list(uri);
-          childNodes = items.map((item) => {
-            if (item.type === NotebookStoreItemType.Folder) {
-              return createFolderNode(item.uri, item.name, {
-                parentUri: uri,
-              });
+        const childNodes: TreeNode[] = [];
+        for (const childUri of folderMetadata.children) {
+          const childMetadata = await store.getMetadata(childUri);
+          if (childMetadata?.type === NotebookStoreItemType.Folder) {
+            childNodes.push(
+              createFolderNode(childMetadata.uri, childMetadata.name, {
+                remoteUri: childMetadata.remoteUri,
+                parentUri: folderMetadata.uri,
+              }),
+            );
+          } else if (childMetadata?.type === NotebookStoreItemType.File) {
+            if (
+              folderMetadata.remoteUri &&
+              !isVisibleDocumentFile(childMetadata.name)
+            ) {
+              continue;
             }
-            return createFileNode(item, { parentUri: uri });
-          });
-        } else {
-          // Local/Drive store: use getMetadata() + children array.
-          const folderMetadata = await targetStore.getMetadata(uri);
-          if (!folderMetadata || folderMetadata.type !== NotebookStoreItemType.Folder) {
-            throw new Error(`URI ${uri} is not a folder or metadata is missing.`);
-          }
-
-          childNodes = [];
-          for (const childUri of folderMetadata.children) {
-            const childMetadata = await targetStore.getMetadata(childUri);
-            if (childMetadata?.type === NotebookStoreItemType.Folder) {
-              childNodes.push(
-                createFolderNode(childMetadata.uri, childMetadata.name, {
-                  remoteUri: childMetadata.remoteUri,
-                  parentUri: folderMetadata.uri,
-                }),
-              );
-            } else if (childMetadata?.type === NotebookStoreItemType.File) {
-              if (
-                folderMetadata.remoteUri &&
-                !isVisibleDocumentFile(childMetadata.name)
-              ) {
-                continue;
-              }
-              childNodes.push(
-                createFileNode(childMetadata, { parentUri: folderMetadata.uri })
-              )
-            } else {
-              childNodes.push(createPlaceholderNode(childUri, "Unknown item"));
-            }
+            childNodes.push(
+              createFileNode(childMetadata, { parentUri: folderMetadata.uri })
+            )
+          } else {
+            childNodes.push(createPlaceholderNode(childUri, "Unknown item"));
           }
         }
 
@@ -930,7 +876,7 @@ export function WorkspaceExplorer() {
         );
       }
     },
-    [fsStore, store],
+    [store],
   );
 
   const refreshFolder = useCallback(async (
@@ -941,9 +887,9 @@ export function WorkspaceExplorer() {
     // Protect local additions/removals made during the remote request too, not
     // just those made while reading the resulting local metadata.
     await syncExplorerFolder(uri, store, () => fetchChildren(uri, true, mutationVersion));
-    const metadata = await (uri.startsWith("fs://") ? fsStore : store)?.getMetadata(uri);
+    const metadata = await store.getMetadata(uri);
     if (metadata) setTreeNodes((nodes) => updateNodeMetadata(nodes, uri, { name: metadata.name }));
-  }, [store, fsStore, fetchChildren]);
+  }, [store, fetchChildren]);
   const refreshFolderRef = useRef(refreshFolder);
   refreshFolderRef.current = refreshFolder;
 
@@ -964,7 +910,7 @@ export function WorkspaceExplorer() {
       },
       refresh: (uri) => refreshFolderRef.current(uri),
     });
-  }, [store, fsStore]);
+  }, [store]);
 
   /** Manual sync reports partial failures while the timer stays unobtrusive. */
   const handleSync = async () => {
@@ -983,13 +929,12 @@ export function WorkspaceExplorer() {
 
   const handleFileOpen = useCallback(
     async (nodeData: TreeNode) => {
-      const targetStore = storeForUri(nodeData.uri, store, fsStore);
-      if (!targetStore) {
+      if (!store) {
         return;
       }
       try {
         const uri = nodeData.uri;
-        const item = await targetStore.getMetadata(uri);
+        const item = await store.getMetadata(uri);
         if (!item) {
           console.error("Notebook metadata missing for", uri);
           return;
@@ -1020,7 +965,7 @@ export function WorkspaceExplorer() {
         );
       }
     },
-    [fsStore, openNotebook, setCurrentDoc, showDocument, store],
+    [openNotebook, setCurrentDoc, showDocument, store],
   );
 
   const handleCreateExcalidrawDocument = useCallback(
@@ -1082,15 +1027,14 @@ export function WorkspaceExplorer() {
       folderRowId: string,
       format: NotebookFileFormat = 'runme-operation-log'
     ) => {
-      const targetStore = storeForUri(folderUri, store, fsStore)
-      if (!targetStore) {
+      if (!store) {
         return;
       }
       try {
         treeRef.current?.open(folderRowId)
         const timestamp = formatShortTimestamp(new Date())
         const name = `untitled-${timestamp}${notebookFileExtension(format)}`
-        const newItem = await targetStore.create(folderUri, name)
+        const newItem = await store.create(folderUri, name)
         markOnboardingNotebookCreated({
           uri: newItem.uri,
           name: newItem.name,
@@ -1119,7 +1063,7 @@ export function WorkspaceExplorer() {
         )
       }
     },
-    [fetchChildren, fsStore, store],
+    [fetchChildren, store],
   );
 
   const handleCreateDriveFolder = useCallback(
@@ -1166,7 +1110,7 @@ export function WorkspaceExplorer() {
         let isDriveBacked = sourceRemoteUri
           ? isDriveItemUri(sourceRemoteUri)
           : false
-        if (!isDriveBacked && !menu.uri.startsWith('fs://') && store) {
+        if (!isDriveBacked && store) {
           const parent = await store.getMetadata(menu.parentUri)
           const parentRemoteUri = parent?.remoteUri
           isDriveBacked = parentRemoteUri
@@ -1177,30 +1121,8 @@ export function WorkspaceExplorer() {
           await ensureAccessToken({ interactive: true })
         }
 
-        let converted: NotebookStoreItem
-        if (menu.uri.startsWith('fs://')) {
-          if (!fsStore) {
-            throw new Error('Filesystem notebook storage is not initialized')
-          }
-          const content = await fsStore.loadContent(menu.uri)
-          const file = await convertLegacyNotebookFileToRunme(
-            content,
-            menu.name
-          )
-          converted = await fsStore.createContent(
-            menu.parentUri,
-            file.fileName,
-            file.content
-          )
-        } else {
-          if (!store) {
-            throw new Error('Notebook storage is not initialized')
-          }
-          converted = await store.convertLegacyNotebookToRunme(
-            menu.uri,
-            menu.parentUri
-          )
-        }
+        if (!store) throw new Error('Notebook storage is not initialized')
+        const converted = await store.convertLegacyNotebookToRunme(menu.uri, menu.parentUri)
 
         treeRef.current?.open(menu.parentRowId)
         await fetchChildren(menu.parentUri)
@@ -1224,7 +1146,7 @@ export function WorkspaceExplorer() {
         showToast({ message, tone: 'error' })
       }
     },
-    [ensureAccessToken, fetchChildren, fsStore, store]
+    [ensureAccessToken, fetchChildren, store]
   )
 
   const handleStartRename = useCallback((rowId: string) => {
@@ -1396,8 +1318,7 @@ function formatShortTimestamp(date: Date): string {
     }) => {
       void id;
       const target = node.data;
-      const targetStore = storeForUri(target.uri, store, fsStore);
-      if (!targetStore) {
+      if (!store) {
         node.reset();
         return;
       }
@@ -1424,7 +1345,6 @@ function formatShortTimestamp(date: Date): string {
         }
         let renamedItem: NotebookStoreItem;
         if (
-          targetStore === store &&
           target.remoteUri &&
           isDriveItemUri(target.remoteUri)
         ) {
@@ -1437,7 +1357,7 @@ function formatShortTimestamp(date: Date): string {
             target.remoteUri,
           );
         } else {
-          renamedItem = await targetStore.rename(target.uri, nextName);
+          renamedItem = await store.rename(target.uri, nextName);
         }
         appLogger.info("Renamed workspace item", {
           attrs: {
@@ -1475,7 +1395,7 @@ function formatShortTimestamp(date: Date): string {
         node.reset();
       }
     },
-    [ensureAccessToken, fetchChildren, fsStore, store],
+    [ensureAccessToken, fetchChildren, store],
   );
 
   const handleMove = useCallback(
@@ -1566,11 +1486,11 @@ function formatShortTimestamp(date: Date): string {
   );
 
   const handleOpenLocalFolder = useCallback(async () => {
-    if (!fsStore) {
+    if (!fsStore || !store) {
       return;
     }
     try {
-      const workspaceRootUri = await fsStore.openWorkspace();
+      const workspaceRootUri = await store.mountFilesystemFolder(await window.showDirectoryPicker!({ mode: "readwrite" }));
       if (!getItems().includes(workspaceRootUri)) {
         addItem(workspaceRootUri);
       }
@@ -1583,7 +1503,7 @@ function formatShortTimestamp(date: Date): string {
       console.error("Failed to open local folder", error);
       setErrorMessage("Unable to open folder. Please try again.");
     }
-  }, [addItem, fsStore, getItems]);
+  }, [addItem, fsStore, getItems, store]);
 
   const handleCopyShareLink = useCallback(async (remoteUri: string) => {
     try {
@@ -1857,7 +1777,7 @@ function formatShortTimestamp(date: Date): string {
         >
           {contextMenu.type === NotebookStoreItemType.File ? (
             <>
-              {!contextMenu.uri.startsWith("fs://") && (
+              {!contextMenu.remoteUri?.startsWith("fs://") && (
                 <button
                   type="button"
                   className="ctx-menu-item"
@@ -1924,7 +1844,7 @@ function formatShortTimestamp(date: Date): string {
               >
                 New Notebook (.runme)
               </button>
-              {!contextMenu.uri.startsWith("fs://") && (
+              {!contextMenu.remoteUri?.startsWith("fs://") && (
                 <button
                   type="button"
                   className="ctx-menu-item"
@@ -1944,7 +1864,7 @@ function formatShortTimestamp(date: Date): string {
                   New Jupyter Notebook (.ipynb)
                 </button>
               )}
-              {!contextMenu.uri.startsWith("fs://") && (
+              {!contextMenu.remoteUri?.startsWith("fs://") && (
                 <button
                   type="button"
                   className="ctx-menu-item"
@@ -1968,7 +1888,7 @@ function formatShortTimestamp(date: Date): string {
                   New Excalidraw Diagram
                 </button>
               )}
-              {!contextMenu.uri.startsWith("fs://") && (
+              {!contextMenu.remoteUri?.startsWith("fs://") && (
                 <button
                   type="button"
                   className="ctx-menu-item"
@@ -1988,7 +1908,7 @@ function formatShortTimestamp(date: Date): string {
                   Legacy Runme Notebook (.json)
                 </button>
               )}
-              {contextMenu.remoteUri && (
+              {contextMenu.remoteUri && isDriveItemUri(contextMenu.remoteUri) && (
                 <button
                   type="button"
                   className="ctx-menu-item"
@@ -2002,7 +1922,7 @@ function formatShortTimestamp(date: Date): string {
                   Compare with upstream
                 </button>
               )}
-              {contextMenu.remoteUri && (
+              {contextMenu.remoteUri && isDriveItemUri(contextMenu.remoteUri) && (
                 <button
                   type="button"
                   className="ctx-menu-item"
@@ -2010,13 +1930,13 @@ function formatShortTimestamp(date: Date): string {
                   onClick={(event) => {
                     event.stopPropagation();
                     setContextMenu(null);
-                    void handleCopyShareLink(contextMenu.remoteUri);
+                    void handleCopyShareLink(contextMenu.remoteUri!);
                   }}
                 >
                   Copy Share Link
                 </button>
               )}
-              {contextMenu.remoteUri && (
+              {contextMenu.remoteUri && isDriveItemUri(contextMenu.remoteUri) && (
                 <button
                   type="button"
                   className="ctx-menu-item"
@@ -2026,14 +1946,14 @@ function formatShortTimestamp(date: Date): string {
                     setContextMenu(null);
                     void handleCopyMarkdownLink(
                       contextMenu.name,
-                      contextMenu.remoteUri,
+                      contextMenu.remoteUri!,
                     );
                   }}
                 >
                   Copy Markdown Link
                 </button>
               )}
-              {contextMenu.remoteUri && (
+              {contextMenu.remoteUri && isDriveItemUri(contextMenu.remoteUri) && (
                 <button
                   type="button"
                   className="ctx-menu-item text-red-600"
@@ -2048,7 +1968,7 @@ function formatShortTimestamp(date: Date): string {
                   Move to Google Drive Trash
                 </button>
               )}
-              {contextMenu.remoteUri && (
+              {contextMenu.remoteUri && isDriveItemUri(contextMenu.remoteUri) && (
                 <a
                   className="ctx-menu-item"
                   href={contextMenu.remoteUri}
@@ -2065,7 +1985,7 @@ function formatShortTimestamp(date: Date): string {
             </>
           ) : contextMenu.type === NotebookStoreItemType.Folder ? (
             <>
-              {!contextMenu.uri.startsWith("fs://") && (
+              {!contextMenu.remoteUri?.startsWith("fs://") && (
                 <button
                   type="button"
                   className="ctx-menu-item"
@@ -2086,7 +2006,7 @@ function formatShortTimestamp(date: Date): string {
                   Sync
                 </button>
               )}
-              {contextMenu.remoteUri && (
+              {contextMenu.remoteUri && isDriveItemUri(contextMenu.remoteUri) && (
                 <button
                   type="button"
                   className="ctx-menu-item"
@@ -2111,7 +2031,7 @@ function formatShortTimestamp(date: Date): string {
               >
                 New Notebook (.runme)
               </button>
-              {!contextMenu.uri.startsWith("fs://") && (
+              {!contextMenu.remoteUri?.startsWith("fs://") && (
                 <button
                   type="button"
                   className="ctx-menu-item"
@@ -2129,7 +2049,7 @@ function formatShortTimestamp(date: Date): string {
                   New Jupyter Notebook (.ipynb)
                 </button>
               )}
-              {contextMenu.remoteUri && (
+              {contextMenu.remoteUri && isDriveItemUri(contextMenu.remoteUri) && (
                 <button
                   type="button"
                   className="ctx-menu-item"
@@ -2146,7 +2066,7 @@ function formatShortTimestamp(date: Date): string {
                   New Excalidraw Diagram
                 </button>
               )}
-              {contextMenu.remoteUri && (
+              {contextMenu.remoteUri && isDriveItemUri(contextMenu.remoteUri) && (
                 <button
                   type="button"
                   className="ctx-menu-item"
@@ -2160,7 +2080,7 @@ function formatShortTimestamp(date: Date): string {
                   New Google Drive Folder
                 </button>
               )}
-              {!contextMenu.uri.startsWith("fs://") && (
+              {!contextMenu.remoteUri?.startsWith("fs://") && (
                 <button
                   type="button"
                   className="ctx-menu-item"
@@ -2178,7 +2098,7 @@ function formatShortTimestamp(date: Date): string {
                   Legacy Runme Notebook (.json)
                 </button>
               )}
-              {contextMenu.remoteUri && (
+              {contextMenu.remoteUri && isDriveItemUri(contextMenu.remoteUri) && (
                 <button
                   type="button"
                   className="ctx-menu-item"
@@ -2186,16 +2106,16 @@ function formatShortTimestamp(date: Date): string {
                   onClick={(event) => {
                     event.stopPropagation();
                     setContextMenu(null);
-                    void handleCopyShareLink(contextMenu.remoteUri);
+                    void handleCopyShareLink(contextMenu.remoteUri!);
                   }}
                 >
                   Copy Share Link
                 </button>
               )}
-              {!contextMenu.parentUri && contextMenu.uri.startsWith("fs://") && fsStore && (
+              {!contextMenu.parentUri && contextMenu.remoteUri?.startsWith("fs://") && fsStore && (
                 <button type="button" className="ctx-menu-item" onClick={() => {
                   setContextMenu(null);
-                  void fsStore.requestPermission(parseFsUri(contextMenu.uri).workspaceId)
+                  void fsStore.requestPermission(parseFsUri(contextMenu.remoteUri!).workspaceId)
                     .then((granted) => {
                       if (!granted) throw new Error("Folder permission was denied.");
                       return refreshFolder(contextMenu.uri);
@@ -2209,8 +2129,8 @@ function formatShortTimestamp(date: Date): string {
                   onMouseDown={(event) => event.stopPropagation()}
                   onClick={(event) => {
                     event.stopPropagation();
-                    if (contextMenu.uri.startsWith("fs://") && fsStore) {
-                      void fsStore.unmount(contextMenu.uri).then(() => removeItem(contextMenu.uri))
+                    if (store) {
+                      void store.unmountFolder(contextMenu.uri).then(() => removeItem(contextMenu.uri))
                         .catch((error) => setErrorMessage(String(error)));
                     } else removeItem(contextMenu.uri);
                     setContextMenu(null);
@@ -2219,7 +2139,7 @@ function formatShortTimestamp(date: Date): string {
                   Remove "{contextMenu.name}"
                 </button>
               )}
-              {contextMenu.remoteUri && (
+              {contextMenu.remoteUri && isDriveItemUri(contextMenu.remoteUri) && (
                 <a
                   className="ctx-menu-item"
                   href={contextMenu.remoteUri}

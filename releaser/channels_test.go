@@ -57,7 +57,7 @@ func TestRuntimePublicationAndStablePin(t *testing.T) {
 		dist := desiredBuildFixture(t, inputs)
 		buildID, _ := inputs.id()
 		id := inputs.WebCommit + "-" + buildID
-		metadata := map[string]any{"recoveredControlFormat": 1, "tabRecoveryFormat": 1, "tabAdmissionFormat": 1, "storageControlFormat": 1, "releaseId": id, "appEntry": "app.js", "styles": []string{}, "requiredCapabilities": []string{"durable-prepare-v1", "epoch-fence-v1", "owner-lock-v1"}, "owner": map[string]any{"buildId": strings.Split(id, "-")[1], "entry": "storage-owner.js", "rpcMin": 8, "rpcMax": 8}, "launcherProtocol": map[string]any{"min": 1, "max": 1}, "storageCompatibilityId": "runme-schema9-oplog2-payload1-console1"}
+		metadata := map[string]any{"recoveredControlFormat": 1, "tabRecoveryFormat": 1, "tabAdmissionFormat": 1, "storageControlFormat": 1, "releaseId": id, "appEntry": "app.js", "styles": []string{}, "requiredCapabilities": []string{"durable-prepare-v1", "epoch-fence-v1", "owner-lock-v1"}, "owner": map[string]any{"buildId": strings.Split(id, "-")[1], "entry": "storage-owner.js", "rpcMin": 9, "rpcMax": 9}, "launcherProtocol": map[string]any{"min": 1, "max": 1}, "storageCompatibilityId": "runme-schema9-oplog2-payload1-console1"}
 		receipt, _ := json.Marshal(releaseAcceptance{1, id, "controlled-releases-v1"})
 		writeArchiveFixture(t, dist, "release-acceptance.json", string(receipt))
 		raw, _ := json.Marshal(metadata)

@@ -63,7 +63,7 @@ function buildFsUri(
 /**
  * Build the root URI for a workspace directory.
  */
-function buildWorkspaceRootUri(workspaceId: string): string {
+export function buildWorkspaceRootUri(workspaceId: string): string {
   return `fs://workspace/${workspaceId}/dir/${encodeURIComponent("")}`;
 }
 
@@ -284,6 +284,10 @@ export class FilesystemNotebookStore {
     }
 
     const dirHandle = await window.showDirectoryPicker!({ mode: "readwrite" });
+    return this.mountDirectory(dirHandle)
+  }
+
+  async mountDirectory(dirHandle: FileSystemDirectoryHandle): Promise<string> {
     const register = async () => {
       for (const workspace of await this.listWorkspaces()) {
         if (await dirHandle.isSameEntry?.(workspace.rootHandle)) {
@@ -340,6 +344,7 @@ export class FilesystemNotebookStore {
 
     const state = await ws.rootHandle.requestPermission!({ mode: "readwrite" });
     await this.db.workspaces.update(workspaceId, {
+      rootHandle: ws.rootHandle,
       permissionState: state,
       lastOpened: Date.now(),
     });
@@ -350,13 +355,16 @@ export class FilesystemNotebookStore {
   /** Adopt only legacy roots still present in the saved explorer configuration. */
   async restoreWorkspace(uri: string): Promise<void> {
     const { workspaceId } = parseFsUri(uri)
-    await this.db.workspaces.where('id').equals(workspaceId)
-      .filter((ws) => ws.mounted === undefined).modify({ mounted: true })
+    await this.db.transaction('rw', this.db.workspaces, async () => {
+      const ws = await this.db.workspaces.get(workspaceId)
+      if (ws && ws.mounted === undefined) await this.db.workspaces.put({ ...ws, mounted: true })
+    })
   }
 
   /** Retain the handle and mirrors so reconnect can restore the same identities. */
   async unmount(uri: string): Promise<void> {
-    await this.db.workspaces.update(parseFsUri(uri).workspaceId, { mounted: false })
+    const ws = await this.db.workspaces.get(parseFsUri(uri).workspaceId)
+    if (ws) await this.db.workspaces.update(ws.id, { mounted: false, rootHandle: ws.rootHandle })
   }
 
   /** List known workspaces, most recently opened first. */
@@ -490,7 +498,6 @@ export class FilesystemNotebookStore {
     await this.db.entries.update(recId, {
       lastKnownMtime: file.lastModified,
       lastKnownSize: file.size,
-      cachedDoc: text,
     });
 
     const decoded = decodeNotebookFile(text, parsed.relativePath)
@@ -624,7 +631,6 @@ export class FilesystemNotebookStore {
           handle: fileHandle,
           lastKnownMtime: file.lastModified,
           lastKnownSize: file.size,
-          cachedDoc: content,
         });
 
         this.baseRevisions.set(recId, {
@@ -742,6 +748,14 @@ export class FilesystemNotebookStore {
       parentRelPath,
     );
 
+    if (safeName === oldName) return (await this.getMetadata(uri))!
+    try {
+      await dirHandle.getFileHandle(safeName)
+      throw new FilesystemEntryAlreadyExistsError(safeName)
+    } catch (error) {
+      if (!isNotFoundError(error)) throw error
+    }
+
     // Create the new file and write the contents.
     const newFileHandle = await dirHandle.getFileHandle(safeName, { create: true });
     const writable = await newFileHandle.createWritable();
@@ -773,7 +787,6 @@ export class FilesystemNotebookStore {
       handle: newFileHandle,
       lastKnownMtime: newFile.lastModified,
       lastKnownSize: newFile.size,
-      cachedDoc: content,
     });
 
     this.baseRevisions.set(newRecId, {
@@ -926,7 +939,6 @@ export class FilesystemNotebookStore {
       await this.db.entries.update(recId, {
         lastKnownMtime: updated.lastModified,
         lastKnownSize: updated.size,
-        cachedDoc: content,
       })
     })
   }
@@ -985,16 +997,11 @@ export class FilesystemNotebookStore {
     workspaceId: string,
     relativePath: string,
   ): Promise<FileSystemDirectoryHandle> {
-    const recId = entryRecordId(workspaceId, relativePath);
-    const entry = await this.db.entries.get(recId);
-    if (entry && entry.kind === "directory") {
-      return entry.handle as FileSystemDirectoryHandle;
-    }
-
+    // Resolve from the mount each time. A cached child handle can follow a
+    // directory that was moved outside the mount, or outlive its permission.
     const ws = await this.db.workspaces.get(workspaceId);
-    if (!ws) {
-      throw new Error(`Workspace not found: ${workspaceId}`);
-    }
+    if (!ws) throw new Error(`Workspace not found: ${workspaceId}`)
+    if (ws.mounted === false) throw new Error('Folder disconnected. Mount it again to resume sync.')
 
     if (!relativePath) {
       return ws.rootHandle;
@@ -1005,17 +1012,6 @@ export class FilesystemNotebookStore {
     for (const segment of segments) {
       dirHandle = await dirHandle.getDirectoryHandle(segment);
     }
-
-    // Cache.
-    await this.db.entries.put({
-      id: recId,
-      workspaceId,
-      relativePath,
-      kind: "directory",
-      handle: dirHandle,
-      lastKnownMtime: 0,
-      lastKnownSize: 0,
-    });
 
     return dirHandle;
   }

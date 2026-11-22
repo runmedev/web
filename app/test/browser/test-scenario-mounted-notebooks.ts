@@ -26,10 +26,14 @@ async function main() {
       await writer.write(content)
       await writer.close()
       Object.defineProperty(window, 'showDirectoryPicker', { value: async () => dir, configurable: true })
+      const nested = await dir.getDirectoryHandle('team', { create: true })
+      const sibling = await (await nested.getFileHandle('closed.runme', { create: true })).createWritable()
+      await sibling.write(content)
+      await sibling.close()
       return content
     }, { folderName, name })
     await page.getByRole('button', { name: 'Open local folder', exact: true }).click()
-    const root = page.locator('[data-node-id^="fs://"]').filter({ hasText: folderName }).first()
+    const root = page.locator('[data-node-id^="local://folder/"]').filter({ hasText: folderName }).first()
     await root.getByRole('button', { name: 'Expand folder' }).click()
     await page.getByText(name, { exact: true }).dblclick()
     const tab = page.getByRole('tab', { name, exact: true })
@@ -53,8 +57,26 @@ async function main() {
       await writer.close()
     }, bytes.toString())
     await page.getByRole('button', { name: 'Open local folder', exact: true }).click()
-    const downloads = page.locator('[data-node-id^="fs://"]').filter({ hasText: 'Downloads' }).first()
+    const downloads = page.locator('[data-node-id^="local://folder/"]').filter({ hasText: 'Downloads' }).first()
     await downloads.getByRole('button', { name: 'Expand folder' }).click()
+    await page.evaluate(async () => {
+      const path = '/src/lib/runtime/AppState.ts'
+      const { appState } = await import(path)
+      const store = appState.localNotebooks
+      const roots = await Promise.all(appState.getWorkspaceItems().map((uri: string) => store.getMetadata(uri)))
+      const root = roots.find(item => item?.name === 'Downloads')
+      const created = await store.create(root.uri, 'created.runme')
+      if (!created.uri.startsWith('local://file/')) throw new Error('Expected a local file URI')
+      const dir = await (await navigator.storage.getDirectory()).getDirectoryHandle('Downloads')
+      if (!(await (await dir.getFileHandle('created.runme')).getFile()).size) throw new Error('Expected notebook bytes on disk')
+      try {
+        await store.create('local://folder/local', 'orphan.runme')
+      } catch (error) {
+        if (String(error).includes('Choose a mounted')) return
+        throw error
+      }
+      throw new Error('Creation without an upstream should fail')
+    })
     await page.getByText('downloaded.runme', { exact: true }).dblclick()
     await page.getByRole('tab', { name: 'downloaded.runme', exact: true }).click()
     await page.getByRole('button', { name: 'Close sample.runme', exact: true }).click()
@@ -71,16 +93,19 @@ async function main() {
       const { appState } = await import(runtimePath)
       const { parseOperationLog, createRunmeOperation, serializeOperationLog } = await import(codecPath)
       const dir = await (await navigator.storage.getDirectory()).getDirectoryHandle(folderName)
-      const file = await dir.getFileHandle('closed.runme', { create: true })
+      const file = await (await dir.getDirectoryHandle('team')).getFileHandle('closed.runme')
       async function write(content: string) {
         const writer = await file.createWritable()
         await writer.write(content)
         await writer.close()
       }
-      await write(original)
-      const mount = (await appState.filesystemStore.listWorkspaces()).find((ws: { name: string }) => ws.name === folderName)
-      const uri = await appState.localNotebooks.addFile(`fs://workspace/${mount.id}/file/closed.runme`, 'closed.runme')
-      await appState.localNotebooks.load(uri)
+      const store = appState.localNotebooks
+      const roots = await Promise.all(appState.getWorkspaceItems().map((uri: string) => store.getMetadata(uri)))
+      const root = roots.find(item => item?.name === folderName)
+      const children = await Promise.all(root.children.map((uri: string) => store.getMetadata(uri)))
+      const team = children.find(item => item.name === 'team')
+      const [uri] = team.children
+      if (!uri.startsWith('local://file/')) throw new Error('Expected a local mirror of the unopened nested file')
       const log = parseOperationLog(original)
       const operation = createRunmeOperation({
         actorId: 'actor_disk', actorSequence: 1, dependencies: [], knownOperations: [],
@@ -122,7 +147,7 @@ async function main() {
     }, mirror)
     await page.waitForFunction(async (folder) => {
       const dir = await (await navigator.storage.getDirectory()).getDirectoryHandle(folder)
-      const text = await (await (await dir.getFileHandle('closed.runme')).getFile()).text()
+      const text = await (await (await (await dir.getDirectoryHandle('team')).getFileHandle('closed.runme')).getFile()).text()
       return text.includes('browserEdit') && text.includes('externalEdit')
     }, folderName, { polling: 1000, timeout: 150_000 })
     console.log('Verified download, reopen from disk, and bidirectional reconciliation.')
