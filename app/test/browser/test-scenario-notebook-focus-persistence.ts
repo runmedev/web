@@ -237,8 +237,8 @@ try {
   run("agent-browser reload");
   run("agent-browser wait 2400");
 
-  // Double-click selects rendered text. Use the same control as the reviewer.
-  const edit = run("agent-browser find role button click --name 'Edit Markdown' --exact");
+  run(`agent-browser focus '#markdown-rendered-${MARKDOWN_CELL_ID}'`);
+  const edit = run("agent-browser press Escape");
   const editor = run(`agent-browser wait '#markdown-editor-${MARKDOWN_CELL_ID}'`);
   if (edit.status === 0 && editor.status === 0) {
     pass("Opened markdown cell in editor mode");

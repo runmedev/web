@@ -12,6 +12,7 @@ import {
 } from './linkedResource'
 import { recordLinkedResourceUploadFailure } from './linkedResourceMetrics'
 import type { DriveResourceMetadata } from './linkedResourceStore'
+import { CELL_PAGE } from './notebookPages'
 import { ensurePersistentStorage } from './persistentStorage'
 import { appState } from './runtime/AppState'
 import type { NotebookDataLike } from './runtime/runmeConsole'
@@ -22,6 +23,7 @@ export type AttachResourceSource =
   | { kind: 'url'; uri: string }
 
 export type AttachResourceOptions = {
+  pageId?: string
   target: { uri: string }
   folderUri?: string
   mode?: LinkedResourcePresentationMode
@@ -249,6 +251,7 @@ export async function attachResourceToNotebook(
     'runme-resource'
   )
   const cell = createLinkedResourceCell(resource)
+  if (options.pageId) cell.metadata[CELL_PAGE] = options.pageId
   cell.refId = inserted.refId
   notebook.updateCell(cell)
   try {

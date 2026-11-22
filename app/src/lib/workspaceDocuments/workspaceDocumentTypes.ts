@@ -173,6 +173,7 @@ export function isDocumentationDocumentUri(
 export function isRestorableWorkspaceDocument(uri: string): boolean {
   return (
     isNotebookDocumentUri(uri) ||
+    !!parseNotebookPageUri(uri) ||
     isOperationLogSuggestionDocumentUri(uri) ||
     isDocumentationDocumentUri(uri) ||
     isOnboardingDocumentUri(uri)
@@ -224,4 +225,29 @@ export function deriveWorkspaceDocumentTitle(uri: string): string {
     // Fall through to the URI segment heuristic.
   }
   return documentUri.split('/').filter(Boolean).pop() ?? documentUri
+}
+
+/** A workspace address for a page editor sharing the source notebook model. */
+export function notebookPageUri(notebookUri: string, pageId: string): string {
+  return (
+    'page://notebook/' +
+    encodeURIComponent(notebookUri) +
+    '/' +
+    encodeURIComponent(pageId)
+  )
+}
+
+export function parseNotebookPageUri(
+  uri: string
+): { notebookUri: string; pageId: string } | null {
+  const match = /^page:\/\/notebook\/([^/]+)\/([^/]+)$/.exec(uri)
+  if (!match) return null
+  try {
+    const notebookUri = decodeURIComponent(match[1]!)
+    return isNotebookDocumentUri(notebookUri)
+      ? { notebookUri, pageId: decodeURIComponent(match[2]!) }
+      : null
+  } catch {
+    return null
+  }
 }

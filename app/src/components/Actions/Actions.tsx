@@ -1,3 +1,10 @@
+import { CellPageMove, CellPageMoveContext } from './CellPageMove'
+import { NotebookPageTabMenu } from './NotebookPageTabMenu'
+import { CELL_PAGE, notebookPages, resolvePage } from '../../lib/notebookPages'
+import {
+  notebookPageUri,
+  parseNotebookPageUri,
+} from '../../lib/workspaceDocuments/workspaceDocumentTypes'
 import { AGENT_MONITOR_MIME } from '../../lib/agents/types'
 import { outputReferenceSource } from '../../lib/outputReferenceRuntime'
 import { OutputReferenceCell } from './OutputReferenceCell'
@@ -14,6 +21,7 @@ import {
   type DragEvent as ReactDragEvent,
   type MouseEvent as ReactMouseEvent,
   useCallback,
+  useContext,
   useEffect,
   useLayoutEffect,
   useMemo,
@@ -749,6 +757,7 @@ export function Action({
   onStartComment?: (target: CommentDraftTarget) => void
   isDeepLinkTarget?: boolean
 }) {
+  const moveCell = useContext(CellPageMoveContext)
   const { store } = useNotebookStore()
   const { openNotebook, getNotebookData } = useNotebookContext()
   const { showDocument } = useWorkspaceDocumentContext()
@@ -774,20 +783,6 @@ export function Action({
   // Derive runID from the current cell snapshot so clear/reset operations
   // immediately repaint output visibility without requiring a separate listener.
   const runID = cellData.getRunID()
-
-  const handleAddCellBefore = useCallback(() => {
-    if (readOnly) {
-      return
-    }
-    cellData.addBefore(parser_pb.CellKind.CODE, cell?.languageId)
-  }, [cell?.languageId, cellData, readOnly])
-
-  const handleAddCellAfter = useCallback(() => {
-    if (readOnly) {
-      return
-    }
-    cellData.addAfter(parser_pb.CellKind.CODE, cell?.languageId)
-  }, [cell?.languageId, cellData, readOnly])
 
   const updateCellLocal = useCallback(
     (nextCell: parser_pb.Cell) => {
@@ -916,7 +911,8 @@ export function Action({
     const menuWidth = 200
     const menuHeight =
       (shareTargetUri && cell?.refId.trim() ? 164 : 88) +
-      (contextMenu.captureRenderedSelection ? 38 : 0)
+      (contextMenu.captureRenderedSelection ? 38 : 0) +
+      (moveCell ? 38 : 0)
     const left = Math.max(
       0,
       Math.min(contextMenu.x, window.innerWidth - menuWidth)
@@ -926,7 +922,7 @@ export function Action({
       Math.min(contextMenu.y, window.innerHeight - menuHeight)
     )
     return { x: left, y: top }
-  }, [cell?.refId, contextMenu, shareTargetUri])
+  }, [cell?.refId, contextMenu, shareTargetUri, moveCell])
 
   const runCode = useCallback(() => {
     if (readOnly) {
@@ -1680,34 +1676,29 @@ export function Action({
     : 'Copy local link to cell'
   const canCopyCellLink = Boolean(shareTargetUri && cell.refId.trim())
 
+  const moveMenuItem = moveCell && (
+    <button
+      type="button"
+      className="ctx-menu-item"
+      onClick={(event) => {
+        event.stopPropagation()
+        setContextMenu(null)
+        moveCell()
+      }}
+    >
+      Move to page…
+    </button>
+  )
+
   if (isOutputReferenceCell(cell)) {
     return (
       <div
         id={`reference-action-${cell.refId}`}
         className={`group/cell relative flex min-w-0 ${deepLinkTargetClass}`}
+        onContextMenu={moveCell ? handleContextMenu : undefined}
         onFocusCapture={handleFocusCapture}
         data-cell-ref-id={cell.refId}
       >
-        <div className="flex w-7 shrink-0 flex-col items-center justify-between py-1">
-          <button
-            type="button"
-            aria-label="Add cell above"
-            className="cell-add-btn h-5 w-5"
-            disabled={readOnly}
-            onClick={handleAddCellBefore}
-          >
-            <PlusIcon width={10} height={10} />
-          </button>
-          <button
-            type="button"
-            aria-label="Add cell below"
-            className="cell-add-btn h-5 w-5"
-            disabled={readOnly}
-            onClick={handleAddCellAfter}
-          >
-            <PlusIcon width={10} height={10} />
-          </button>
-        </div>
         <div
           id={`reference-body-${cell.refId}`}
           className="relative min-w-0 flex-1"
@@ -1768,6 +1759,14 @@ export function Action({
             </div>
           </OutputReferenceCell>
         </div>
+        {adjustedContextMenu && moveCell && (
+          <div
+            className="ctx-menu"
+            style={{ top: adjustedContextMenu.y, left: adjustedContextMenu.x }}
+          >
+            {moveMenuItem}
+          </div>
+        )}
       </div>
     )
   }
@@ -1782,26 +1781,6 @@ export function Action({
         data-testid="resource-action"
         data-cell-ref-id={cell.refId}
       >
-        <div className="flex w-7 shrink-0 flex-col items-center justify-between py-1">
-          <button
-            type="button"
-            aria-label="Add cell above"
-            className="cell-add-btn h-5 w-5"
-            disabled={readOnly}
-            onClick={handleAddCellBefore}
-          >
-            <PlusIcon width={10} height={10} />
-          </button>
-          <button
-            type="button"
-            aria-label="Add cell below"
-            className="cell-add-btn h-5 w-5"
-            disabled={readOnly}
-            onClick={handleAddCellAfter}
-          >
-            <PlusIcon width={10} height={10} />
-          </button>
-        </div>
         <div className="relative min-w-0 flex-1">
           <ResourceCell cell={cell} />
           {canCopyCellLink && (
@@ -1842,6 +1821,7 @@ export function Action({
                 {contextMenuLinkLabel}
               </button>
             )}
+            {moveMenuItem}
             <button
               type="button"
               className="ctx-menu-item text-red-600"
@@ -1871,30 +1851,6 @@ export function Action({
         data-testid="markdown-action"
         data-cell-ref-id={cell.refId}
       >
-        {/* Left gutter: top + bottom add-cell buttons */}
-        <div
-          id={`markdown-gutter-${cell.refId}`}
-          className="flex w-7 shrink-0 flex-col items-center justify-between py-1"
-        >
-          <button
-            type="button"
-            aria-label="Add cell above"
-            className="cell-add-btn h-5 w-5"
-            disabled={readOnly}
-            onClick={handleAddCellBefore}
-          >
-            <PlusIcon width={10} height={10} />
-          </button>
-          <button
-            type="button"
-            aria-label="Add cell below"
-            className="cell-add-btn h-5 w-5"
-            disabled={readOnly}
-            onClick={handleAddCellAfter}
-          >
-            <PlusIcon width={10} height={10} />
-          </button>
-        </div>
         {/* Cell content */}
         <div className="min-w-0 flex-1">
           <div className="relative w-full min-w-0 max-w-full overflow-hidden">
@@ -2015,6 +1971,7 @@ export function Action({
                 ? 'Comment on selected text'
                 : 'Add Comment'}
             </button>
+            {moveMenuItem}
             <button
               type="button"
               className="ctx-menu-item text-red-600"
@@ -2041,29 +1998,6 @@ export function Action({
         data-testid="html-action"
         data-cell-ref-id={cell.refId}
       >
-        <div
-          id={`html-gutter-${cell.refId}`}
-          className="flex w-7 shrink-0 flex-col items-center justify-between py-1"
-        >
-          <button
-            type="button"
-            aria-label="Add cell above"
-            className="cell-add-btn h-5 w-5"
-            disabled={readOnly}
-            onClick={handleAddCellBefore}
-          >
-            <PlusIcon width={10} height={10} />
-          </button>
-          <button
-            type="button"
-            aria-label="Add cell below"
-            className="cell-add-btn h-5 w-5"
-            disabled={readOnly}
-            onClick={handleAddCellAfter}
-          >
-            <PlusIcon width={10} height={10} />
-          </button>
-        </div>
         <div className="min-w-0 flex-1">
           <div className="relative w-full min-w-0 max-w-full overflow-hidden">
             <HtmlCell
@@ -2142,6 +2076,7 @@ export function Action({
             >
               Add Comment
             </button>
+            {moveMenuItem}
             <button
               type="button"
               className="ctx-menu-item text-red-600"
@@ -2170,31 +2105,6 @@ export function Action({
       data-testid="code-action"
       data-cell-ref-id={cell.refId}
     >
-      {/* Left gutter: top + bottom add-cell buttons */}
-      <div
-        id={`code-gutter-${cell.refId}`}
-        className="flex w-7 shrink-0 flex-col items-center justify-between py-1"
-      >
-        <button
-          type="button"
-          aria-label="Add cell above"
-          className="cell-add-btn h-5 w-5"
-          disabled={readOnly}
-          onClick={handleAddCellBefore}
-        >
-          <PlusIcon width={10} height={10} />
-        </button>
-        <button
-          type="button"
-          aria-label="Add cell below"
-          className="cell-add-btn h-5 w-5"
-          disabled={readOnly}
-          onClick={handleAddCellAfter}
-        >
-          <PlusIcon width={10} height={10} />
-        </button>
-      </div>
-
       {/* One interaction group, with no padded output tray or enclosing card. */}
       <div
         id={`cell-group-${cell.refId}`}
@@ -2470,6 +2380,7 @@ export function Action({
           >
             Add Comment
           </button>
+          {moveMenuItem}
           <button
             type="button"
             className="ctx-menu-item text-red-600"
@@ -2489,6 +2400,7 @@ export function Action({
 
 function NotebookTabContent({
   docUri,
+  initialPage,
   entry,
   activeCell,
   deepLinkCellId,
@@ -2496,6 +2408,7 @@ function NotebookTabContent({
   isWindowFocused,
   onCellFocus,
 }: {
+  initialPage?: string
   docUri: string
   entry: OpenNotebookEntry
   activeCell: NotebookActiveCellState | null
@@ -2556,6 +2469,27 @@ function NotebookTabContent({
   const { commentsPanelOpen, openCommentsPanel, setCommentsPanelOpen } =
     useCommentsPanel()
   const shouldRenderCells = !readOnly || isSelected
+  const [selectedPage, setSelectedPage] = useState(initialPage)
+  const pages = useMemo(
+    () => notebookPages(notebookSnapshot?.notebook.metadata ?? {}),
+    [notebookSnapshot?.notebook.metadata]
+  )
+  const currentPage = resolvePage(selectedPage, pages)
+  const moveDestinations = readOnly
+    ? []
+    : pages.filter((page) => page.id !== currentPage)
+  const pageTitle = pages.find((page) => page.id === initialPage)?.name
+  useEffect(() => {
+    if (initialPage && pageTitle)
+      showDocument(notebookPageUri(docUri, initialPage), { title: pageTitle })
+  }, [docUri, initialPage, pageTitle, showDocument])
+  const linkedPage =
+    deepLinkCellId &&
+    notebookSnapshot?.notebook.cells.find((c) => c.refId === deepLinkCellId)
+      ?.metadata[CELL_PAGE]
+  useEffect(() => {
+    if (deepLinkCellId) setSelectedPage(linkedPage || undefined)
+  }, [linkedPage, deepLinkCellId])
   const cellDatas = useMemo(() => {
     if (!shouldRenderCells) {
       return []
@@ -2567,9 +2501,12 @@ function NotebookTabContent({
       return []
     }
     return (notebookSnapshot.notebook.cells ?? [])
+      .filter(
+        (c) => resolvePage(c?.metadata?.[CELL_PAGE], pages) === currentPage
+      )
       .map((c) => (c?.refId ? notebookData.getCell(c.refId) : null))
       .filter((c): c is CellData => Boolean(c))
-  }, [notebookData, notebookSnapshot, shouldRenderCells])
+  }, [notebookData, notebookSnapshot, shouldRenderCells, pages, currentPage])
   const cellDatasRef = useRef(cellDatas)
   cellDatasRef.current = cellDatas
   const [commentsRemoteUri, setCommentsRemoteUri] = useState<string | null>(
@@ -2859,7 +2796,9 @@ function NotebookTabContent({
       setEmbeddingImage(true)
       try {
         for (const file of files) {
-          await embedImageInNotebook(notebookData, file)
+          await (currentPage
+            ? embedImageInNotebook(notebookData, file, { pageId: currentPage })
+            : embedImageInNotebook(notebookData, file))
         }
         showToast({
           message:
@@ -2877,7 +2816,7 @@ function NotebookTabContent({
         setEmbeddingImage(false)
       }
     },
-    [notebookData, readOnly]
+    [currentPage, notebookData, readOnly]
   )
 
   const handleEmbedImage = useCallback(async () => {
@@ -2916,6 +2855,7 @@ function NotebookTabContent({
             { kind: 'file', value: file, name: file.name },
             {
               target: { uri: docUri },
+              ...(currentPage ? { pageId: currentPage } : {}),
               folderUri,
               onProgress: (uploaded, total) => {
                 setResourceUploadProgress(total > 0 ? uploaded / total : null)
@@ -2945,7 +2885,14 @@ function NotebookTabContent({
         setResourceUploadProgress(null)
       }
     },
-    [docUri, isDriveBacked, notebookData, pickDriveFolder, readOnly]
+    [
+      currentPage,
+      docUri,
+      isDriveBacked,
+      notebookData,
+      pickDriveFolder,
+      readOnly,
+    ]
   )
 
   const retryResourceInsertion = useCallback(async () => {
@@ -2959,6 +2906,7 @@ function NotebookTabContent({
         { kind: 'drive', uri: resourceInsertionRecovery.uri },
         {
           target: { uri: docUri },
+          ...(currentPage ? { pageId: currentPage } : {}),
           title: resourceInsertionRecovery.name,
         }
       )
@@ -2975,7 +2923,7 @@ function NotebookTabContent({
     } finally {
       setAttachingResource(false)
     }
-  }, [docUri, notebookData, readOnly, resourceInsertionRecovery])
+  }, [currentPage, docUri, notebookData, readOnly, resourceInsertionRecovery])
 
   const handleAttachFile = useCallback(async () => {
     try {
@@ -3004,7 +2952,11 @@ function NotebookTabContent({
       await attachResourceToNotebook(
         notebookData,
         { kind: 'drive', uri: picked.uri },
-        { target: { uri: docUri }, title: picked.name }
+        {
+          target: { uri: docUri },
+          ...(currentPage ? { pageId: currentPage } : {}),
+          title: picked.name,
+        }
       )
       showToast({
         message: `Attached ${picked.name} from Google Drive.`,
@@ -3018,7 +2970,7 @@ function NotebookTabContent({
     } finally {
       setAttachingResource(false)
     }
-  }, [docUri, notebookData, pickDriveFile, readOnly])
+  }, [currentPage, docUri, notebookData, pickDriveFile, readOnly])
 
   const handleImageDragOver = useCallback(
     (event: ReactDragEvent<HTMLDivElement>) => {
@@ -3946,6 +3898,33 @@ function NotebookTabContent({
     }
   }, [])
 
+  // A tab identifies a particular page. Never redirect edits from a removed
+  // page to the default page, even when another client deleted it.
+  if (initialPage && notebookSnapshot?.loaded && pageTitle === undefined) {
+    return (
+      <div
+        data-testid="missing-notebook-page"
+        className="p-4 text-sm text-nb-text-muted"
+      >
+        <p>
+          This page is no longer in the notebook. Its cells are on the first
+          page.
+        </p>
+        <Button
+          variant="soft"
+          onClick={() => {
+            const first = pages[0]
+            const uri = first ? notebookPageUri(docUri, first.id) : docUri
+            showDocument(uri, { title: first?.name ?? entry.name })
+            setCurrentDoc(uri)
+          }}
+        >
+          Open first page
+        </Button>
+      </div>
+    )
+  }
+
   if (readOnly && !isSelected) {
     return (
       <div
@@ -4039,7 +4018,7 @@ function NotebookTabContent({
   const ownerSessionId = getNotebookOwnerSessionId(entry.owner)
 
   if (
-    cellDatas.length === 0 &&
+    notebookSnapshot.notebook.cells.length === 0 &&
     isDriveBacked &&
     syncState?.status === 'syncing'
   ) {
@@ -4072,7 +4051,7 @@ function NotebookTabContent({
       >
         {/* Full-width notebook column with horizontal padding for breathing room.
             Cells expand to fill the available width of the tab content area. */}
-        <div id="notebook-column" className="w-full py-2 px-8">
+        <div id="notebook-column" className="w-full px-2 py-2 sm:px-3">
           {derivedSource && (
             <div
               id="derived-notebook-notice"
@@ -4231,7 +4210,9 @@ function NotebookTabContent({
               <p>
                 {readOnly
                   ? 'This read-only notebook has no cells.'
-                  : 'This notebook has no cells yet.'}
+                  : pages.length
+                    ? 'This page has no cells yet.'
+                    : 'This notebook has no cells yet.'}
               </p>
               {!readOnly && (
                 <div className="flex items-center gap-2">
@@ -4239,7 +4220,13 @@ function NotebookTabContent({
                     type="button"
                     className="cell-add-btn h-8 w-8"
                     aria-label="Add first cell"
-                    onClick={() => data?.appendCell(parser_pb.CellKind.MARKUP)}
+                    onClick={() =>
+                      data?.appendCell(
+                        parser_pb.CellKind.MARKUP,
+                        undefined,
+                        currentPage
+                      )
+                    }
                   >
                     <PlusIcon className="h-5 w-5" />
                   </button>
@@ -4283,7 +4270,7 @@ function NotebookTabContent({
               )}
             </div>
           ) : (
-            <div className="space-y-3">
+            <div data-testid="notebook-cell-list" className="space-y-1">
               {cellDatas.map((cellData, index) => {
                 const refId = cellData.snapshot?.refId ?? `cell-${index}`
                 return (
@@ -4292,26 +4279,42 @@ function NotebookTabContent({
                     id={`commented-cell-${refId}`}
                     className="relative"
                   >
-                    <Action
-                      key={`action-${refId}`}
-                      cellData={cellData}
-                      docUri={docUri}
-                      docTitle={entry.name}
-                      isFirst={index === 0}
-                      isActiveCell={activeCell?.refId === refId}
-                      activeFocusRole={activeCell?.focusRole ?? 'editor'}
-                      isWindowFocused={isWindowFocused}
-                      isDeepLinkTarget={highlightedDeepLinkCellId === refId}
-                      onFocusStateChange={(state) => onCellFocus(docUri, state)}
-                      readOnly={readOnly}
-                      commentsAvailable={Boolean(commentsRemoteUri)}
-                      sourceCommentsAvailable={operationLogComments}
-                      commentCount={commentsByCell.get(refId)?.length ?? 0}
-                      commentRanges={commentRangesByCell.get(refId) ?? []}
-                      commentSourceRanges={sourceRangesByCell.get(refId) ?? []}
-                      onSelectComment={openComment}
-                      onStartComment={startCommentDraft}
-                    />
+                    <CellPageMove
+                      destinations={moveDestinations}
+                      move={(pageId) => {
+                        const cell = cellData.snapshot
+                        if (cell && !readOnly)
+                          data?.updateCell({
+                            ...cell,
+                            metadata: { ...cell.metadata, [CELL_PAGE]: pageId },
+                          })
+                      }}
+                    >
+                      <Action
+                        key={`action-${refId}`}
+                        cellData={cellData}
+                        docUri={docUri}
+                        docTitle={entry.name}
+                        isFirst={index === 0}
+                        isActiveCell={activeCell?.refId === refId}
+                        activeFocusRole={activeCell?.focusRole ?? 'editor'}
+                        isWindowFocused={isWindowFocused}
+                        isDeepLinkTarget={highlightedDeepLinkCellId === refId}
+                        onFocusStateChange={(state) =>
+                          onCellFocus(docUri, state)
+                        }
+                        readOnly={readOnly}
+                        commentsAvailable={Boolean(commentsRemoteUri)}
+                        sourceCommentsAvailable={operationLogComments}
+                        commentCount={commentsByCell.get(refId)?.length ?? 0}
+                        commentRanges={commentRangesByCell.get(refId) ?? []}
+                        commentSourceRanges={
+                          sourceRangesByCell.get(refId) ?? []
+                        }
+                        onSelectComment={openComment}
+                        onStartComment={startCommentDraft}
+                      />
+                    </CellPageMove>
                     {!!commentsByCell.get(refId)?.length && (
                       <button
                         type="button"
@@ -4331,7 +4334,13 @@ function NotebookTabContent({
                     type="button"
                     className="flex items-center gap-1.5 rounded-full border border-nb-border-strong bg-white px-3 py-1 text-xs text-nb-text-muted transition-colors duration-150 hover:border-nb-accent hover:text-nb-accent hover:bg-nb-accent-muted"
                     aria-label="Add cell at end"
-                    onClick={() => data?.appendCell(parser_pb.CellKind.CODE)}
+                    onClick={() =>
+                      data?.appendCell(
+                        parser_pb.CellKind.CODE,
+                        undefined,
+                        currentPage
+                      )
+                    }
                   >
                     <PlusIcon width={10} height={10} />
                     <span>Add cell</span>
@@ -4565,6 +4574,7 @@ function UnknownDocumentTab({ uri }: { uri: string }) {
 
 function renderWorkspaceDocument({
   document,
+  sourceEntries,
   activeCell,
   deepLinkCellId,
   isSelected,
@@ -4573,6 +4583,7 @@ function renderWorkspaceDocument({
   onDriveLogin,
   onDriveRetry,
 }: {
+  sourceEntries: OpenNotebookEntry[]
   document: WorkspaceDocument
   activeCell: NotebookActiveCellState | null
   deepLinkCellId: string | null
@@ -4586,8 +4597,12 @@ function renderWorkspaceDocument({
     return <ExcalidrawDocument document={document} />
   }
 
-  if (isNotebookDocumentUri(document.uri)) {
-    const entry: OpenNotebookEntry = {
+  const pageView = parseNotebookPageUri(document.uri)
+  if (isNotebookDocumentUri(document.uri) || pageView) {
+    const source =
+      pageView &&
+      sourceEntries.find((entry) => entry.uri === pageView.notebookUri)
+    const entry: OpenNotebookEntry = source || {
       uri: document.uri,
       requestedUri: document.requestedUri ?? document.uri,
       name: document.title,
@@ -4605,7 +4620,8 @@ function renderWorkspaceDocument({
     }
     return (
       <NotebookTabContent
-        docUri={document.uri}
+        docUri={pageView?.notebookUri ?? document.uri}
+        initialPage={pageView?.pageId}
         entry={entry}
         activeCell={activeCell}
         deepLinkCellId={deepLinkCellId}
@@ -4676,6 +4692,19 @@ export default function Actions() {
   const { store } = useNotebookStore()
   const openNotebooks = getOpenNotebooks()
   const workspaceDocuments = useWorkspaceDocuments()
+  // Group by canonical URI even when restored tabs are interleaved.
+  const tabGroups = useMemo(() => {
+    const groups = new Map<string, typeof workspaceDocuments>()
+    for (const doc of workspaceDocuments) {
+      const source = parseNotebookPageUri(doc.uri)?.notebookUri ?? doc.uri
+      const members = groups.get(source) ?? []
+      if (source === doc.uri) members.unshift(doc)
+      else members.push(doc)
+      groups.set(source, members)
+    }
+    return Array.from(groups)
+  }, [workspaceDocuments])
+
   const { getCurrentDoc, setCurrentDoc } = useCurrentDoc()
   const currentDocUri = getCurrentDoc()
   const driveLinkSnapshot = useDriveLinkCoordinatorSnapshot()
@@ -5552,57 +5581,105 @@ export default function Actions() {
               id="notebook-tabs-list"
               className="flex min-w-max items-center gap-0.5 px-2 py-1"
             >
-              {workspaceDocuments.map((doc) => {
-                const displayName = getNotebookDisplayName(doc.uri, doc.title)
-                const isNotebook = isNotebookDocumentUri(doc.uri)
+              {tabGroups.map(([source, members]) => {
+                const grouped = members.some((doc) => doc.uri !== source)
+                const sourceEntry = openNotebooks.find(
+                  (entry) => entry.uri === source
+                )
+                const title = sourceEntry?.name ?? members[0].title
                 return (
                   <div
-                    key={`tab-${doc.uri}`}
-                    ref={(node) => {
-                      if (node) {
-                        tabTriggerRefs.current.set(doc.uri, node)
-                      } else {
-                        tabTriggerRefs.current.delete(doc.uri)
-                      }
-                    }}
-                    className="flex shrink-0 items-center gap-1"
+                    key={source}
+                    role={grouped ? 'group' : undefined}
+                    aria-label={grouped ? title : undefined}
+                    className={
+                      grouped
+                        ? 'flex items-center gap-1 rounded-md border border-nb-text-faint bg-nb-surface px-1'
+                        : 'flex'
+                    }
                   >
-                    <Tabs.Trigger
-                      value={doc.uri}
-                      title={doc.title}
-                      onContextMenu={
-                        isNotebook
-                          ? (event) => handleTabContextMenu(event, doc.uri)
-                          : undefined
-                      }
-                      className="group flex shrink-0 items-center gap-2 rounded-nb-sm border border-transparent px-3 py-1.5 text-sm font-medium text-nb-text-muted transition-all duration-150 data-[state=active]:border-nb-border data-[state=active]:bg-nb-surface data-[state=active]:text-nb-text data-[state=active]:shadow-nb-xs data-[state=inactive]:hover:bg-nb-surface/60 data-[state=inactive]:hover:text-nb-text focus:outline-none"
-                    >
-                      <span className="max-w-[140px] truncate">
-                        {displayName}
+                    {grouped && members[0].uri !== source && (
+                      <span className="px-2 text-xs font-medium text-nb-text-muted">
+                        {title}
                       </span>
-                      {doc.readOnly && <ReadOnlyTabIndicator uri={doc.uri} />}
-                    </Tabs.Trigger>
-                    {isNotebook &&
-                      detectNotebookFileFormat(doc.title) ===
-                        'runme-operation-log' && (
-                        <OperationLogRefreshButton
-                          docUri={doc.uri}
-                          displayName={displayName}
-                        />
-                      )}
-                    {isNotebook && <NotebookSyncIndicator docUri={doc.uri} />}
-                    <button
-                      type="button"
-                      className="ml-1 inline-flex h-5 w-5 items-center justify-center rounded-nb-xs text-nb-text-faint transition-all duration-150 hover:bg-nb-surface-2 hover:text-nb-text"
-                      aria-label={`Close ${displayName}`}
-                      onClick={(event) => {
-                        event.stopPropagation()
-                        handleCloseTab(doc.uri)
-                      }}
-                      onMouseDown={(event) => event.stopPropagation()}
-                    >
-                      <XMarkIcon className="h-3 w-3" />
-                    </button>
+                    )}
+                    {members.map((doc) => {
+                      const displayName = getNotebookDisplayName(
+                        doc.uri,
+                        doc.title
+                      )
+                      const isNotebook = isNotebookDocumentUri(doc.uri)
+                      const pageView = parseNotebookPageUri(doc.uri)
+                      const trigger = (
+                        <Tabs.Trigger
+                          value={doc.uri}
+                          title={doc.title}
+                          onContextMenu={
+                            isNotebook
+                              ? (event) => handleTabContextMenu(event, doc.uri)
+                              : undefined
+                          }
+                          className="group flex shrink-0 items-center gap-2 rounded-nb-sm border border-transparent px-3 py-1.5 text-sm font-medium text-nb-text-muted transition-all duration-150 data-[state=active]:border-nb-border data-[state=active]:bg-nb-surface data-[state=active]:text-nb-text data-[state=active]:shadow-nb-xs data-[state=inactive]:hover:bg-nb-surface/60 data-[state=inactive]:hover:text-nb-text focus:outline-none"
+                        >
+                          <span className="max-w-[140px] truncate">
+                            {displayName}
+                          </span>
+                          {doc.readOnly && (
+                            <ReadOnlyTabIndicator uri={doc.uri} />
+                          )}
+                        </Tabs.Trigger>
+                      )
+                      return (
+                        <div
+                          key={`tab-${doc.uri}`}
+                          ref={(node) => {
+                            if (node) {
+                              tabTriggerRefs.current.set(doc.uri, node)
+                            } else {
+                              tabTriggerRefs.current.delete(doc.uri)
+                            }
+                          }}
+                          className="flex shrink-0 items-center gap-1"
+                        >
+                          {pageView ? (
+                            <NotebookPageTabMenu
+                              {...pageView}
+                              readOnly={Boolean(
+                                sourceEntry?.readOnly ||
+                                  sourceEntry?.releasePending
+                              )}
+                            >
+                              {trigger}
+                            </NotebookPageTabMenu>
+                          ) : (
+                            trigger
+                          )}
+                          {isNotebook &&
+                            detectNotebookFileFormat(doc.title) ===
+                              'runme-operation-log' && (
+                              <OperationLogRefreshButton
+                                docUri={doc.uri}
+                                displayName={displayName}
+                              />
+                            )}
+                          {isNotebook && (
+                            <NotebookSyncIndicator docUri={doc.uri} />
+                          )}
+                          <button
+                            type="button"
+                            className="ml-1 inline-flex h-5 w-5 items-center justify-center rounded-nb-xs text-nb-text-faint transition-all duration-150 hover:bg-nb-surface-2 hover:text-nb-text"
+                            aria-label={`Close ${displayName}`}
+                            onClick={(event) => {
+                              event.stopPropagation()
+                              handleCloseTab(doc.uri)
+                            }}
+                            onMouseDown={(event) => event.stopPropagation()}
+                          >
+                            <XMarkIcon className="h-3 w-3" />
+                          </button>
+                        </div>
+                      )
+                    })}
                   </div>
                 )
               })}
@@ -5761,13 +5838,14 @@ export default function Actions() {
                 <TabPanel className="flex-1 min-h-0" data-document-id={doc.uri}>
                   {renderWorkspaceDocument({
                     document: doc,
+                    sourceEntries: openNotebooks,
                     activeCell: activeCellsByDoc[doc.uri] ?? null,
                     deepLinkCellId:
                       deepLinkTargetDocUri === doc.uri ? deepLinkCellId : null,
                     isSelected: resolvedSelectedTabUri === doc.uri,
                     isWindowFocused:
                       isWindowFocused && resolvedSelectedTabUri === doc.uri,
-                    onCellFocus: handleCellFocus,
+                    onCellFocus: (_, state) => handleCellFocus(doc.uri, state),
                     onDriveLogin: () =>
                       driveLinkCoordinator.loginToDriveAndProcess(),
                     onDriveRetry: () =>

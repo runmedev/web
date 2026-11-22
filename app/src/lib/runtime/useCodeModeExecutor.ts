@@ -3,6 +3,7 @@ import { useCallback, useMemo, useRef } from 'react'
 import { parser_pb } from '../../contexts/CellContext'
 import { useCurrentDoc } from '../../contexts/CurrentDocContext'
 import { useNotebookContext } from '../../contexts/NotebookContext'
+import { parseNotebookPageUri } from '../workspaceDocuments/workspaceDocumentTypes'
 import { isNotebookDocumentUri } from '../workspaceDocuments/workspaceDocumentTypes'
 import {
   type CodeModeExecutor,
@@ -22,8 +23,12 @@ type CodeModeNotebookAdapterSource = Pick<
       | 'addCellAfter'
       | 'addCellBefore'
       | 'removeCell'
+      | 'isReleasePending'
+      | 'isReviewPending'
       | 'isReadOnly'
       | 'flushPendingPersist'
+      | 'getSnapshot'
+      | 'setMetadataProperties'
       | 'loadNotebook'
     >
   >
@@ -35,6 +40,8 @@ export function createCodeModeNotebookAdapter(
     getUri: () => data.getUri(),
     getName: () => data.getName(),
     getNotebook: () => data.getNotebook(),
+    isReleasePending: data.isReleasePending?.bind(data),
+    isReviewPending: data.isReviewPending?.bind(data),
     isReadOnly: data.isReadOnly?.bind(data),
     updateCell: (cell: parser_pb.Cell) => data.updateCell(cell),
     getCell: (refId: string) => data.getCell(refId),
@@ -42,6 +49,8 @@ export function createCodeModeNotebookAdapter(
     addCellAfter: data.addCellAfter?.bind(data),
     addCellBefore: data.addCellBefore?.bind(data),
     removeCell: data.removeCell?.bind(data),
+    getSnapshot: data.getSnapshot?.bind(data),
+    setMetadataProperties: data.setMetadataProperties?.bind(data),
     flushPendingPersist: data.flushPendingPersist?.bind(data),
     loadNotebook: data.loadNotebook?.bind(data),
   }
@@ -54,7 +63,9 @@ export function useCodeModeExecutor(options?: {
   const { getNotebookData, requestWriteAccess, useNotebookList } =
     useNotebookContext()
   const { getCurrentDoc } = useCurrentDoc()
-  const currentDocUri = getCurrentDoc()
+  const viewUri = getCurrentDoc()
+  const currentDocUri =
+    parseNotebookPageUri(viewUri ?? '')?.notebookUri ?? viewUri
   const openNotebookList = useNotebookList()
   const getNotebookDataRef = useRef(getNotebookData)
   getNotebookDataRef.current = getNotebookData

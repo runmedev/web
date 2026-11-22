@@ -186,4 +186,12 @@ export const DOCUMENTATION_MANIFEST = [
     order: 22,
     path: 'docs/22-desktop-runtime.md',
   },
+  {
+    name: 'keyboard-shortcuts',
+    title: 'Keyboard Shortcuts',
+    description:
+      'Find Runme keyboard shortcuts by focused cell or panel. Learn how to switch Markdown and HTML between rendered and source modes, run code, submit comments, and navigate the App Console.',
+    order: 23,
+    path: 'docs/23-keyboard-shortcuts.md',
+  },
 ] as const satisfies readonly DocumentationManifestEntry[]

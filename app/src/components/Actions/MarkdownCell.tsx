@@ -5,7 +5,7 @@ import { canLoadContentAsset } from '../../lib/externalServices'
  * This component implements Jupyter-style in-place markdown rendering:
  * - When `rendered=true`: Shows rendered markdown HTML
  * - When `rendered=false`: Shows the Monaco editor for editing
- * - Use the edit control or keyboard to open the source
+ * - Focus the rendered cell and press Escape to open the source
  * - Pressing Escape or running the cell switches back to render mode
  *
  * State Management:
@@ -233,7 +233,7 @@ function sameCommentRanges(
  * MarkdownCell renders markdown content in-place with edit/render mode toggle.
  *
  * Interaction patterns (Jupyter-style):
- * - Use the edit control or keyboard to enter edit mode
+ * - Focus the rendered cell and press Escape to enter edit mode
  * - Press Escape while editing → render markdown (if not empty)
  * - Focusing another notebook cell → render markdown (if not empty)
  * - Empty cells start in edit mode and stay in edit mode
@@ -389,7 +389,7 @@ const MarkdownCell = memo(
     }, [isActiveCell, rendered, tracksActiveCell, value])
 
     /**
-     * Open the Markdown source from the edit control.
+     * Open the source and transfer focus to the editor.
      */
     const handleOpenSource = useCallback(() => {
       if (!canOpenSource) {
@@ -448,29 +448,22 @@ const MarkdownCell = memo(
       [cell?.refId, onRenderedSelectionContextMenu, value]
     )
 
-    /**
-     * Handle keyboard activation on the rendered container for accessibility.
-     * Enter or Space activates edit mode (like a button).
-     * Only triggers when the container itself has focus, not nested elements
-     * (e.g., links inside the markdown).
-     */
+    // Escape toggles the focused cell. Enter and Space on nested links and
+    // scrollable regions retain their normal activation and scrolling behavior.
     const handleRenderedKeyDown = useCallback(
       (event: KeyboardEvent<HTMLDivElement>) => {
-        // Only handle if the container itself is focused, not nested elements
-        if (event.target !== event.currentTarget) {
-          return
-        }
-        if (event.key === 'Enter' || event.key === ' ') {
-          if (!canOpenSource) {
-            return
-          }
+        if (event.defaultPrevented || event.repeat) return
+        if (
+          event.key === 'Escape' ||
+          (event.target === event.currentTarget &&
+            (event.key === 'Enter' || event.key === ' '))
+        ) {
           event.preventDefault()
-          setRendered(false)
-          setEditorFocusIntent(true)
-          onFocusRoleChange?.('editor')
+          event.stopPropagation()
+          handleOpenSource()
         }
       },
-      [canOpenSource, onFocusRoleChange]
+      [handleOpenSource]
     )
 
     /**
@@ -479,9 +472,15 @@ const MarkdownCell = memo(
      */
     const handleEditorKeyDown = useCallback(
       (event: KeyboardEvent<HTMLDivElement>) => {
-        if (event.key === 'Escape') {
+        if (
+          event.key === 'Escape' &&
+          !event.repeat &&
+          !event.defaultPrevented
+        ) {
           // Only render if there's content; empty cells stay in edit mode
           if (value.trim()) {
+            event.preventDefault()
+            event.stopPropagation()
             setRendered(true)
             setRenderedFocusIntent(true)
             onFocusRoleChange?.('rendered')
@@ -508,8 +507,6 @@ const MarkdownCell = memo(
 
     /**
      * Handle "run" action for markdown cells - just renders the markdown.
-     * This matches Jupyter's behavior where Shift+Enter on a markdown cell
-     * renders it and moves to the next cell.
      */
     const handleRun = useCallback(() => {
       if (!readOnly && value.trim()) {
@@ -567,7 +564,7 @@ const MarkdownCell = memo(
         )
       }
       return (
-        <div className="prose prose-sm max-w-none">
+        <div className="prose prose-sm max-w-none [&>:first-child]:mt-0 [&>:last-child]:mb-0">
           <ReactMarkdown
             remarkPlugins={[remarkGfm]}
             rehypePlugins={[projectionPlugin]}
@@ -603,11 +600,11 @@ const MarkdownCell = memo(
         data-rendered={rendered}
       >
         {rendered ? (
-          // Rendered markdown remains selectable; editing has an explicit control.
+          // Rendered text remains selectable while the cell owns keyboard focus.
           <>
             <div
               id={`markdown-rendered-${cell.refId}`}
-              className="notebook-markdown cursor-text rounded-nb-md border border-transparent p-4 transition-[border-color,background-color,box-shadow] duration-200 hover:border-nb-border hover:bg-nb-surface-2/60 hover:shadow-nb-xs"
+              className="notebook-markdown cursor-text rounded-nb-md border border-transparent px-2 py-1.5 transition-[border-color,background-color,box-shadow] duration-200 hover:border-nb-border hover:bg-nb-surface-2/60 hover:shadow-nb-xs"
               onMouseDown={(event) => {
                 const selection =
                   event.currentTarget.ownerDocument.getSelection()
@@ -622,12 +619,15 @@ const MarkdownCell = memo(
               onKeyDown={canOpenSource ? handleRenderedKeyDown : undefined}
               ref={renderedRef}
               tabIndex={canOpenSource ? 0 : undefined}
+              aria-keyshortcuts={
+                canOpenSource ? 'Escape Enter Space' : undefined
+              }
               role={canOpenSource ? 'button' : undefined}
               aria-label={
                 canOpenSource
                   ? readOnly
-                    ? 'Press Enter to view read-only markdown source'
-                    : 'Press Enter to edit markdown'
+                    ? 'Press Escape to view read-only markdown source'
+                    : 'Press Escape to edit markdown'
                   : undefined
               }
               data-testid="markdown-rendered"
@@ -656,7 +656,7 @@ const MarkdownCell = memo(
               )}
               {renderedMarkdown}
             </div>
-            {canOpenSource && (
+            {readOnly && canOpenSource && (
               <button
                 type="button"
                 className="ml-4 mt-1 rounded-nb-sm border border-nb-border px-2 py-1 text-xs text-nb-text-muted hover:bg-nb-surface-2 focus-visible:outline focus-visible:outline-nb-accent"
@@ -665,7 +665,7 @@ const MarkdownCell = memo(
                   handleOpenSource()
                 }}
               >
-                {readOnly ? 'View Markdown source' : 'Edit Markdown'}
+                View Markdown source
               </button>
             )}
           </>
@@ -674,7 +674,7 @@ const MarkdownCell = memo(
           <div
             id={`markdown-editor-${cell.refId}`}
             className="rounded-nb-md border border-nb-accent shadow-nb-sm overflow-hidden w-full min-w-0 max-w-full transition-shadow duration-200"
-            onKeyDown={handleEditorKeyDown}
+            onKeyDownCapture={handleEditorKeyDown}
             data-testid="markdown-editor"
             data-cell-focus-role="editor"
           >

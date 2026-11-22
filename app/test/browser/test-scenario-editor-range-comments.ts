@@ -151,8 +151,8 @@ try {
 
   await inputPage
     .locator('#markdown-cell-editor-range-1')
-    .getByRole('button', { name: 'Edit Markdown', exact: true })
-    .click()
+    .getByTestId('markdown-rendered')
+    .press('Escape')
   await inputPage.locator(markdownInput).first().waitFor({ state: 'visible' })
   await inputPage.locator(markdownInput).focus()
   for (const key of [
@@ -359,8 +359,8 @@ try {
     .waitFor({ state: 'visible' })
   await inputPage
     .locator('#markdown-cell-editor-range-1')
-    .getByRole('button', { name: 'Edit Markdown', exact: true })
-    .click()
+    .getByTestId('markdown-rendered')
+    .press('Escape')
   await inputPage.locator(markdownInput).first().waitFor({ state: 'visible' })
   await inputPage
     .getByText('Rendered heading selection comment', { exact: true })

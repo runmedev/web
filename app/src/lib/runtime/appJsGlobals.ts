@@ -74,6 +74,7 @@ import {
 } from '../markdownImport'
 import { createNotebookDiffRuntimeApi } from '../notebookDiff/runtime'
 import { detectNotebookFileFormat } from '../notebookFormat'
+import { CELL_PAGE, notebookPages } from '../notebookPages'
 import {
   type OutputReferenceStore,
   outputReferenceSource,
@@ -104,6 +105,7 @@ import type {
 } from './appKernelLowLevelApis'
 import { getJupyterManager } from './jupyterManager'
 import { createNotebookCommentsRuntimeApi } from './notebookCommentsRuntime'
+import { createNotebookPageApi, pageHelp } from './notebookPageApi'
 import { createRenderedMarkdownUiApi } from './renderedMarkdownUi'
 import {
   type NotebookDataLike,
@@ -604,12 +606,14 @@ export function createAppJsGlobals({
     at,
     reason,
     execute,
+    pageId,
     cell,
   }: {
     target?: { uri: string } | { handle: { uri: string; revision: string } }
     at?: { index: number } | { beforeRefId: string } | { afterRefId: string }
     reason?: string
     execute?: boolean
+    pageId?: string
     cell: {
       kind: 'code' | 'markup'
       languageId?: string
@@ -618,12 +622,25 @@ export function createAppJsGlobals({
     }
   }) => {
     const doc = await notebooksApi.get(target)
+    if (pageId !== undefined) {
+      if (
+        resolveNotebookTargetUri(target) !== doc.handle.uri ||
+        !notebookPages(doc.notebook.metadata).some((p) => p.id === pageId)
+      )
+        throw new Error(
+          'Appending to a page requires an explicit target and a valid pageId.'
+        )
+      cell.metadata = { ...cell.metadata, [CELL_PAGE]: pageId }
+    }
     const beforeRefIds = new Set(
       (doc.notebook.cells ?? []).map((item) => item.refId)
     )
     const updated = await notebooksApi.update({
       target: { handle: doc.handle },
-      expectedRevision: doc.handle.revision,
+      expectedRevision:
+        target && 'handle' in target
+          ? target.handle.revision
+          : doc.handle.revision,
       reason:
         reason ??
         `Append ${cell.kind === 'markup' ? 'markup' : 'code'} cell from App Console helper`,
@@ -1087,14 +1104,24 @@ export function createAppJsGlobals({
 
   const notebooksHelpers = {
     ...notebooksApi,
+    ...createNotebookPageApi((uri) =>
+      resolveNotebook ? resolveNotebook(uri) : runme.getCurrentNotebook()
+    ),
     help: async (topic?: string) => {
       if (topic === 'outputLink')
         return 'notebooks.outputLink({ target: { uri }, cellId, outputIndex, itemIndex }): Promise<string>. Returns an HTML anchor to the autosaved output version; no named revision required. Insert it with notebooks.appendCell({target, kind: "markup", languageId: "runme-reference", value: link}).'
+      if (topic === 'pages')
+        return [
+          ...Object.values(pageHelp),
+          'Use notebooks.appendCell({target,pageId,kind,value}) to insert directly into a page.',
+        ].join('\n')
+      if (topic && Object.prototype.hasOwnProperty.call(pageHelp, topic))
+        return pageHelp[topic as keyof typeof pageHelp]
       if (topic === 'createLocal') {
         return 'notebooks.createLocal(name, options?: { folderUri?: string }): Promise<NotebookDocument>. Creates a new local notebook, adds it to the open notebook list without changing focus, and returns the notebook document.'
       }
       if (topic === 'appendCell') {
-        return 'notebooks.appendCell({ target?, at?, kind, languageId?, value?, metadata?, execute?, reason? }): Promise<{ handle, cell }>. Inserts a cell into the current or targeted notebook. kind must be "code" or "markup".'
+        return 'notebooks.appendCell({ target?, pageId?, at?, kind, languageId?, value?, metadata?, execute?, reason? }): Promise<{ handle, cell }>. Inserts a cell into the current or targeted notebook. kind must be "code" or "markup".'
       }
       if (topic === 'embed') {
         return 'notebooks.embed(source, options?: { target?, alt?, name? }): Promise<{ uri, cell }>. Embeds image bytes from a URL, absolute local development path, data URL, File, or Blob in an HTML cell.'
@@ -1129,8 +1156,9 @@ export function createAppJsGlobals({
       }
       return [
         base,
+        "- notebooks.help('pages'): list, create, rename, reorder, remove, show pages and assign cells",
         '- notebooks.createLocal(name, options?)',
-        '- notebooks.appendCell({ target?, at?, kind, languageId?, value?, metadata?, execute?, reason? })',
+        '- notebooks.appendCell({ target?, pageId?, at?, kind, languageId?, value?, metadata?, execute?, reason? })',
         '- notebooks.embed(source, options?)',
         '- notebooks.attach(source, { target, folderUri?, mode?, title?, altText?, expectedRevision?, operationId? })',
         '- notebooks.normalizeLink(text)',
@@ -1153,6 +1181,7 @@ export function createAppJsGlobals({
       return notebooksApi.get({ uri })
     },
     appendCell: async (args: {
+      pageId?: string
       target?: { uri: string } | { handle: { uri: string; revision: string } }
       at?: { index: number } | { beforeRefId: string } | { afterRefId: string }
       kind?: 'code' | 'markup'
@@ -1170,6 +1199,7 @@ export function createAppJsGlobals({
       return await appendNotebookCell({
         target: args?.target,
         at: args?.at,
+        pageId: args?.pageId,
         execute: args?.execute,
         reason: args?.reason,
         cell: {

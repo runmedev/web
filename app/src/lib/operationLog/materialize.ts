@@ -1,3 +1,4 @@
+import { CELL_PAGE, PAGE_PREFIX } from '../notebookPages'
 import {
   type ExecutionFinishRecord,
   advanceExecutionFinishes,
@@ -97,6 +98,8 @@ export interface MaterializedOperationLog {
 
 const knownKinds = new Set([
   'transaction.commit',
+  'page.set',
+  'cell.set_page',
   'notebook.update',
   'cell.create',
   'cell.update',
@@ -153,6 +156,8 @@ export function materializeOperationLog(
   const operationById = new Map(
     ordered.ordered.map((operation) => [operation.op_id, operation])
   )
+  const pageProperties = new Map<string, string | null>()
+  const cellPages = new Map<string, string | null>()
   let notebookState: Register<NotebookUpdatePayload> | undefined
 
   // Review decisions are registers: the latest causally ordered decision for
@@ -273,6 +278,31 @@ export function materializeOperationLog(
     switch (operation.kind) {
       case 'transaction.commit':
         break
+      case 'page.set': {
+        const { key, value } = operation.payload as {
+          key: string
+          value: string | null
+        }
+        if (
+          typeof key === 'string' &&
+          key.startsWith(PAGE_PREFIX) &&
+          (typeof value === 'string' || value === null)
+        )
+          pageProperties.set(key, value)
+        break
+      }
+      case 'cell.set_page': {
+        const { cell_id, page_id } = operation.payload as {
+          cell_id: string
+          page_id: string | null
+        }
+        if (
+          typeof cell_id === 'string' &&
+          (typeof page_id === 'string' || page_id === null)
+        )
+          cellPages.set(cell_id, page_id)
+        break
+      }
       case 'notebook.update':
         notebookState = {
           value: operation.payload as unknown as NotebookUpdatePayload,
@@ -577,9 +607,16 @@ export function materializeOperationLog(
       output.sourceOperationId &&
         output.sourceOperationId !== registers.content.operationId
     )
+    const metadata = { ...registers.content.value.metadata }
+    if (cellPages.has(cellId)) {
+      const page = cellPages.get(cellId)
+      if (page) metadata[CELL_PAGE] = page
+      else delete metadata[CELL_PAGE]
+    }
     visibleCells.push({
       cell_id: cellId,
       ...registers.content.value,
+      metadata,
       position: registers.position.value,
       source_operation_id: registers.content.operationId,
       outputs: output.outputs,
@@ -617,10 +654,15 @@ export function materializeOperationLog(
     }
   )
 
+  const metadata = { ...notebookState?.value.metadata }
+  for (const [key, value] of pageProperties) {
+    if (value === null) delete metadata[key]
+    else metadata[key] = value
+  }
   return {
     notebook: {
       frontmatter: notebookState?.value.frontmatter ?? {},
-      metadata: notebookState?.value.metadata ?? {},
+      metadata,
       cells: visibleCells,
     },
     comments,

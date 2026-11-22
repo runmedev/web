@@ -32,6 +32,7 @@ Current numbered docs:
 - [17-ipynb-notebooks.md](17-ipynb-notebooks.md)
 - [18-progressive-web-app.md](18-progressive-web-app.md)
 - [22-desktop-runtime.md](22-desktop-runtime.md)
+- [Keyboard shortcuts](23-keyboard-shortcuts.md)
 
 These docs intentionally exclude implementation-only material such as deployment
 internals and design proposals. Internal notes remain under `docs-dev/` and
