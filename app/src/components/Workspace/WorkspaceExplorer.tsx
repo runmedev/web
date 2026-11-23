@@ -30,6 +30,8 @@ import { useWorkspace } from "../../contexts/WorkspaceContext";
 import { useNotebookStore } from "../../contexts/NotebookStoreContext";
 import { useFilesystemStore } from "../../contexts/FilesystemStoreContext";
 import { explorerSync, syncExplorerFolder } from "../../lib/explorerSync";
+import { buildListDriveRevisionsSnippet } from "../../lib/appConsole/snippets";
+import { useAppConsoleRunner } from "../../lib/appConsole/useAppConsoleRunner";
 import { appLogger } from "../../lib/logging/runtime";
 import {
   type NotebookFileFormat,
@@ -403,6 +405,7 @@ export function WorkspaceExplorer() {
   const { getCurrentDoc, setCurrentDoc } = useCurrentDoc();
   const { openNotebook } = useNotebookContext();
   const { showDocument } = useWorkspaceDocumentContext();
+  const { createAndRun } = useAppConsoleRunner();
   const currentDoc = getCurrentDoc();
   const { ensureAccessToken } = useGoogleAuth();
   const handledDocRef = useRef<string | null>(null);
@@ -1920,6 +1923,22 @@ function formatShortTimestamp(date: Date): string {
                   }}
                 >
                   Compare with upstream
+                </button>
+              )}
+              {contextMenu.remoteUri && (
+                <button
+                  type="button"
+                  className="ctx-menu-item"
+                  onMouseDown={(event) => event.stopPropagation()}
+                  onClick={(event) => {
+                    event.stopPropagation();
+                    setContextMenu(null);
+                    createAndRun(
+                      buildListDriveRevisionsSnippet(contextMenu.uri),
+                    );
+                  }}
+                >
+                  List Drive Revisions
                 </button>
               )}
               {contextMenu.remoteUri && isDriveItemUri(contextMenu.remoteUri) && (

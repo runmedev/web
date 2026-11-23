@@ -42,6 +42,10 @@ function withTrailingNewline(message: string): string {
 
 export class AppConsoleData {
   private readonly listeners = new Set<Listener>();
+  // Run requests are kept apart from `listeners` (snapshot changes) because they
+  // are commands for the mounted console view, not state it renders.
+  private readonly runRequestListeners = new Set<Listener>();
+  private pendingRunRequests: string[] = [];
   private readonly outputBuffers = new Map<string, OutputBuffers>();
   private readonly storage: AppConsoleStorageLike;
   private readonly persistDelayMs: number;
@@ -76,6 +80,38 @@ export class AppConsoleData {
 
   getSnapshot(): AppConsoleSnapshot {
     return this.snapshotCache;
+  }
+
+  /**
+   * Ask the App Console view to execute `source` as a new history cell, leaving
+   * the user's in-progress draft untouched. Execution needs the React-owned
+   * runtime globals (runners, notebook contexts), so the model only queues the
+   * request; the mounted view drains it. A request made while the console is
+   * not mounted stays queued until the console mounts. Blank source is ignored.
+   */
+  requestRun(source: string): void {
+    if (source.trim() === "") {
+      return;
+    }
+    this.pendingRunRequests.push(source);
+    for (const listener of [...this.runRequestListeners]) {
+      listener();
+    }
+  }
+
+  /** Remove and return queued run requests in the order they were made. */
+  takePendingRunRequests(): string[] {
+    const requests = this.pendingRunRequests;
+    this.pendingRunRequests = [];
+    return requests;
+  }
+
+  /** Be notified when `requestRun` queues a request. */
+  subscribeToRunRequests(listener: Listener): () => void {
+    this.runRequestListeners.add(listener);
+    return () => {
+      this.runRequestListeners.delete(listener);
+    };
   }
 
   async hydrate(): Promise<void> {
@@ -283,6 +319,8 @@ export class AppConsoleData {
       this.persistTimer = null;
     }
     this.listeners.clear();
+    this.runRequestListeners.clear();
+    this.pendingRunRequests = [];
     this.outputBuffers.clear();
   }
 

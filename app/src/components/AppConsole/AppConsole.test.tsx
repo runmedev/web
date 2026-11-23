@@ -276,7 +276,10 @@ vi.mock('../Actions/Editor', () => ({
 }))
 
 import AppConsole from './AppConsole'
-import { __resetAppConsoleDataForTests } from '../../lib/appConsole/appConsoleController'
+import {
+  __resetAppConsoleDataForTests,
+  getAppConsoleData,
+} from '../../lib/appConsole/appConsoleController'
 import { APP_CONSOLE_DOCUMENT_URI } from '../../lib/workspaceDocuments/workspaceDocumentTypes'
 
 function getCurrentCell(): HTMLElement {
@@ -445,6 +448,55 @@ describe('AppConsole', () => {
     expect(currentInput().value).toBe('first()')
     expect(previousButton.getAttribute('disabled')).not.toBeNull()
     expect(nextButton.getAttribute('disabled')).toBeNull()
+  })
+
+  it('runs a queued request in a new history cell and keeps the draft', async () => {
+    render(<AppConsole showHeader={false} />)
+
+    await screen.findByLabelText('App Console input')
+    fireEvent.change(currentInput(), { target: { value: 'my draft' } })
+
+    act(() => {
+      getAppConsoleData().requestRun('listRevisions()')
+    })
+
+    await waitFor(() => {
+      expect(screen.getByText('ran:listRevisions()')).toBeTruthy()
+    })
+    const cells = screen.getAllByTestId('app-console-cell')
+    expect(cells).toHaveLength(2)
+    expect(cells[0].getAttribute('data-status')).toBe('success')
+    expect(cells[1].getAttribute('data-status')).toBe('draft')
+    expect(currentInput().value).toBe('my draft')
+  })
+
+  it('runs a request queued before the console mounted', async () => {
+    getAppConsoleData().requestRun('queuedEarly()')
+
+    render(<AppConsole showHeader={false} />)
+
+    await waitFor(() => {
+      expect(screen.getByText('ran:queuedEarly()')).toBeTruthy()
+    })
+    expect(kernelBehavior).toHaveBeenCalledTimes(1)
+    expect(getCurrentCell().getAttribute('data-status')).toBe('draft')
+  })
+
+  it('records a failed queued request as an error cell', async () => {
+    kernelBehavior.mockRejectedValueOnce(new Error('boom'))
+    render(<AppConsole showHeader={false} />)
+    await screen.findByLabelText('App Console input')
+
+    act(() => {
+      getAppConsoleData().requestRun('willFail()')
+    })
+
+    await waitFor(() => {
+      expect(
+        screen.getAllByTestId('app-console-cell')[0].getAttribute('data-status')
+      ).toBe('error')
+    })
+    expect(screen.getByText(/boom/)).toBeTruthy()
   })
 
   it('copies a frozen cell back into the current draft', async () => {

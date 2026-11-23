@@ -109,6 +109,46 @@ describe("AppConsoleData", () => {
     await new Promise((resolve) => window.setTimeout(resolve, 0));
     expect(getRows()).toHaveLength(2);
   });
+
+  it("queues run requests in order and hands them out once", () => {
+    const { storage } = createStorageStub();
+    const data = new AppConsoleData({ storage, persistDelayMs: 0 });
+    instances.push(data);
+
+    data.requestRun("first()");
+    data.requestRun("second()");
+
+    expect(data.takePendingRunRequests()).toEqual(["first()", "second()"]);
+    expect(data.takePendingRunRequests()).toEqual([]);
+  });
+
+  it("ignores blank run requests", () => {
+    const { storage } = createStorageStub();
+    const data = new AppConsoleData({ storage, persistDelayMs: 0 });
+    instances.push(data);
+    const listener = vi.fn();
+    data.subscribeToRunRequests(listener);
+
+    data.requestRun("  \n");
+
+    expect(listener).not.toHaveBeenCalled();
+    expect(data.takePendingRunRequests()).toEqual([]);
+  });
+
+  it("notifies run request subscribers until they unsubscribe", () => {
+    const { storage } = createStorageStub();
+    const data = new AppConsoleData({ storage, persistDelayMs: 0 });
+    instances.push(data);
+    const listener = vi.fn();
+    const unsubscribe = data.subscribeToRunRequests(listener);
+
+    data.requestRun("one()");
+    expect(listener).toHaveBeenCalledTimes(1);
+
+    unsubscribe();
+    data.requestRun("two()");
+    expect(listener).toHaveBeenCalledTimes(1);
+  });
 });
 
 it("waits for draft persistence and retains the draft when saving fails", async () => {
