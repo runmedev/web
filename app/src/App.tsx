@@ -16,7 +16,7 @@ import { WebAppConfig } from '@buf/stateful_runme.bufbuild_es/agent/v1/webapp_pb
 import NotFound from './components/NotFound'
 import { SettingsProvider } from './contexts/SettingsContext'
 import { OutputProvider } from './contexts/OutputContext'
-import { WorkspaceProvider } from './contexts/WorkspaceContext'
+import { WorkspaceProvider, useWorkspace } from './contexts/WorkspaceContext'
 import {
   NotebookStoreProvider,
   useNotebookStore,
@@ -196,6 +196,7 @@ function NotebookStoreInitializer() {
   const { ensureAccessToken, isDriveSyncing } = useGoogleAuth()
   const { store, setStore } = useNotebookStore()
   const { fsStore, setFsStore } = useFilesystemStore()
+  const { state: workspace, addItem, removeItem } = useWorkspace()
   const instanceRef = useRef<LocalNotebooks | null>(null)
   const previousDriveAvailable = useRef(isDriveSyncing)
   const fsInstanceRef = useRef<FilesystemNotebookStore | null>(null)
@@ -249,6 +250,20 @@ function NotebookStoreInitializer() {
     fsInstanceRef.current = filesystemStore
     setFsStore(filesystemStore)
   }, [fsStore, setFsStore])
+
+  // Migrate pre-existing mounted handles without reviving folders removed in another tab.
+  useEffect(() => {
+    if (!fsStore || !store) return
+    let active = true
+    for (const uri of workspace.items.filter((item) => item.startsWith('fs://'))) {
+      void store.restoreFilesystemFolder(uri).then(localUri => {
+        if (active) { addItem(localUri); removeItem(uri) }
+      }).catch((error) => appLogger.warn('Could not restore mounted folder', {
+        attrs: { scope: 'storage.filesystem.sync', error: String(error) },
+      }))
+    }
+    return () => { active = false }
+  }, [fsStore, workspace.items, store, addItem, removeItem])
 
   return null
 }

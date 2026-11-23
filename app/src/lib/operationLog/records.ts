@@ -54,6 +54,7 @@ export type Anchor =
       surface: 'source'
       /** UI origin only; anchor coordinates always refer to immutable source. */
       selection_surface?: 'source' | 'rendered-markdown'
+      output_item?: { output_index: number; item_index: number }
       range?: SourceRange
     }
 

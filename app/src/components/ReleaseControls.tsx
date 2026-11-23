@@ -3,6 +3,7 @@ import { StorageWorkerControls } from './StorageWorkerControls'
 import { showWorkspaceDocument } from '../lib/workspaceDocuments/workspaceDocumentController'
 import { PIN_RELEASE_DOCUMENT_URI } from '../lib/workspaceDocuments/workspaceDocumentTypes'
 import { Button } from '@radix-ui/themes'
+import { parse } from 'yaml'
 import { useCallback, useEffect, useState } from 'react'
 
 import { appLogger } from '../lib/logging/runtime'
@@ -10,6 +11,7 @@ import {
   type Control,
   type Manifest,
   type ReleaseProgress,
+  releasePrefix,
 } from '../releases/control'
 import '../releases/runtime'
 import type { OfflineDownloadStatus } from '../releases/runtime'
@@ -51,6 +53,67 @@ export function ReleaseControls() {
       </section>
       <StorageWorkerControls />
     </>
+  )
+}
+
+const commitDateFormat = new Intl.DateTimeFormat(undefined, {
+  year: 'numeric',
+  month: 'short',
+  day: 'numeric',
+  hour: 'numeric',
+  minute: '2-digit',
+  timeZoneName: 'short',
+})
+
+/** Controlled releases record git's committer timestamp (%cI) as buildDate in
+ * their immutable version.yaml. The launcher caches that file for offline use.
+ * Key this view by release ID so a channel change cannot show a previous date.
+ */
+function ReleaseIdentity({ manifest }: { manifest: Manifest }) {
+  const [commitDate, setCommitDate] = useState<Date | null>()
+  const { releaseId, webCommit } = manifest
+  useEffect(() => {
+    const controller = new AbortController()
+    async function readCommitDate(): Promise<Date | null> {
+      const response = await fetch(releasePrefix(releaseId) + 'version.yaml', {
+        signal: controller.signal,
+      })
+      if (!response.ok) return null
+      const version = parse(await response.text())
+      if (
+        version?.webCommit !== webCommit ||
+        typeof version.buildDate !== 'string'
+      )
+        return null
+      const date = new Date(version.buildDate)
+      return Number.isFinite(date.getTime()) ? date : null
+    }
+    void readCommitDate()
+      .catch(() => null)
+      .then((date) => {
+        if (!controller.signal.aborted) setCommitDate(date)
+      })
+    return () => controller.abort()
+  }, [releaseId, webCommit])
+
+  return (
+    <dd>
+      <p>
+        Commit date:{' '}
+        {commitDate ? (
+          <time dateTime={commitDate.toISOString()}>
+            {commitDateFormat.format(commitDate)}
+          </time>
+        ) : commitDate === undefined ? (
+          'Loading…'
+        ) : (
+          'Unavailable'
+        )}
+      </p>
+      <p className="break-all font-mono text-xs text-nb-text-muted">
+        {releaseId}
+      </p>
+    </dd>
   )
 }
 
@@ -163,9 +226,11 @@ function InstalledReleaseControls() {
         <dt>Current channel</dt>
         <dd>{selection}</dd>
         <dt>Installed release</dt>
-        <dd className="break-all font-mono text-xs">
-          {active?.releaseId ?? 'Not installed'}
-        </dd>
+        {active ? (
+          <ReleaseIdentity key={active.releaseId} manifest={active} />
+        ) : (
+          <dd>Not installed</dd>
+        )}
         {state.selection.kind === 'pinned' && (
           <>
             <dt>Selected release</dt>
@@ -174,12 +239,10 @@ function InstalledReleaseControls() {
             </dd>
           </>
         )}
-        {candidate && (
+        {hasUpdate && (
           <>
             <dt>Available release</dt>
-            <dd className="break-all font-mono text-xs">
-              {candidate.releaseId}
-            </dd>
+            <ReleaseIdentity key={candidate.releaseId} manifest={candidate} />
           </>
         )}
       </dl>

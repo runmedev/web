@@ -319,7 +319,10 @@ describe("MarkdownCell", () => {
 
     renderMarkdownCell(stub as unknown as CellData);
 
-    fireEvent.doubleClick(screen.getByTestId("markdown-rendered"));
+    expect(screen.queryByRole("button", {name: "Edit Markdown"})).toBeNull();
+    const rendered = screen.getByTestId("markdown-rendered");
+    rendered.focus();
+    fireEvent.keyDown(rendered, {key: "Escape"});
 
     await act(async () => {
       await Promise.resolve();
@@ -330,7 +333,7 @@ describe("MarkdownCell", () => {
     );
   });
 
-  it("enters edit mode when double-clicking selected rendered text", async () => {
+  it("keeps selected rendered text on double-click", async () => {
     const cell = create(parser_pb.CellSchema, {
       refId: "md-selected-edit",
       kind: parser_pb.CellKind.MARKUP,
@@ -358,7 +361,8 @@ describe("MarkdownCell", () => {
       await Promise.resolve();
     });
 
-    expect(screen.getByTestId("markdown-editor")).toBeTruthy();
+    expect(screen.getByTestId("markdown-rendered")).toBeTruthy();
+    expect(selection.toString()).toBe("hello");
     selection.removeAllRanges();
   });
 
@@ -379,7 +383,7 @@ describe("MarkdownCell", () => {
     expect(rendered.getAttribute("aria-label")).toContain(
       "view read-only markdown source",
     );
-    fireEvent.doubleClick(rendered);
+    fireEvent.click(screen.getByRole("button", { name: "View Markdown source" }));
 
     await act(async () => {
       await Promise.resolve();

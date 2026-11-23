@@ -18,12 +18,14 @@ import {
 } from '../lib/workspaceDocuments/workspaceDocumentController'
 import {
   isNotebookDocumentUri,
+  parseNotebookPageUri,
   type WorkspaceDocument,
 } from '../lib/workspaceDocuments/workspaceDocumentTypes'
 
 type WorkspaceDocumentContextValue = {
   useWorkspaceDocuments: () => WorkspaceDocument[]
   showDocument: (uri: string, options?: ShowWorkspaceDocumentOptions) => void
+  moveWorkspaceDocument: (uri: string, target: string, after: boolean) => void
   closeWorkspaceDocument: (uri: string) => string | null
 }
 
@@ -53,6 +55,14 @@ export function WorkspaceDocumentProvider({
 
   useEffect(() => {
     for (const notebook of openNotebooks) {
+      const docs = controller.getSnapshot().documents
+      if (
+        docs.some(
+          (d) => parseNotebookPageUri(d.uri)?.notebookUri === notebook.uri
+        ) &&
+        !docs.some((d) => d.uri === notebook.uri)
+      )
+        continue
       controller.showDocument(notebook.uri, {
         title: notebook.name,
         requestedUri: notebook.requestedUri,
@@ -98,8 +108,18 @@ export function WorkspaceDocumentProvider({
   const closeWorkspaceDocument = useCallback(
     (uri: string) => {
       const fallback = controller.closeDocument(uri)
-      if (isNotebookDocumentUri(uri)) {
-        removeNotebook(uri)
+      const source = parseNotebookPageUri(uri)?.notebookUri ?? uri
+      if (
+        isNotebookDocumentUri(source) &&
+        !controller
+          .getSnapshot()
+          .documents.some(
+            (d) =>
+              d.uri === source ||
+              parseNotebookPageUri(d.uri)?.notebookUri === source
+          )
+      ) {
+        removeNotebook(source)
       }
       if (getCurrentDoc() === uri) {
         setCurrentDoc(fallback)
@@ -123,11 +143,13 @@ export function WorkspaceDocumentProvider({
 
   const value = useMemo<WorkspaceDocumentContextValue>(
     () => ({
+      moveWorkspaceDocument: (uri, target, after) =>
+        controller.moveDocument(uri, target, after),
       useWorkspaceDocuments,
       showDocument,
       closeWorkspaceDocument,
     }),
-    [closeWorkspaceDocument, showDocument, useWorkspaceDocuments]
+    [controller, closeWorkspaceDocument, showDocument, useWorkspaceDocuments]
   )
 
   return (

@@ -301,8 +301,15 @@ export function getNotebookShareTarget(
 }
 
 export function normalizeNotebookReferenceUri(reference: string): string {
-  const href = extractMarkdownLinkHref(reference) ?? reference
-  const trimmed = href.trim()
+  const unformatted = reference
+    .trim()
+    .replace(/^\*\*([\s\S]+)\*\*$/, '$1')
+    .replace(/\\([:()])/g, '$1')
+  const href = extractMarkdownLinkHref(unformatted) ?? unformatted
+  // Decode only a fully encoded URI. Escapes inside an ordinary URL are data.
+  const trimmed = /^[a-z][a-z\d+.-]*%3a%2f%2f/i.test(href)
+    ? decodeURIComponent(href)
+    : href
   if (!trimmed) {
     throw new Error('A notebook reference is required')
   }

@@ -130,7 +130,10 @@ describe('CurrentDocProvider', () => {
     expect(window.location.search).toContain('doc=')
   })
 
-  it('remembers the last selected notebook while non-restorable documents are active', async () => {
+  it.each([
+    'local://file/notebook',
+    'page://notebook/local%3A%2F%2Ffile%2Fnotebook/page-1',
+  ])('remembers the source notebook after leaving %s', async (viewUri) => {
     function SelectDocumentsProbe() {
       const { getCurrentDoc, getLastNotebookDoc, setCurrentDoc } =
         useCurrentDoc()
@@ -140,10 +143,7 @@ describe('CurrentDocProvider', () => {
           <div data-testid="last-notebook-doc">
             {getLastNotebookDoc() ?? 'none'}
           </div>
-          <button
-            type="button"
-            onClick={() => setCurrentDoc('local://file/notebook')}
-          >
+          <button type="button" onClick={() => setCurrentDoc(viewUri)}>
             Select notebook
           </button>
           <button type="button" onClick={() => setCurrentDoc('app://console')}>
@@ -161,9 +161,7 @@ describe('CurrentDocProvider', () => {
 
     fireEvent.click(screen.getByRole('button', { name: 'Select notebook' }))
     await waitFor(() => {
-      expect(screen.getByTestId('current-doc').textContent).toBe(
-        'local://file/notebook'
-      )
+      expect(screen.getByTestId('current-doc').textContent).toBe(viewUri)
     })
 
     fireEvent.click(screen.getByRole('button', { name: 'Select console' }))

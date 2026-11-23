@@ -86,10 +86,10 @@ try {
   inputPage.setDefaultTimeout(15000)
   const fixture = await evaluate(`
     const db = window.app.localNotebooks;
-    const { LOCAL_FOLDER_URI } = await import('/src/storage/local.ts');
     const { parseOperationLog, serializeOperationLog, createRunmeOperation, causalHeads } = await import('/src/lib/operationLog/index.ts');
-    if (!await db.folders.get(LOCAL_FOLDER_URI)) await db.folders.put({id:LOCAL_FOLDER_URI,name:'Local',remoteId:'',children:[],lastSynced:''});
-    const file = await db.create(LOCAL_FOLDER_URI, 'editor-range-comments.runme');
+    const dir = await (await navigator.storage.getDirectory()).getDirectoryHandle('Test notebooks', { create: true });
+    const folderUri = await db.mountFilesystemFolder(dir);
+    const file = await db.create(folderUri, 'editor-range-comments.runme');
     const notebook = await db.load(file.uri);
     await (await db.createOperationLogSaveStore(file.uri)).save(file.uri, notebook);
     const log = parseOperationLog(await db.loadContent(file.uri));
@@ -149,7 +149,10 @@ try {
   )
   await submit('Code selection comment')
 
-  await inputPage.locator('#markdown-rendered-editor-range-1').dblclick()
+  await inputPage
+    .locator('#markdown-cell-editor-range-1')
+    .getByTestId('markdown-rendered')
+    .press('Escape')
   await inputPage.locator(markdownInput).first().waitFor({ state: 'visible' })
   await inputPage.locator(markdownInput).focus()
   for (const key of [
@@ -204,7 +207,7 @@ try {
   await inputPage.keyboard.insertText('# Changed after opening comment draft')
   await submit('Markdown selection comment')
   await inputPage.waitForFunction(
-    `document.body.textContent.includes('Outdated anchor')`
+    `document.body.textContent.includes('has changed since you commented')`
   )
   browser(
     'screenshot',
@@ -295,7 +298,7 @@ try {
   check(
     'Later Markdown edit does not retarget the comment',
     await evaluate(
-      `return document.body.textContent.includes('Changed after opening comment draft') && document.body.textContent.includes('Outdated anchor');`
+      `return document.body.textContent.includes('Changed after opening comment draft') && document.body.textContent.includes('has changed since you commented');`
     )
   )
   browser(
@@ -322,11 +325,30 @@ try {
     const rect = range.getBoundingClientRect()
     return { x: rect.x, y: rect.y + rect.height / 2, width: rect.width }
   })
+  await inputPage.mouse.dblclick(box.x + box.width / 2, box.y)
+  check(
+    'Double-click selects a rendered word without opening the editor',
+    (await inputPage.evaluate(() => window.getSelection()?.toString())) ===
+      'Changed' && (await rendered.isVisible())
+  )
+  // Starting a drag inside selected text drags the selection itself. Clear
+  // the word selection with a click before exercising a fresh drag.
+  await inputPage.mouse.click(box.x + box.width + 4, box.y)
   await inputPage.mouse.move(box.x + 1, box.y)
   await inputPage.mouse.down()
   await inputPage.mouse.move(box.x + box.width - 1, box.y, { steps: 12 })
   await inputPage.mouse.up()
+  check(
+    'Dragging across the word selects its rendered text',
+    (await inputPage.evaluate(() => window.getSelection()?.toString())) ===
+      'Changed'
+  )
   await inputPage.mouse.click(box.x + box.width / 2, box.y, { button: 'right' })
+  check(
+    'Right-click keeps the rendered selection visible to the browser',
+    (await inputPage.evaluate(() => window.getSelection()?.toString())) ===
+      'Changed'
+  )
   await inputPage
     .getByRole('button', { name: 'Comment on selected text', exact: true })
     .click()
@@ -335,7 +357,10 @@ try {
   await inputPage
     .getByText('Rendered heading selection comment', { exact: true })
     .waitFor({ state: 'visible' })
-  await rendered.dblclick()
+  await inputPage
+    .locator('#markdown-cell-editor-range-1')
+    .getByTestId('markdown-rendered')
+    .press('Escape')
   await inputPage.locator(markdownInput).first().waitFor({ state: 'visible' })
   await inputPage
     .getByText('Rendered heading selection comment', { exact: true })

@@ -14,6 +14,13 @@ import {
   RunmeMetadataKey,
   parser_pb,
 } from '../../runme/client'
+import {
+  CELL_PAGE,
+  notebookPages,
+  pageNameKey,
+  pagePositionKey,
+  resolvePage,
+} from '../notebookPages'
 
 function notebook(
   cells: Array<{ id: string; value: string }>
@@ -250,4 +257,36 @@ describe('editor operation-log journal', () => {
       materializedLogToNotebook(materialized).cells[0]?.outputs
     ).toHaveLength(1)
   })
+})
+
+it('merges page organization separately from source edits in either delivery order', async () => {
+  const initial = notebook([{ id: 'a', value: 'Timeline' }])
+  initial.metadata[pageNameKey('invest')] = 'Investigation'
+  const seed = await apply(notebook([]), initial, [], 'seed')
+  const moved = cloneNotebook(initial)
+  moved.cells[0]!.metadata[CELL_PAGE] = 'report'
+  moved.metadata[pageNameKey('report')] = 'Postmortem'
+  moved.metadata[pagePositionKey('invest')] = '[[9,"x",1]]'
+  const edited = cloneNotebook(initial)
+  edited.cells[0]!.value = 'Updated timeline'
+  edited.metadata[pageNameKey('invest')] = 'Evidence'
+  const a = await apply(initial, moved, seed, 'agent')
+  const b = await apply(initial, edited, seed, 'human')
+  for (const delivery of [
+    [...a, ...b],
+    [...b, ...a],
+  ]) {
+    const result = materializedLogToNotebook(
+      materializeOperationLog([...seed, ...delivery])
+    )
+    expect(result.cells[0]?.value).toBe('Updated timeline')
+    expect(result.cells[0]?.metadata[CELL_PAGE]).toBe('report')
+    expect(result.metadata[pageNameKey('invest')]).toBe('Evidence')
+    expect(result.metadata[pagePositionKey('invest')]).toBe(
+      moved.metadata[pagePositionKey('invest')]
+    )
+    expect(resolvePage('deleted-page', notebookPages(result.metadata))).toBe(
+      'invest'
+    )
+  }
 })

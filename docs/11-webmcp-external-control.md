@@ -48,6 +48,35 @@ Prefer this progressive-disclosure path over guessing documentation URLs or
 fetching every page. Unknown names fail without modifying page or notebook
 state.
 
+## Organize cells into pages
+
+Inside `ExecuteCode`, run `await notebooks.help('pages')` to inspect the page API available in this build. Use the source notebook URI returned by `notebooks.open(reference)`. Listing pages gives you their IDs and their cells in display order. Match these cell IDs against `(await notebooks.get(target)).notebook.cells` to read a particular page. Keep IDs across renames; two pages may have the same title.
+
+For example, after binding the requested notebook's URI, add a Postmortem page and place a new cell directly on it:
+
+```js
+const target = { uri: notebookUri }
+const layout = await notebooks.listPages({ target })
+const page = await notebooks.createPage({
+  target, name: 'Postmortem', expectedRevision: layout.handle.revision
+})
+const added = await notebooks.appendCell({
+  target, pageId: page.id, kind: 'markup', value: '## Follow-up actions'
+})
+const verified = await notebooks.listPages({ target })
+console.log(verified.pages.find(p => p.id === page.id).cellRefIds.includes(added.cell.refId))
+```
+
+| Task | JavaScript |
+| --- | --- |
+| Rename a page | `await notebooks.renamePage({target, pageId, name})` |
+| Move before a sibling | `await notebooks.movePage({target, pageId, beforePageId})`. Use `beforePageId: null` to move to the end. |
+| Assign an existing cell | `await notebooks.moveCellToPage({target, refId, pageId})`. Use `pageId: null` to clear its assignment. |
+| Remove a page and keep its cells | `await notebooks.removePage({target, pageId})` |
+| Show a page to the user | `await notebooks.showPage({target, pageId})` opens or focuses its workspace tab. |
+
+The first page is the default. Unassigned cells and cells whose page was removed appear there. A notebook without stored pages lists one implicit Main page with `id: null`. Renaming it returns its new, stable ID. Adding a second page materializes Main first. Page writes accept an optional `expectedRevision` from the latest listing. If a write conflicts or its outcome is uncertain, reread the layout before retrying.
+
 ## ExecuteCode operation lifecycle
 
 `ExecuteCode` uses one API for fast and long-running AppKernel work. Every

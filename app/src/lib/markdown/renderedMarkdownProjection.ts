@@ -650,6 +650,44 @@ export function sourceRangesForProjectionRange(
   )
 }
 
+/** Bind one drag to its outer source boundaries, including intervening markup. */
+export function sourceRangeForRenderedSelection(
+  projection: RenderedMarkdownProjection,
+  source: string,
+  start: number,
+  end: number
+): TextRange | undefined {
+  if (start >= end) return undefined
+  const points = codePoints(projection.text)
+  // Map the two boundaries while the single browser selection is still known.
+  // For transformed nodes we can identify the whole node's boundaries only.
+  function boundary(position: number, isEnd: boolean) {
+    const segment = projection.segments.find(
+      ({ projectionStart, projectionEnd }) =>
+        isEnd
+          ? projectionStart < position && position <= projectionEnd
+          : projectionStart <= position && position < projectionEnd
+    )
+    const range = segment?.sourceRanges[0]
+    if (!segment || !range) return undefined
+    if (position === segment.projectionStart) return range.start
+    if (position === segment.projectionEnd) return range.end
+    const text = points
+      .slice(segment.projectionStart, segment.projectionEnd)
+      .join('')
+    if (text !== source.slice(range.start, range.end)) return undefined
+    return (
+      range.start +
+      points.slice(segment.projectionStart, position).join('').length
+    )
+  }
+  const from = boundary(start, false),
+    to = boundary(end, true)
+  return from !== undefined && to !== undefined && from < to
+    ? { start: from, end: to }
+    : undefined
+}
+
 export function captureRenderedMarkdownSelection(args: {
   root: HTMLElement
   selection: Selection

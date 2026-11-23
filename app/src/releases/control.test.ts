@@ -95,6 +95,7 @@ describe('release eligibility and staging', () => {
       { format: 0 },
       { launcherProtocol: {} },
       { owner: {} },
+      { owner: { ...m.owner, rpcMin: 9, rpcMax: 8 } },
       { storageCompatibilityId: 'old' },
       { releaseId: 'other' },
       { appEntry: 'missing.js' },

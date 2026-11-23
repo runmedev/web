@@ -118,6 +118,19 @@ export function validateAnchor(value: any): asserts value is Anchor {
     value.selection_surface !== 'rendered-markdown'
   )
     throw new Error('Invalid selection surface')
+  if (value.output_item !== undefined) {
+    const item = value.output_item
+    if (
+      !item ||
+      value.range ||
+      value.selection_surface ||
+      !Number.isSafeInteger(item.output_index) ||
+      item.output_index < 0 ||
+      !Number.isSafeInteger(item.item_index) ||
+      item.item_index < 0
+    )
+      throw new Error('Invalid output item anchor')
+  }
   if (value.range) {
     const r = value.range
     if (

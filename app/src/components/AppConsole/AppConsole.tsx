@@ -21,7 +21,10 @@ import {
   createRunmeConsoleApi,
   type NotebookDataLike,
 } from '../../lib/runtime/runmeConsole'
-import { isNotebookDocumentUri } from '../../lib/workspaceDocuments/workspaceDocumentTypes'
+import {
+  isNotebookDocumentUri,
+  parseNotebookPageUri,
+} from '../../lib/workspaceDocuments/workspaceDocumentTypes'
 import { Runner } from '../../lib/runner'
 import {
   FilesystemNotebookStore,
@@ -250,20 +253,15 @@ export default function AppConsole({
         return getNotebookData(targetUri) ?? null
       }
 
-      const currentUri = getCurrentDoc()
-      if (isNotebookDocumentUri(currentUri)) {
-        const currentNotebook = getNotebookData(currentUri)
-        if (currentNotebook) {
-          return currentNotebook
-        }
-      }
-
-      const fallbackUris = [
+      const candidates = [
+        getCurrentDoc(),
         getVisibleNotebookUri(),
         getLastNotebookDoc(),
         openNotebooks[0]?.uri,
       ]
-      for (const fallbackUri of fallbackUris) {
+      for (const view of candidates) {
+        const fallbackUri =
+          parseNotebookPageUri(view ?? '')?.notebookUri ?? view
         if (!isNotebookDocumentUri(fallbackUri)) {
           continue
         }

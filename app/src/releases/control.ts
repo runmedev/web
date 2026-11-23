@@ -1,3 +1,4 @@
+import { STORAGE_OWNER_VERSION } from '../storage/storageOwnerProtocol'
 import {
   LAUNCHER_CACHE,
   LAUNCHER_POINTER,
@@ -301,7 +302,8 @@ export function validateManifest(value: unknown): Manifest {
     m.storageCompatibilityId !== STORAGE_COMPATIBILITY ||
     !Number.isInteger(m.owner?.rpcMin) ||
     !Number.isInteger(m.owner?.rpcMax) ||
-    m.owner?.rpcMin > 8 ||
+    m.owner?.rpcMin > m.owner?.rpcMax ||
+    m.owner?.rpcMin > STORAGE_OWNER_VERSION ||
     m.owner?.rpcMax < 8 ||
     !Array.isArray(m.assets) ||
     !m.assets.length ||

@@ -16,6 +16,20 @@ description: >-
 
 The app supports opening shared Google Drive files and folders from links.
 
+## Open a pasted notebook link
+
+Press **⌘O** on macOS or **Ctrl+O** on Windows and Linux, or select the
+link icon below Outline in the left toolbar. Type part of a notebook name to
+search mounted Explorer folders, including collapsed folders. For example,
+`error` matches `error_investigator.runme`. Use the arrow keys and **Enter** or
+click a result to open it. You can also paste a Runme share URL, Markdown link, Drive
+file URL, or percent-encoded URL and press **Enter**. Runme opens the notebook
+in the current app and selects its tab, even if the link names another Runme
+host. Press **Escape** to dismiss the dialog.
+
+In JavaScript cells and WebMCP code, use `await notebooks.normalizeLink(text)`
+to extract the notebook URI or `await notebooks.show(text)` to open it.
+
 ## Expected behavior
 
 When a shared Drive link is introduced, the app may need to:

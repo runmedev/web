@@ -20,6 +20,8 @@ Users edit notebook cells directly in the main notebook pane.
 - markdown cells are rendered,
 - notebooks preserve cell order and outputs.
 
+Focus a rendered Markdown cell and press **Esc** to edit its source. Press **Esc** again to render it. See [Keyboard shortcuts](23-keyboard-shortcuts.md) for other cell and panel commands.
+
 ## Execution model
 
 A code cell executes against the active runner for that notebook context.

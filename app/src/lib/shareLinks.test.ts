@@ -259,6 +259,19 @@ describe('buildNotebookMarkdownLink', () => {
 })
 
 describe('normalizeNotebookReferenceUri', () => {
+  const drive = 'https://drive.google.com/file/d/example/view?resourcekey=a%2Fb'
+  const foreign = 'https://another.example/app?doc=' + encodeURIComponent(drive)
+  it.each([
+    drive,
+    encodeURIComponent(drive),
+    foreign,
+    '[Notebook](' + foreign + ')',
+    '**[Notebook]\\(' + foreign.replace('https:', 'https\\:') + ')**',
+    '**' + encodeURIComponent(drive) + '**',
+  ])('normalizes pasted reference %s', (text) => {
+    expect(normalizeNotebookReferenceUri(text)).toBe(drive)
+  })
+
   it('returns local URIs unchanged', () => {
     expect(
       normalizeNotebookReferenceUri(

@@ -350,6 +350,8 @@ async function handleSandboxAppKernelBridgeCall({
       return runmeApi.runAll(target)
     case 'runme.rerun':
       return runmeApi.rerun(target)
+    case 'notebooks.help':
+      return globals.notebooks.help(args[0] as string | undefined)
     case 'runme.help':
       return runmeApi.help()
     case 'tour.show':

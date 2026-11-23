@@ -1,8 +1,9 @@
 // @vitest-environment jsdom
 import React from 'react'
-import { act, render } from '@testing-library/react'
+import { act, fireEvent, render, screen } from '@testing-library/react'
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 import Editor from './Editor'
+import { CellPageMove } from './CellPageMove'
 
 const state = vi.hoisted(() => ({
   editor: null as any,
@@ -102,4 +103,30 @@ describe('editor range comments', () => {
     view.unmount()
     expect(state.dispose).toHaveBeenCalledTimes(2)
   })
+})
+
+it('moves the cell to the destination selected from the editor context menu', () => {
+  const move = vi.fn()
+  render(
+    <CellPageMove
+      destinations={[{ id: 'invest', name: 'Investigation', position: null }]}
+      move={move}
+    >
+      <Editor {...props} />
+    </CellPageMove>
+  )
+  expect(screen.queryByRole('dialog')).toBeNull()
+  expect(state.action.label).toBe('Move to page…')
+  const original = HTMLDialogElement.prototype.showModal
+  HTMLDialogElement.prototype.showModal = function () {
+    this.open = true
+  }
+  try {
+    act(() => state.action.run())
+    fireEvent.click(screen.getByRole('button', { name: 'Investigation' }))
+    expect(move).toHaveBeenCalledWith('invest')
+    expect(screen.queryByRole('dialog')).toBeNull()
+  } finally {
+    HTMLDialogElement.prototype.showModal = original
+  }
 })

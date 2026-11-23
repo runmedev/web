@@ -1,3 +1,4 @@
+import md5 from 'md5'
 import { v4 as uuidv4 } from 'uuid'
 
 import { migrateNotebookCellIds } from '../lib/cellIdentity'
@@ -9,7 +10,6 @@ import {
   detectNotebookFileFormat,
   encodeIpynbNotebook,
   encodeRunmeNotebook,
-  isNotebookFileName,
   notebookFileExtension,
   validateNotebookRenameFormat,
 } from '../lib/notebookFormat'
@@ -50,7 +50,7 @@ declare global {
  * Format: `fs://workspace/<workspaceId>/file/<encodedRelativePath>`
  *     or: `fs://workspace/<workspaceId>/dir/<encodedRelativePath>`
  */
-function buildFsUri(
+export function buildFsUri(
   workspaceId: string,
   relativePath: string,
   kind: "file" | "directory",
@@ -63,7 +63,7 @@ function buildFsUri(
 /**
  * Build the root URI for a workspace directory.
  */
-function buildWorkspaceRootUri(workspaceId: string): string {
+export function buildWorkspaceRootUri(workspaceId: string): string {
   return `fs://workspace/${workspaceId}/dir/${encodeURIComponent("")}`;
 }
 
@@ -73,7 +73,7 @@ interface ParsedFsUri {
   relativePath: string;
 }
 
-function parseFsUri(uri: string): ParsedFsUri {
+export function parseFsUri(uri: string): ParsedFsUri {
   if (!uri.startsWith("fs://workspace/")) {
     throw new Error(`Invalid filesystem URI: ${uri}`);
   }
@@ -146,13 +146,13 @@ function physicalEntryLockId(
 
 function notebookNameForCreate(name: string): string {
   const trimmed = name.trim()
-  if (detectNotebookFileFormat(trimmed)) {
+  if (detectNotebookFileFormat(trimmed) === 'runme-operation-log') {
     return trimmed
   }
   if (/\.[^/]+$/.test(trimmed)) {
     throw new Error(`Unsupported notebook file extension: ${name}`)
   }
-  return `${trimmed}.json`
+  return `${trimmed}.runme`
 }
 
 function notebookNameForRename(oldName: string, name: string): string {
@@ -176,6 +176,7 @@ function notebookNameForRename(oldName: string, name: string): string {
 interface BaseRevision {
   lastModified: number;
   size: number;
+  checksum?: string;
 }
 
 // ---------------------------------------------------------------------------
@@ -208,7 +209,7 @@ function isNotFoundError(error: unknown): boolean {
 const FILE_CREATE_LOCK_PREFIX = 'runme:filesystem-create:'
 const fallbackCreateTails = new Map<string, Promise<void>>()
 
-async function runFilesystemCreateExclusive<T>(
+async function runFilesystemExclusive<T>(
   key: string,
   operation: () => Promise<T>
 ): Promise<T> {
@@ -245,7 +246,7 @@ async function runFilesystemCreateExclusive<T>(
 /**
  * FilesystemNotebookStore is the local filesystem adapter. The editor works
  * against LocalNotebooks; this class lists/loads/saves upstream files using the
- * File System Access API. Notebooks are stored as `.json` files on the local
+ * File System Access API. Notebooks are stored as `.runme` files on the local
  * filesystem, and workspace/file handle metadata is cached in IndexedDB via
  * `FsDatabase`.
  *
@@ -283,6 +284,27 @@ export class FilesystemNotebookStore {
     }
 
     const dirHandle = await window.showDirectoryPicker!({ mode: "readwrite" });
+    return this.mountDirectory(dirHandle)
+  }
+
+  async mountDirectory(dirHandle: FileSystemDirectoryHandle): Promise<string> {
+    const register = async () => {
+      for (const workspace of await this.listWorkspaces()) {
+        if (await dirHandle.isSameEntry?.(workspace.rootHandle)) {
+          await this.db.workspaces.update(workspace.id, {
+            rootHandle: dirHandle, name: dirHandle.name, mounted: true,
+            lastOpened: Date.now(), permissionState: 'granted',
+          })
+          return buildWorkspaceRootUri(workspace.id)
+        }
+      }
+      return this.registerWorkspace(dirHandle)
+    }
+    return runFilesystemExclusive('register-workspace', register)
+  }
+
+  /** Persist the handle before publishing the mount URI to the explorer. */
+  private async registerWorkspace(dirHandle: FileSystemDirectoryHandle): Promise<string> {
     const id = uuidv4();
 
     const record: WorkspaceRecord = {
@@ -291,6 +313,7 @@ export class FilesystemNotebookStore {
       rootHandle: dirHandle,
       lastOpened: Date.now(),
       permissionState: "granted",
+      mounted: true,
     };
 
     await this.db.workspaces.put(record);
@@ -321,6 +344,7 @@ export class FilesystemNotebookStore {
 
     const state = await ws.rootHandle.requestPermission!({ mode: "readwrite" });
     await this.db.workspaces.update(workspaceId, {
+      rootHandle: ws.rootHandle,
       permissionState: state,
       lastOpened: Date.now(),
     });
@@ -328,9 +352,22 @@ export class FilesystemNotebookStore {
     return state === "granted";
   }
 
-  /**
-   * List all known workspaces, ordered by most recently opened.
-   */
+  /** Adopt only legacy roots still present in the saved explorer configuration. */
+  async restoreWorkspace(uri: string): Promise<void> {
+    const { workspaceId } = parseFsUri(uri)
+    await this.db.transaction('rw', this.db.workspaces, async () => {
+      const ws = await this.db.workspaces.get(workspaceId)
+      if (ws && ws.mounted === undefined) await this.db.workspaces.put({ ...ws, mounted: true })
+    })
+  }
+
+  /** Retain the handle and mirrors so reconnect can restore the same identities. */
+  async unmount(uri: string): Promise<void> {
+    const ws = await this.db.workspaces.get(parseFsUri(uri).workspaceId)
+    if (ws) await this.db.workspaces.update(ws.id, { mounted: false, rootHandle: ws.rootHandle })
+  }
+
+  /** List known workspaces, most recently opened first. */
   async listWorkspaces(): Promise<WorkspaceRecord[]> {
     return this.db.workspaces.orderBy("lastOpened").reverse().toArray();
   }
@@ -339,12 +376,26 @@ export class FilesystemNotebookStore {
   // File/directory operations
   // -----------------------------------------------------------------------
 
-  async list(uri: string): Promise<NotebookStoreItem[]> {
+  async list(uri: string, signal?: AbortSignal): Promise<NotebookStoreItem[]> {
     const parsed = parseFsUri(uri);
     if (parsed.kind !== "directory") {
       throw new Error("FilesystemNotebookStore.list expects a directory URI");
     }
 
+    const cacheId = entryRecordId(parsed.workspaceId, parsed.relativePath)
+    try {
+      const items = await this.listDirectory(uri, parsed, signal)
+      if (!signal?.aborted) await this.db.entries.update(cacheId, { listedChildren: items })
+      return items
+    } catch (error) {
+      if ((error as DOMException).name !== 'NotAllowedError') throw error
+      const cached = await this.db.entries.get(cacheId)
+      if (!cached?.listedChildren) throw error
+      return cached.listedChildren.filter((child) => child.type === NotebookStoreItemType.Folder || detectNotebookFileFormat(child.name) === 'runme-operation-log')
+    }
+  }
+
+  private async listDirectory(uri: string, parsed: ParsedFsUri, signal?: AbortSignal): Promise<NotebookStoreItem[]> {
     const dirHandle = await this.resolveDirectoryHandle(
       parsed.workspaceId,
       parsed.relativePath,
@@ -352,8 +403,9 @@ export class FilesystemNotebookStore {
 
     const items: NotebookStoreItem[] = [];
     for await (const [name, handle] of dirHandle.entries()) {
+      if (signal?.aborted) break;
       if (handle.kind === 'file') {
-        if (!isNotebookFileName(name)) {
+        if (detectNotebookFileFormat(name) !== 'runme-operation-log') {
           continue
         }
         const relPath = parsed.relativePath
@@ -378,12 +430,7 @@ export class FilesystemNotebookStore {
           name,
           type: NotebookStoreItemType.File,
           children: [],
-          mimeType:
-            detectNotebookFileFormat(name) === 'ipynb'
-              ? IPYNB_MIME_TYPE
-              : detectNotebookFileFormat(name) === 'runme-operation-log'
-                ? RUNME_OPERATION_LOG_MIME_TYPE
-                : 'application/json',
+          mimeType: RUNME_OPERATION_LOG_MIME_TYPE,
           parents: [uri],
         });
       } else if (handle.kind === "directory") {
@@ -392,8 +439,11 @@ export class FilesystemNotebookStore {
           : name;
         const childUri = buildFsUri(parsed.workspaceId, relPath, "directory");
 
+        const dirId = entryRecordId(parsed.workspaceId, relPath)
+        const previous = await this.db.entries.get(dirId)
         await this.db.entries.put({
-          id: entryRecordId(parsed.workspaceId, relPath),
+          listedChildren: previous?.listedChildren,
+          id: dirId,
           workspaceId: parsed.workspaceId,
           relativePath: relPath,
           kind: "directory",
@@ -442,13 +492,13 @@ export class FilesystemNotebookStore {
     this.baseRevisions.set(recId, {
       lastModified: file.lastModified,
       size: file.size,
+      checksum: md5(text),
     });
 
     // Update cached metadata.
     await this.db.entries.update(recId, {
       lastKnownMtime: file.lastModified,
       lastKnownSize: file.size,
-      cachedDoc: text,
     });
 
     const decoded = decodeNotebookFile(text, parsed.relativePath)
@@ -468,31 +518,13 @@ export class FilesystemNotebookStore {
       throw new Error("FilesystemNotebookStore.save expects a file URI");
     }
 
-    const fileHandle = await this.resolveFileHandle(
-      parsed.workspaceId,
-      parsed.relativePath,
-    );
-
-    // Conflict detection: compare current file stats to base revision.
-    const recId = entryRecordId(parsed.workspaceId, parsed.relativePath);
-    const baseRev = this.baseRevisions.get(recId);
-    if (baseRev) {
-      const currentFile = await fileHandle.getFile();
-      if (
-        currentFile.lastModified !== baseRev.lastModified ||
-        currentFile.size !== baseRev.size
-      ) {
-        throw new Error(
-          `Conflict detected for ${parsed.relativePath}: the file was modified externally since last load.`,
-        );
-      }
-    }
-
+    const recId = entryRecordId(parsed.workspaceId, parsed.relativePath)
+    const baseRevision = this.baseRevisions.get(recId)
     migrateNotebookCellIds(notebook)
-    let json: string
     if (detectNotebookFileFormat(parsed.relativePath) === 'ipynb') {
       let preservation = this.ipynbState.get(recId)
       if (!preservation) {
+        const fileHandle = await this.resolveFileHandle(parsed.workspaceId, parsed.relativePath)
         const currentText = await (await fileHandle.getFile()).text()
         const decoded = decodeNotebookFile(currentText, parsed.relativePath)
         preservation = decoded.ipynb
@@ -504,31 +536,11 @@ export class FilesystemNotebookStore {
         preservation?.shadowText,
         preservation?.state
       )
-      json = encoded.text
-      this.ipynbState.set(recId, {
-        shadowText: json,
-        state: encoded.state,
-      })
-    } else {
-      json = encodeRunmeNotebook(notebook)
+      await this.writeContent(parsed, encoded.text, baseRevision)
+      this.ipynbState.set(recId, { shadowText: encoded.text, state: encoded.state })
+      return
     }
-
-    const writable = await fileHandle.createWritable();
-    await writable.write(json);
-    await writable.close();
-
-    // Update base revision after successful write.
-    const updatedFile = await fileHandle.getFile();
-    this.baseRevisions.set(recId, {
-      lastModified: updatedFile.lastModified,
-      size: updatedFile.size,
-    });
-
-    await this.db.entries.update(recId, {
-      lastKnownMtime: updatedFile.lastModified,
-      lastKnownSize: updatedFile.size,
-      cachedDoc: json,
-    });
+    await this.writeContent(parsed, encodeRunmeNotebook(notebook), baseRevision)
   }
 
   async create(parentUri: string, name: string): Promise<NotebookStoreItem> {
@@ -577,7 +589,7 @@ export class FilesystemNotebookStore {
       relPath
     )
 
-    return runFilesystemCreateExclusive(createLockKey, async () => {
+    return runFilesystemExclusive(createLockKey, async () => {
       const dirHandle = await this.resolveDirectoryHandle(
         parsed.workspaceId,
         parsed.relativePath,
@@ -620,7 +632,6 @@ export class FilesystemNotebookStore {
           handle: fileHandle,
           lastKnownMtime: file.lastModified,
           lastKnownSize: file.size,
-          cachedDoc: content,
         });
 
         this.baseRevisions.set(recId, {
@@ -633,12 +644,9 @@ export class FilesystemNotebookStore {
           name: safeName,
           type: NotebookStoreItemType.File,
           children: [],
-          mimeType:
-            detectNotebookFileFormat(safeName) === 'ipynb'
-              ? IPYNB_MIME_TYPE
-              : detectNotebookFileFormat(safeName) === 'runme-operation-log'
-                ? RUNME_OPERATION_LOG_MIME_TYPE
-                : 'application/json',
+          mimeType: detectNotebookFileFormat(safeName) === 'ipynb' ? IPYNB_MIME_TYPE
+            : detectNotebookFileFormat(safeName) === 'runme-operation-log' ? RUNME_OPERATION_LOG_MIME_TYPE
+            : 'application/json',
           parents: [parentUri],
         };
       } catch (error) {
@@ -743,15 +751,15 @@ export class FilesystemNotebookStore {
       parentRelPath,
     );
 
-    // Create the new file and write the contents.
-    const newFileHandle = await dirHandle.getFileHandle(safeName, { create: true });
-    const writable = await newFileHandle.createWritable();
-    await writable.write(content);
-    await writable.close();
-
-    // Remove the old file.
-    const oldEntryName = segments[segments.length - 1]
-    await dirHandle.removeEntry(oldEntryName)
+    if (safeName === oldName) return (await this.getMetadata(uri))!
+    const parentUri = buildFsUri(parsed.workspaceId, parentRelPath, 'directory')
+    // Use the same exclusive destination claim as create, including for overlapping mounts.
+    const created = await this.createFileWithContent(parentUri, safeName, content, 'createContent')
+    const current = await (await dirHandle.getFileHandle(oldName)).getFile()
+    if (current.lastModified !== oldFile.lastModified || await current.text() !== content) {
+      throw new Error('The source changed during rename. Both files have been preserved.')
+    }
+    await dirHandle.removeEntry(oldName)
 
     // Clean up old entry record.
     const oldRecId = entryRecordId(parsed.workspaceId, parsed.relativePath)
@@ -760,47 +768,11 @@ export class FilesystemNotebookStore {
     const preservation = this.ipynbState.get(oldRecId)
     this.ipynbState.delete(oldRecId)
 
-    // Register the new entry.
-    const newRelPath = parentRelPath ? `${parentRelPath}/${safeName}` : safeName;
-    const newUri = buildFsUri(parsed.workspaceId, newRelPath, "file");
-    const newFile = await newFileHandle.getFile();
-    const newRecId = entryRecordId(parsed.workspaceId, newRelPath);
-
-    await this.db.entries.put({
-      id: newRecId,
-      workspaceId: parsed.workspaceId,
-      relativePath: newRelPath,
-      kind: "file",
-      handle: newFileHandle,
-      lastKnownMtime: newFile.lastModified,
-      lastKnownSize: newFile.size,
-      cachedDoc: content,
-    });
-
-    this.baseRevisions.set(newRecId, {
-      lastModified: newFile.lastModified,
-      size: newFile.size,
-    })
     if (preservation) {
-      this.ipynbState.set(newRecId, preservation)
+      const newPath = parseFsUri(created.uri).relativePath
+      this.ipynbState.set(entryRecordId(parsed.workspaceId, newPath), preservation)
     }
-
-    const parentUri = buildFsUri(
-      parsed.workspaceId,
-      parentRelPath,
-      "directory",
-    );
-
-    return {
-      uri: newUri,
-      name: safeName,
-      type: NotebookStoreItemType.File,
-      children: [],
-      mimeType: safeName.toLowerCase().endsWith('.ipynb')
-        ? IPYNB_MIME_TYPE
-        : 'application/json',
-      parents: [parentUri],
-    };
+    return created
   }
 
   async getMetadata(uri: string): Promise<NotebookStoreItem | null> {
@@ -865,11 +837,13 @@ export class FilesystemNotebookStore {
     // Raw operation-log sync uses loadContent followed by saveContent as a
     // compare-and-swap pair. Capture the exact revision that was read so an
     // external write during the merge is rejected without overwriting it.
+    const text = await file.text()
     this.baseRevisions.set(recId, {
       lastModified: file.lastModified,
       size: file.size,
+      checksum: md5(text),
     })
-    return file.text()
+    return text
   }
 
   async saveContent(uri: string, content: string): Promise<void> {
@@ -877,46 +851,54 @@ export class FilesystemNotebookStore {
     if (parsed.kind !== 'file') {
       throw new Error('FilesystemNotebookStore.saveContent expects a file URI')
     }
-    const handle = await this.resolveFileHandle(
-      parsed.workspaceId,
-      parsed.relativePath
-    )
     const recId = entryRecordId(parsed.workspaceId, parsed.relativePath)
     const decoded =
       detectNotebookFileFormat(parsed.relativePath) === 'ipynb'
         ? decodeNotebookFile(content, parsed.relativePath)
         : undefined
     const baseRevision = this.baseRevisions.get(recId)
-    if (baseRevision) {
-      const current = await handle.getFile()
-      if (
-        current.lastModified !== baseRevision.lastModified ||
-        current.size !== baseRevision.size
-      ) {
-        throw new Error(
-          `Conflict detected for ${parsed.relativePath}: the file was modified externally since last load.`
-        )
-      }
-    }
-    const writable = await handle.createWritable()
-    await writable.write(content)
-    await writable.close()
-    const updated = await handle.getFile()
-    this.baseRevisions.set(recId, {
-      lastModified: updated.lastModified,
-      size: updated.size,
-    })
-    await this.db.entries.update(recId, {
-      lastKnownMtime: updated.lastModified,
-      lastKnownSize: updated.size,
-      cachedDoc: content,
-    })
+    await this.writeContent(parsed, content, baseRevision)
     if (decoded?.ipynb) {
       this.ipynbState.set(recId, {
         shadowText: decoded.ipynb.shadowText,
         state: decoded.ipynb,
       })
     }
+  }
+
+  /** Serialize overlapping mounts at the physical path and recheck the observed version inside the lock. */
+  private async writeContent(parsed: ParsedFsUri, content: string, baseRevision?: BaseRevision): Promise<void> {
+    const { workspaceId, relativePath } = parsed
+    const recId = entryRecordId(workspaceId, relativePath)
+    const lockKey = await this.physicalEntryLockKey(workspaceId, relativePath)
+    await runFilesystemExclusive(lockKey, async () => {
+      const handle = await this.resolveFileHandle(workspaceId, relativePath)
+      if (baseRevision) {
+        const current = await handle.getFile()
+        if (
+          current.lastModified !== baseRevision.lastModified ||
+          current.size !== baseRevision.size ||
+          (baseRevision.checksum !== undefined && md5(await current.text()) !== baseRevision.checksum)
+        ) {
+          throw new Error(
+            `Conflict detected for ${parsed.relativePath}: the file was modified externally since last load.`
+          )
+        }
+      }
+      const writable = await handle.createWritable()
+      await writable.write(content)
+      await writable.close()
+      const updated = await handle.getFile()
+      this.baseRevisions.set(recId, {
+        lastModified: updated.lastModified,
+        size: updated.size,
+        checksum: md5(content),
+      })
+      await this.db.entries.update(recId, {
+        lastKnownMtime: updated.lastModified,
+        lastKnownSize: updated.size,
+      })
+    })
   }
 
   async getType(uri: string): Promise<NotebookStoreItemType> {
@@ -935,13 +917,9 @@ export class FilesystemNotebookStore {
     relativePath: string,
   ): Promise<FileSystemFileHandle> {
     const recId = entryRecordId(workspaceId, relativePath);
-    const entry = await this.db.entries.get(recId);
-    if (entry && entry.kind === "file") {
-      return entry.handle as FileSystemFileHandle;
-    }
-
-    // Walk from the workspace root.
-    const ws = await this.db.workspaces.get(workspaceId);
+    const ws = await this.db.workspaces.get(workspaceId)
+    if (ws?.mounted === false) throw new Error('Folder disconnected. Mount it again to resume sync.')
+    // A cached handle can follow a file moved outside its mounted path.
     if (!ws) {
       throw new Error(`Workspace not found: ${workspaceId}`);
     }
@@ -977,16 +955,11 @@ export class FilesystemNotebookStore {
     workspaceId: string,
     relativePath: string,
   ): Promise<FileSystemDirectoryHandle> {
-    const recId = entryRecordId(workspaceId, relativePath);
-    const entry = await this.db.entries.get(recId);
-    if (entry && entry.kind === "directory") {
-      return entry.handle as FileSystemDirectoryHandle;
-    }
-
+    // Resolve from the mount each time. A cached child handle can follow a
+    // directory that was moved outside the mount, or outlive its permission.
     const ws = await this.db.workspaces.get(workspaceId);
-    if (!ws) {
-      throw new Error(`Workspace not found: ${workspaceId}`);
-    }
+    if (!ws) throw new Error(`Workspace not found: ${workspaceId}`)
+    if (ws.mounted === false) throw new Error('Folder disconnected. Mount it again to resume sync.')
 
     if (!relativePath) {
       return ws.rootHandle;
@@ -997,17 +970,6 @@ export class FilesystemNotebookStore {
     for (const segment of segments) {
       dirHandle = await dirHandle.getDirectoryHandle(segment);
     }
-
-    // Cache.
-    await this.db.entries.put({
-      id: recId,
-      workspaceId,
-      relativePath,
-      kind: "directory",
-      handle: dirHandle,
-      lastKnownMtime: 0,
-      lastKnownSize: 0,
-    });
 
     return dirHandle;
   }

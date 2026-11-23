@@ -5,7 +5,7 @@ import { canLoadContentAsset } from '../../lib/externalServices'
  * This component implements Jupyter-style in-place markdown rendering:
  * - When `rendered=true`: Shows rendered markdown HTML
  * - When `rendered=false`: Shows the Monaco editor for editing
- * - Double-click on rendered content switches to edit mode
+ * - Focus the rendered cell and press Escape to open the source
  * - Pressing Escape or running the cell switches back to render mode
  *
  * State Management:
@@ -233,7 +233,7 @@ function sameCommentRanges(
  * MarkdownCell renders markdown content in-place with edit/render mode toggle.
  *
  * Interaction patterns (Jupyter-style):
- * - Double-click rendered content → enter edit mode
+ * - Focus the rendered cell and press Escape to enter edit mode
  * - Press Escape while editing → render markdown (if not empty)
  * - Focusing another notebook cell → render markdown (if not empty)
  * - Empty cells start in edit mode and stay in edit mode
@@ -301,6 +301,13 @@ const MarkdownCell = memo(
      */
     const restoreRenderedFocus = useCallback(() => {
       const root = renderedRef.current
+      const selection = root?.ownerDocument.getSelection()
+      if (
+        selection &&
+        !selection.isCollapsed &&
+        root?.contains(selection.anchorNode)
+      )
+        return
       if (root && !root.contains(root.ownerDocument.activeElement)) {
         root.focus({ preventScroll: true })
       }
@@ -382,9 +389,9 @@ const MarkdownCell = memo(
     }, [isActiveCell, rendered, tracksActiveCell, value])
 
     /**
-     * Handle switching to edit mode when user double-clicks rendered content.
+     * Open the source and transfer focus to the editor.
      */
-    const handleDoubleClick = useCallback(() => {
+    const handleOpenSource = useCallback(() => {
       if (!canOpenSource) {
         return
       }
@@ -441,29 +448,22 @@ const MarkdownCell = memo(
       [cell?.refId, onRenderedSelectionContextMenu, value]
     )
 
-    /**
-     * Handle keyboard activation on the rendered container for accessibility.
-     * Enter or Space activates edit mode (like a button).
-     * Only triggers when the container itself has focus, not nested elements
-     * (e.g., links inside the markdown).
-     */
+    // Escape toggles the focused cell. Enter and Space on nested links and
+    // scrollable regions retain their normal activation and scrolling behavior.
     const handleRenderedKeyDown = useCallback(
       (event: KeyboardEvent<HTMLDivElement>) => {
-        // Only handle if the container itself is focused, not nested elements
-        if (event.target !== event.currentTarget) {
-          return
-        }
-        if (event.key === 'Enter' || event.key === ' ') {
-          if (!canOpenSource) {
-            return
-          }
+        if (event.defaultPrevented || event.repeat) return
+        if (
+          event.key === 'Escape' ||
+          (event.target === event.currentTarget &&
+            (event.key === 'Enter' || event.key === ' '))
+        ) {
           event.preventDefault()
-          setRendered(false)
-          setEditorFocusIntent(true)
-          onFocusRoleChange?.('editor')
+          event.stopPropagation()
+          handleOpenSource()
         }
       },
-      [canOpenSource, onFocusRoleChange]
+      [handleOpenSource]
     )
 
     /**
@@ -472,9 +472,15 @@ const MarkdownCell = memo(
      */
     const handleEditorKeyDown = useCallback(
       (event: KeyboardEvent<HTMLDivElement>) => {
-        if (event.key === 'Escape') {
+        if (
+          event.key === 'Escape' &&
+          !event.repeat &&
+          !event.defaultPrevented
+        ) {
           // Only render if there's content; empty cells stay in edit mode
           if (value.trim()) {
+            event.preventDefault()
+            event.stopPropagation()
             setRendered(true)
             setRenderedFocusIntent(true)
             onFocusRoleChange?.('rendered')
@@ -501,8 +507,6 @@ const MarkdownCell = memo(
 
     /**
      * Handle "run" action for markdown cells - just renders the markdown.
-     * This matches Jupyter's behavior where Shift+Enter on a markdown cell
-     * renders it and moves to the next cell.
      */
     const handleRun = useCallback(() => {
       if (!readOnly && value.trim()) {
@@ -555,12 +559,12 @@ const MarkdownCell = memo(
           <div className="text-nb-text-faint italic py-2">
             {readOnly
               ? 'This read-only markdown cell is empty.'
-              : 'Double-click to edit markdown...'}
+              : 'Edit markdown...'}
           </div>
         )
       }
       return (
-        <div className="prose prose-sm max-w-none">
+        <div className="prose prose-sm max-w-none [&>:first-child]:mt-0 [&>:last-child]:mb-0">
           <ReactMarkdown
             remarkPlugins={[remarkGfm]}
             rehypePlugins={[projectionPlugin]}
@@ -596,53 +600,81 @@ const MarkdownCell = memo(
         data-rendered={rendered}
       >
         {rendered ? (
-          // Rendered markdown view - double-click or keyboard to edit
-          <div
-            id={`markdown-rendered-${cell.refId}`}
-            className="notebook-markdown cursor-text rounded-nb-md border border-transparent p-4 transition-[border-color,background-color,box-shadow] duration-200 hover:border-nb-border hover:bg-nb-surface-2/60 hover:shadow-nb-xs"
-            onDoubleClick={canOpenSource ? handleDoubleClick : undefined}
-            onKeyDown={canOpenSource ? handleRenderedKeyDown : undefined}
-            ref={renderedRef}
-            tabIndex={canOpenSource ? 0 : undefined}
-            role={canOpenSource ? 'button' : undefined}
-            aria-label={
-              canOpenSource
-                ? readOnly
-                  ? 'Double-click or press Enter to view read-only markdown source'
-                  : 'Double-click or press Enter to edit markdown'
-                : undefined
-            }
-            data-testid="markdown-rendered"
-            data-runme-cell-id={cell.refId}
-            data-runme-surface="rendered-markdown"
-            data-runme-projection={`${RENDERED_MARKDOWN_PROJECTION_NAME}@${RENDERED_MARKDOWN_PROJECTION_VERSION}`}
-            data-runme-comment-range-count={commentRanges.length || undefined}
-            data-cell-focus-role="rendered"
-            aria-describedby={
-              commentRanges.length > 0
-                ? `markdown-comment-ranges-${cell.refId}`
-                : undefined
-            }
-            onFocus={() => onFocusRoleChange?.('rendered')}
-            onContextMenu={handleRenderedContextMenu}
-          >
-            {commentRanges.length > 0 && (
-              <span
-                id={`markdown-comment-ranges-${cell.refId}`}
-                className="sr-only"
+          // Rendered text remains selectable while the cell owns keyboard focus.
+          <>
+            <div
+              id={`markdown-rendered-${cell.refId}`}
+              className="notebook-markdown cursor-text rounded-nb-md border border-transparent px-2 py-1.5 transition-[border-color,background-color,box-shadow] duration-200 hover:border-nb-border hover:bg-nb-surface-2/60 hover:shadow-nb-xs"
+              onMouseDown={(event) => {
+                const selection =
+                  event.currentTarget.ownerDocument.getSelection()
+                if (
+                  event.button === 2 &&
+                  selection &&
+                  !selection.isCollapsed &&
+                  event.currentTarget.contains(selection.anchorNode)
+                )
+                  event.preventDefault()
+              }}
+              onKeyDown={canOpenSource ? handleRenderedKeyDown : undefined}
+              ref={renderedRef}
+              tabIndex={canOpenSource ? 0 : undefined}
+              aria-keyshortcuts={
+                canOpenSource ? 'Escape Enter Space' : undefined
+              }
+              role={canOpenSource ? 'button' : undefined}
+              aria-label={
+                canOpenSource
+                  ? readOnly
+                    ? 'Press Escape to view read-only markdown source'
+                    : 'Press Escape to edit markdown'
+                  : undefined
+              }
+              data-testid="markdown-rendered"
+              data-runme-cell-id={cell.refId}
+              data-runme-surface="rendered-markdown"
+              data-runme-projection={`${RENDERED_MARKDOWN_PROJECTION_NAME}@${RENDERED_MARKDOWN_PROJECTION_VERSION}`}
+              data-runme-comment-range-count={commentRanges.length || undefined}
+              data-cell-focus-role="rendered"
+              aria-describedby={
+                commentRanges.length > 0
+                  ? `markdown-comment-ranges-${cell.refId}`
+                  : undefined
+              }
+              onFocus={() => onFocusRoleChange?.('rendered')}
+              onContextMenu={handleRenderedContextMenu}
+            >
+              {commentRanges.length > 0 && (
+                <span
+                  id={`markdown-comment-ranges-${cell.refId}`}
+                  className="sr-only"
+                >
+                  {commentRanges.length} commented text{' '}
+                  {commentRanges.length === 1 ? 'range' : 'ranges'} in this
+                  cell.
+                </span>
+              )}
+              {renderedMarkdown}
+            </div>
+            {readOnly && canOpenSource && (
+              <button
+                type="button"
+                className="ml-4 mt-1 rounded-nb-sm border border-nb-border px-2 py-1 text-xs text-nb-text-muted hover:bg-nb-surface-2 focus-visible:outline focus-visible:outline-nb-accent"
+                onClick={(event) => {
+                  event.stopPropagation()
+                  handleOpenSource()
+                }}
               >
-                {commentRanges.length} commented text{' '}
-                {commentRanges.length === 1 ? 'range' : 'ranges'} in this cell.
-              </span>
+                View Markdown source
+              </button>
             )}
-            {renderedMarkdown}
-          </div>
+          </>
         ) : (
           // Editor view - Escape, run, or focusing another cell renders it
           <div
             id={`markdown-editor-${cell.refId}`}
             className="rounded-nb-md border border-nb-accent shadow-nb-sm overflow-hidden w-full min-w-0 max-w-full transition-shadow duration-200"
-            onKeyDown={handleEditorKeyDown}
+            onKeyDownCapture={handleEditorKeyDown}
             data-testid="markdown-editor"
             data-cell-focus-role="editor"
           >

@@ -231,7 +231,7 @@ func publishRuntime(ctx context.Context, inputs buildInputs, followStable bool, 
 	if manifest.Owner.BuildID != archive.BuildID || !slices.Equal(manifest.RequiredCapabilities, []string{"durable-prepare-v1", "epoch-fence-v1", "owner-lock-v1"}) {
 		return errors.New("build missing lifecycle capabilities")
 	}
-	if manifest.ReleaseID != id || manifest.LauncherProtocol.Min != 1 || manifest.LauncherProtocol.Max != 1 || manifest.Owner.RPCMin != 8 || manifest.Owner.RPCMax != 8 || manifest.StorageCompatibilityID != "runme-schema9-oplog2-payload1-console1" {
+	if manifest.ReleaseID != id || manifest.LauncherProtocol.Min != 1 || manifest.LauncherProtocol.Max != 1 || (manifest.Owner.RPCMin != 8 && manifest.Owner.RPCMin != 9) || manifest.Owner.RPCMax != manifest.Owner.RPCMin || manifest.StorageCompatibilityID != "runme-schema9-oplog2-payload1-console1" {
 		return errors.New("build does not implement the supported release contract")
 	}
 	paths := map[string]bool{}

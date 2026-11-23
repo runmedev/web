@@ -6,6 +6,7 @@ import type { OfflineDownloadStatus } from '../releases/runtime'
 
 vi.mock('../lib/logging/runtime', () => ({ appLogger: { warn: vi.fn() } }))
 afterEach(() => {
+  vi.unstubAllGlobals()
   delete window.runmeVersions
 })
 
@@ -21,8 +22,14 @@ function setup(
     format: 1,
     selection: { kind: 'channel', name: 'stable' },
     tabs: {},
-    active: { epoch: 1, manifest: { releaseId: id } },
-    candidate: { releaseId: `${'c'.repeat(40)}-${'d'.repeat(64)}` },
+    active: {
+      epoch: 1,
+      manifest: { releaseId: id, webCommit: 'a'.repeat(40) },
+    },
+    candidate: {
+      releaseId: `${'c'.repeat(40)}-${'d'.repeat(64)}`,
+      webCommit: 'c'.repeat(40),
+    },
   } as Control
   const api = {
     get: vi.fn(async () => state),
@@ -42,6 +49,48 @@ function setup(
   return api
 }
 describe('Information release controls', () => {
+  it('shows the commit date of each exact release and handles missing metadata', async () => {
+    const dates: Record<string, string> = {
+      a: '2026-11-19T10:00:00Z',
+      c: '2026-11-20T15:00:00Z',
+    }
+    const fetchMetadata = vi.fn(async (path: string) => {
+      const sha = path.split('/')[2]!.split('-')[0]!
+      return new Response(
+        JSON.stringify({ webCommit: sha, buildDate: dates[sha[0]!] })
+      )
+    })
+    vi.stubGlobal('fetch', fetchMetadata)
+    const api = setup()
+    await waitFor(() =>
+      expect(document.querySelectorAll('time')).toHaveLength(2)
+    )
+    for (const [label, date] of [
+      ['Installed release', dates.a],
+      ['Available release', dates.c],
+    ] as const) {
+      const time = screen
+        .getByText(label)
+        .nextElementSibling?.querySelector('time')
+      expect(time?.dateTime).toBe(new Date(date!).toISOString())
+      expect(time?.textContent).toContain('2026')
+    }
+    // A pending release can change while the Information tab stays open.
+    const state = await api.get()
+    state.candidate = {
+      ...state.candidate!,
+      webCommit: 'e'.repeat(40),
+      releaseId: `${'e'.repeat(40)}-${'f'.repeat(64)}`,
+    }
+    fireEvent(window, new Event('runme-release-change'))
+    await screen.findByText(state.candidate.releaseId)
+    await waitFor(() =>
+      expect(
+        screen.getByText('Available release').nextElementSibling?.textContent
+      ).toContain('Unavailable')
+    )
+    expect(document.querySelectorAll('time')).toHaveLength(1)
+  })
   it('separates app readiness from offline fonts and offers retry without an upgrade', async () => {
     const api = setup(undefined, {
       phase: 'downloading',

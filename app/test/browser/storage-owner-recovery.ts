@@ -137,8 +137,9 @@ async function main() {
       )
     const original = await pages[0].evaluate(async () => {
       const { call } = (window as any).recoveryTest
+      const directory = await (await navigator.storage.getDirectory()).getDirectoryHandle('Test notebooks', { create: true })
       const file = await call('create', [
-        'local://folder/local',
+        await call('mountFilesystemFolder', [directory]),
         'restart-survivor.runme',
       ])
       const bytes = await call('loadContent', [file.uri])

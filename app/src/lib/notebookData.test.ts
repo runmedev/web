@@ -10,7 +10,6 @@ import {
   RunmeMetadataKey,
   parser_pb,
 } from "../contexts/CellContext";
-import { LOCAL_FOLDER_URI } from "../storage/local";
 import { googleAnalytics } from "./googleAnalytics";
 import { appLogger } from "./logging/runtime";
 import { appState } from "./runtime/AppState";
@@ -1796,7 +1795,7 @@ describe("NotebookData.runCodeCell", () => {
         });
         notebooksByUri.set(uri, createdModel);
       });
-    appState.setLocalNotebooks({ create: createLocal, save: saveLocal } as any);
+    appState.setLocalNotebooks({ create: createLocal, save: saveLocal, getMetadata: async () => ({ remoteUri: "https://drive.google.com/drive/folders/test" }) } as any);
     const loadNotebook = vi.fn(async (uri: string) => uri);
     appState.setLoadNotebookHandler(loadNotebook);
 
@@ -1809,7 +1808,7 @@ describe("NotebookData.runCodeCell", () => {
         [RunmeMetadataKey.RunnerName]: APPKERNEL_RUNNER_NAME,
       },
       value: [
-        'const created = await notebooks.createLocal("helloworld");',
+        'const created = await notebooks.createLocal("helloworld", { folderUri: "local://folder/test" });',
         "console.log(created.summary.name);",
         "const code = await notebooks.appendCell({",
         "  target: { handle: created.handle },",
@@ -1850,7 +1849,7 @@ describe("NotebookData.runCodeCell", () => {
       return snap?.metadata?.[RunmeMetadataKey.ExitCode] === "0";
     });
 
-    expect(createLocal).toHaveBeenCalledWith(LOCAL_FOLDER_URI, "helloworld");
+    expect(createLocal).toHaveBeenCalledWith("local://folder/test", "helloworld");
     expect(saveLocal).toHaveBeenCalled();
     expect(loadNotebook).toHaveBeenCalledWith("local://file/helloworld");
     expect(activeUri).toBe("nb://seed");

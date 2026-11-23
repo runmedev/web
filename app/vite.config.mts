@@ -9,6 +9,7 @@ import type { Plugin } from "vite";
 import { defineConfig } from "vite";
 import svgr from "vite-plugin-svgr";
 
+import { STORAGE_OWNER_VERSION } from "./src/storage/storageOwnerProtocol";
 import { localExcalidraw } from "./build/localExcalidraw";
 
 const require = createRequire(import.meta.url);
@@ -202,7 +203,7 @@ function pwaServiceWorkerPlugin(): Plugin {
           tabAdmissionFormat: 1,
           storageControlFormat: 1,
           requiredCapabilities: ['durable-prepare-v1', 'epoch-fence-v1', 'owner-lock-v1'], testedRollbackTargets: [],
-          owner: { buildId: releaseId.split('-')[1], entry: 'storage-owner.js', rpcMin: 8, rpcMax: 8 },
+          owner: { buildId: releaseId.split('-')[1], entry: 'storage-owner.js', rpcMin: STORAGE_OWNER_VERSION, rpcMax: STORAGE_OWNER_VERSION },
           launcherProtocol: { min: 1, max: 1 },
           storageCompatibilityId: 'runme-schema9-oplog2-payload1-console1',
         }) });

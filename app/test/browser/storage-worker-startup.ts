@@ -157,7 +157,7 @@ async function main() {
           w.worker.port.postMessage({
             type: 'request',
             id,
-            version: 8,
+            version: w.active.manifest.owner.rpcMax,
             method: 'heartbeat',
             args: [],
             tabId: 'blocked-settings-test',

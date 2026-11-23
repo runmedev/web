@@ -450,10 +450,18 @@ export function buildSandboxSrcDoc(options: {
           execute: (args) => callHost("notebooks.execute", [args]),
           refresh: (args) => callHost("notebooks.refresh", [args]),
           requestWriteAccess: (args) => callHost("notebooks.requestWriteAccess", [args]),
+          createPage: (args) => callHost("notebooks.createPage", [args]),
+          showPage: (args) => callHost("notebooks.showPage", [args]),
+          moveCellToPage: (args) => callHost("notebooks.moveCellToPage", [args]),
+          removePage: (args) => callHost("notebooks.removePage", [args]),
+          movePage: (args) => callHost("notebooks.movePage", [args]),
+          renamePage: (args) => callHost("notebooks.renamePage", [args]),
+          listPages: (args) => callHost("notebooks.listPages", [args]),
           createLocal: (name, options) => callHost("notebooks.createLocal", [name, options]),
           appendCell: (args) => callHost("notebooks.appendCell", [args]),
           embed: (source, options) => callHost("notebooks.embed", [source, options]),
           attach: (source, options) => callHost("notebooks.attach", [source, options]),
+          normalizeLink: (text) => callHost("notebooks.normalizeLink", [text]),
           resolve: (reference) => callHost("notebooks.resolve", [reference]),
           open: (reference) => callHost("notebooks.open", [reference]),
           focus: (reference) => callHost("notebooks.focus", [reference]),
@@ -653,10 +661,12 @@ export function buildSandboxSrcDoc(options: {
           consoleProxy.log("- notebooks.execute({ target, refIds })");
           consoleProxy.log("- notebooks.refresh({ target })");
           consoleProxy.log("- notebooks.requestWriteAccess({ target })");
+          consoleProxy.log("- notebooks.help('pages') for page management");
           consoleProxy.log("- notebooks.createLocal(name, options?)");
           consoleProxy.log("- notebooks.appendCell({ target?, at?, kind, languageId?, value?, metadata?, execute?, reason? })");
           consoleProxy.log("- notebooks.embed(source, { target?, alt?, name? })");
           consoleProxy.log("- notebooks.attach(source, { target: { uri }, folderUri?, mode?, title?, altText?, expectedRevision?, operationId? })");
+          consoleProxy.log("- notebooks.normalizeLink(text)");
           consoleProxy.log("- notebooks.resolve([reference])");
           consoleProxy.log("- notebooks.show([reference])");
           consoleProxy.log("- notebooks.open([reference])");

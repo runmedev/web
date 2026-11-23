@@ -303,7 +303,9 @@ describe('OutputReferenceCell', () => {
     const editor = screen.getByLabelText('Output reference source')
     expect(document.activeElement).toBe(editor)
     fireEvent.change(editor, { target: { value: 'edited reference' } })
-    fireEvent.keyDown(editor, { key: 'Escape' })
+    fireEvent.click(
+      screen.getByRole('button', { name: 'Show rendered output' })
+    )
     expect(screen.queryByLabelText('Output reference source')).toBeNull()
     expect(change).toHaveBeenLastCalledWith('edited reference')
     fireEvent.doubleClick(screen.getByTestId('output-reference-cell'))

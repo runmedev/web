@@ -237,18 +237,10 @@ try {
   run("agent-browser reload");
   run("agent-browser wait 2400");
 
-  const openEditorResult = run(
-    `agent-browser eval "(async () => {
-      const rendered = document.querySelector('#markdown-rendered-${MARKDOWN_CELL_ID}');
-      if (!(rendered instanceof HTMLElement)) return 'missing-rendered-markdown';
-      rendered.dispatchEvent(new MouseEvent('dblclick', { bubbles: true }));
-      await new Promise((resolve) => setTimeout(resolve, 250));
-      return document.querySelector('#markdown-editor-${MARKDOWN_CELL_ID}')
-        ? 'ok'
-        : 'missing-markdown-editor';
-    })()"`,
-  ).stdout.trim();
-  if (openEditorResult.includes("ok")) {
+  run(`agent-browser focus '#markdown-rendered-${MARKDOWN_CELL_ID}'`);
+  const edit = run("agent-browser press Escape");
+  const editor = run(`agent-browser wait '#markdown-editor-${MARKDOWN_CELL_ID}'`);
+  if (edit.status === 0 && editor.status === 0) {
     pass("Opened markdown cell in editor mode");
   } else {
     fail("Failed to open markdown cell in editor mode");

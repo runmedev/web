@@ -1,3 +1,4 @@
+import { normalizeNotebookReferenceUri } from '../shareLinks'
 import {
   type NotebookDataLike,
   type NotebookQuery,
@@ -17,6 +18,13 @@ export type NotebooksApiBridgeServer = {
 }
 
 export const SANDBOX_NOTEBOOKS_API_METHODS = [
+  'notebooks.createPage',
+  'notebooks.listPages',
+  'notebooks.renamePage',
+  'notebooks.movePage',
+  'notebooks.removePage',
+  'notebooks.moveCellToPage',
+  'notebooks.showPage',
   'notebooks.help',
   'notebooks.list',
   'notebooks.get',
@@ -25,6 +33,7 @@ export const SANDBOX_NOTEBOOKS_API_METHODS = [
   'notebooks.execute',
   'notebooks.refresh',
   'notebooks.requestWriteAccess',
+  'notebooks.normalizeLink',
   'notebooks.resolve',
   'notebooks.open',
   'notebooks.focus',
@@ -36,6 +45,14 @@ export const SANDBOX_NOTEBOOKS_API_METHODS = [
 ] as const
 
 type NotebookReferenceApi = {
+  createPage?: (args: unknown) => Promise<unknown>
+  listPages?: (args: unknown) => Promise<unknown>
+  renamePage?: (args: unknown) => Promise<unknown>
+  movePage?: (args: unknown) => Promise<unknown>
+  removePage?: (args: unknown) => Promise<unknown>
+  moveCellToPage?: (args: unknown) => Promise<unknown>
+  showPage?: (args: unknown) => Promise<unknown>
+
   outputLink?: (args: unknown) => Promise<string>
   resolve?: (reference?: unknown) => Promise<unknown>
   open?: (reference?: unknown) => Promise<unknown>
@@ -90,6 +107,20 @@ export function createNotebooksApiBridgeServer({
   return {
     handleMessage: async ({ method, args = [] }) => {
       switch (method) {
+        case 'notebooks.createPage':
+          return requireReferenceMethod(notebooksApi, 'createPage')(args[0])
+        case 'notebooks.listPages':
+          return requireReferenceMethod(notebooksApi, 'listPages')(args[0])
+        case 'notebooks.renamePage':
+          return requireReferenceMethod(notebooksApi, 'renamePage')(args[0])
+        case 'notebooks.movePage':
+          return requireReferenceMethod(notebooksApi, 'movePage')(args[0])
+        case 'notebooks.removePage':
+          return requireReferenceMethod(notebooksApi, 'removePage')(args[0])
+        case 'notebooks.moveCellToPage':
+          return requireReferenceMethod(notebooksApi, 'moveCellToPage')(args[0])
+        case 'notebooks.showPage':
+          return requireReferenceMethod(notebooksApi, 'showPage')(args[0])
         case 'notebooks.help':
           return callJsonSafe(() => notebooksApi.help(args[0] as any))
         case 'notebooks.list':
@@ -140,6 +171,8 @@ export function createNotebooksApiBridgeServer({
               args[0] as Parameters<NotebooksApi['requestWriteAccess']>[0]
             )
           )
+        case 'notebooks.normalizeLink':
+          return normalizeNotebookReferenceUri(args[0] as string)
         case 'notebooks.resolve':
           return callJsonSafe(() =>
             requireReferenceMethod(notebooksApi, 'resolve')(args[0])
