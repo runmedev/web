@@ -6,6 +6,7 @@ import {
   type PreparedExample,
   normalizePreparedExample,
 } from './trainingExamples/payloads'
+import { prepareRecordExample } from './trainingExamples/recordInput'
 
 const storageKey = 'runme.suggestion-grader.v1'
 const changedEvent = 'runme-suggestion-grader-changed'
@@ -147,12 +148,11 @@ export async function prepareGrader() {
 }
 type Grader = Awaited<ReturnType<typeof prepareGrader>>
 
-async function decide(
+async function requestDecision(
   candidate: string,
-  signal?: AbortSignal,
-  snapshot?: Grader
-): Promise<GraderPrediction> {
-  const { settings, instructions } = snapshot ?? (await prepareGrader())
+  { settings, instructions }: Grader,
+  signal?: AbortSignal
+) {
   const headers: Record<string, string> = { 'Content-Type': 'application/json' }
   if (settings.organization)
     headers['OpenAI-Organization'] = settings.organization
@@ -184,9 +184,72 @@ async function decide(
   )
   const result = await response.json()
   return {
+    result,
     accepted: parseGraderResponse(result),
     model: result.model ?? model,
     requestId: response.headers.get('x-request-id'),
+  }
+}
+
+async function decide(
+  candidate: string,
+  signal?: AbortSignal,
+  snapshot?: Grader
+): Promise<GraderPrediction> {
+  const { accepted, model, requestId } = await requestDecision(
+    candidate,
+    snapshot ?? (await prepareGrader()),
+    signal
+  )
+  return { accepted, model, requestId }
+}
+
+export async function gradeExample(
+  args: Parameters<typeof prepareRecordExample>[0] & {
+    rubric: { version: string; instructions: string }
+  },
+  signal?: AbortSignal
+) {
+  const settings = readSettings()
+  if (!settings.enabled)
+    throw new Error(
+      'Enable the grader and select its Key Vault entry in AI grader settings.'
+    )
+  const { version, instructions } = args?.rubric ?? {}
+  if (
+    typeof version !== 'string' ||
+    !version.trim() ||
+    typeof instructions !== 'string' ||
+    !instructions.trim()
+  )
+    throw new Error('Provide a rubric version and its frozen instructions.')
+  const input = prepareRecordExample(args)
+  if (!input.operations.length)
+    throw new Error('No prediction: no content changes')
+  const { result, accepted, model, requestId } = await requestDecision(
+    JSON.stringify(input),
+    { settings, instructions },
+    signal
+  )
+  const distribution = result.answers[0].probabilities
+  const entries = Array.isArray(distribution)
+    ? distribution.filter((entry) => entry?.value === 'accept')
+    : []
+  const probability = entries[0]?.probability
+  if (
+    entries.length !== 1 ||
+    typeof probability !== 'number' ||
+    !Number.isFinite(probability) ||
+    probability < 0 ||
+    probability > 1
+  )
+    throw new Error('No accept probability in the Decisions answer.')
+  return {
+    accepted,
+    acceptProbability: probability,
+    model,
+    requestId,
+    rubricVersion: version,
   }
 }
 

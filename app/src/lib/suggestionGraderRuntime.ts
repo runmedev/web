@@ -2,6 +2,7 @@ import type LocalNotebooks from '../storage/local'
 import type { ComparisonSelection } from './operationLog/comparisons'
 import {
   getGraderSettings,
+  gradeExample,
   gradePhrase,
   gradeSuggestion,
   saveGraderSettings,
@@ -14,6 +15,8 @@ export function createSuggestionGraderApi(deps: {
   signal?: AbortSignal
 }) {
   return {
+    gradeExample: (input: Parameters<typeof gradeExample>[0]) =>
+      gradeExample(input, deps.signal),
     gradePhrase: (input: Parameters<typeof gradePhrase>[0]) =>
       gradePhrase(input, deps.signal),
     getSettings: getGraderSettings,
@@ -51,6 +54,7 @@ export function createSuggestionGraderApi(deps: {
         'suggestionGrader.getSettings() // no secrets returned',
         'suggestionGrader.setSettings({enabled, instructionsUri, organization, project}) // select the Key Vault entry in AI grader settings',
         'await suggestionGrader.grade({target:{uri}, comparison:{startRevisionId,endRevisionId}, cellId}) // sends content to OpenAI; advisory only',
+        'await suggestionGrader.gradeExample({base, diff, rubric: {version, instructions}}) // frozen records and rubric; returns acceptProbability, accepted, model, requestId, rubricVersion',
         'await suggestionGrader.gradePhrase({text, context?}) // advisory Decisions classification',
       ].join('\n'),
   }

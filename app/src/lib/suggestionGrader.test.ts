@@ -4,6 +4,7 @@ import { afterEach, beforeEach, expect, it, vi } from 'vitest'
 import { keyVault } from './keyvault/store'
 import {
   getGraderSettings,
+  gradeExample,
   gradePhrase,
   gradeSuggestion,
   parseGraderResponse,
@@ -11,6 +12,7 @@ import {
 } from './suggestionGrader'
 import { mockGraderSources } from './suggestionGraderTestFixture'
 import { planContentExample } from './trainingExamples/payloads'
+import { contentRecords } from './trainingExamples/recordInput'
 
 const settings = {
   enabled: true,
@@ -45,18 +47,16 @@ it('requires opt-in after migration and persists only the chosen references on s
 it('sends the current rubric and content-only candidate to Decisions with the named key', async () => {
   const read = mockGraderSources()
   saveGraderSettings(settings)
-  const fetcher = vi
-    .spyOn(globalThis, 'fetch')
-    .mockImplementation(
-      async () =>
-        new Response(
-          JSON.stringify({
-            model: 'gpt-6-luna',
-            answers: [{ type: 'choice', name: 'review', choice: 'accept' }],
-          }),
-          { headers: { 'x-request-id': 'example' } }
-        )
-    )
+  const fetcher = vi.spyOn(globalThis, 'fetch').mockImplementation(
+    async () =>
+      new Response(
+        JSON.stringify({
+          model: 'gpt-6-luna',
+          answers: [{ type: 'choice', name: 'review', choice: 'accept' }],
+        }),
+        { headers: { 'x-request-id': 'example' } }
+      )
+  )
   const candidate = planContentExample({
     initial: [],
     operations: [
@@ -118,4 +118,68 @@ it('distinguishes reject from refusal, malformed and mismatched answers', () => 
     [{ ...choice, choice: 'maybe' }],
   ])
     expect(() => parseGraderResponse({ answers })).toThrow()
+})
+
+it('scores frozen records using the specified rubric and the accept entry on a rejection', async () => {
+  const readHead = mockGraderSources()
+  saveGraderSettings(settings)
+  const records = contentRecords(
+    planContentExample({
+      initial: [],
+      operations: [
+        {
+          kind: 'insert',
+          cell: 'private-id',
+          after: null,
+          content: {
+            kind: 'markup',
+            language: 'markdown',
+            value: 'Candidate text',
+          },
+        },
+      ],
+    })
+  )
+  const args = {
+    ...records,
+    accepted: true,
+    rubric: { version: 'revision-7', instructions: 'Frozen policy' },
+  }
+  const answers = [
+    {
+      name: 'review',
+      type: 'choice',
+      choice: 'reject',
+      confidence: 0.88,
+      probabilities: [
+        { value: 'reject', probability: 0.88 },
+        { value: 'accept', probability: 0.12 },
+      ],
+    },
+  ]
+  const transport = vi
+    .spyOn(globalThis, 'fetch')
+    .mockResolvedValueOnce(
+      new Response(JSON.stringify({ model: 'test-model', answers }), {
+        headers: { 'x-request-id': 'req-test' },
+      })
+    )
+  expect(await gradeExample(args)).toEqual({
+    accepted: false,
+    acceptProbability: 0.12,
+    rubricVersion: 'revision-7',
+    model: 'test-model',
+    requestId: 'req-test',
+  })
+  expect(readHead).not.toHaveBeenCalled()
+  const body = JSON.parse(String(transport.mock.calls[0][1]?.body))
+  expect(body.questions[0].instructions).toBe('Frozen policy')
+  expect(body.input).toContain('Candidate text')
+  expect(body.input).not.toMatch(/private-id|accepted|revision-7|created_at/)
+  transport.mockResolvedValueOnce(
+    new Response(
+      JSON.stringify({ answers: [{ ...answers[0], probabilities: [] }] })
+    )
+  )
+  await expect(gradeExample(args)).rejects.toThrow('No accept probability')
 })

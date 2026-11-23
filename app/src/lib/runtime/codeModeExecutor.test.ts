@@ -139,6 +139,7 @@ describe('codeModeExecutor', () => {
       results.push(await bridge.call('suggestionGrader.setSettings', [{ enabled: false, instructionsUri: 'local://file/rules', organization: '', project: '', apiKey: 'test-only-key' }]))
       results.push(await bridge.call('suggestionGrader.getSettings', []))
       results.push(await bridge.call('suggestionGrader.help', []))
+      await expect(bridge.call('suggestionGrader.gradeExample', [{}])).rejects.toThrow(/Enable the grader|rubric version/)
       await expect(bridge.call('suggestionGrader.grade', [{}])).rejects.toThrow('target.uri')
     })
     await createCodeModeExecutor({ mode: 'sandbox', resolveNotebook: () => null }).execute({ source: 'webmcp', code: '// test grader host bridge' })

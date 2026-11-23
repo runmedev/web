@@ -681,6 +681,8 @@ async function handleSandboxAppKernelBridgeCall({
       return globals.suggestionGrader.getSettings()
     case 'suggestionGrader.setSettings':
       return globals.suggestionGrader.setSettings(args[0] as any)
+    case 'suggestionGrader.gradeExample':
+      return globals.suggestionGrader.gradeExample(args[0] as any)
     case 'suggestionGrader.gradePhrase':
       return globals.suggestionGrader.gradePhrase(args[0] as any)
     case 'suggestionGrader.grade':

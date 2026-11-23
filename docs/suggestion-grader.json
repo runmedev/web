@@ -41,6 +41,12 @@
         "runme.dev/runnerName": "appkernel-js"
       },
       "value": "const uri = ''; // Fill in the resolved local:// notebook URI.\nconst cellId = ''; // Fill in the target cell refId.\nconst newText = ''; // Fill in the replacement source.\nif (!uri || !cellId) throw new Error('Set uri, cellId and newText before running.');\nif (!(await notebooks.help('update')).includes('grade?: boolean')) throw new Error('This build does not support graded updates.');\nconst target = { uri };\nconst doc = await notebooks.get(target);\nconst updated = await notebooks.update({\n  target,\n  expectedRevision: doc.handle.revision,\n  operations: [{ op: 'update', refId: cellId, patch: { value: newText } }],\n  grade: true,\n});\nconsole.log({ handle: updated.handle, grading: updated.grading });"
+    },
+    {
+      "kind": 1,
+      "languageId": "markdown",
+      "refId": "grader-frozen-example",
+      "value": "## Score a frozen example in AppKernel JS\n\nUnlock the named Key Vault entry selected in AI grader settings and enable the grader. With a saved training example and the exact text of the rubric revision under test, run\n\n```js\nconst { accepted, acceptProbability, model, requestId, rubricVersion } =\n  await suggestionGrader.gradeExample({\n    base: example.base,\n    diff: example.diff,\n    rubric: { version: rubricRevisionId, instructions: frozenRubricMarkdown }\n  })\n```\n\nThe call replays the self-contained records and sends only normalized cell content and operations. It uses the supplied rubric text verbatim. The caller supplies and records the version identifier. The grader returns the probability attached to the `accept` choice even when `reject` wins. A missing probability raises an error. The request ID comes from the response header and can be null if the service does not expose it."
     }
   ]
 }
