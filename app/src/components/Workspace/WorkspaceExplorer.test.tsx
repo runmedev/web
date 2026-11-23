@@ -1881,9 +1881,9 @@ describe('WorkspaceExplorer current document handling', () => {
   })
 
   it('hides the Drive revisions action for files without a Drive source', async () => {
-    mocks.workspaceItems = ['local://folder/local']
+    mocks.workspaceItems = ['local://folder/plain']
     mocks.store.getMetadata.mockImplementation(async (uri: string) => {
-      if (uri === 'local://folder/local') {
+      if (uri === 'local://folder/plain') {
         return {
           uri,
           name: 'Local Root',
@@ -1898,7 +1898,7 @@ describe('WorkspaceExplorer current document handling', () => {
           name: 'plain.json',
           type: NotebookStoreItemType.File,
           children: [],
-          parents: ['local://folder/local'],
+          parents: ['local://folder/plain'],
         }
       }
       return null
