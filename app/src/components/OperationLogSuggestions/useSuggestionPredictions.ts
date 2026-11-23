@@ -6,8 +6,8 @@ import {
   subscribeGraderSettings,
 } from '../../lib/suggestionGrader'
 import { prepareSuggestionInput } from '../../lib/suggestionGraderInput'
-import { classifierPrompt } from '../../lib/trainingExamples/encoding'
 import type { ReviewPreview } from './ReviewRevisionPicker'
+import { useGraderRubric } from './useGraderRubric'
 
 export type PredictionState =
   | { status: 'none' | 'loading' | 'error'; text: string }
@@ -33,9 +33,15 @@ export function useSuggestionPredictions(
     []
   )
   const settings = getGraderSettings()
+  const rubric = useGraderRubric(
+    settings.instructionsUri,
+    preview,
+    active && settings.enabled && settings.hasApiKey
+  )
+  const instructions = rubric?.text
   const tasks = useMemo(
     () =>
-      !active || !settings.enabled || !settings.hasApiKey
+      !instructions
         ? []
         : (preview?.diff.cells
             .filter((r) => r.kind !== 'unchanged' || r.moved)
@@ -46,16 +52,16 @@ export function useSuggestionPredictions(
                 return {
                   id,
                   input,
-                  key: generation + ':' + classifierPrompt(input),
+                  key: JSON.stringify([generation, rubric?.digest, input]),
                 }
               } catch {
                 return { id, key: generation + ':invalid:' + row.id }
               }
             }) ?? []),
-    [preview, generation, active, settings.enabled, settings.hasApiKey]
+    [preview, generation, instructions, rubric?.digest]
   )
   useEffect(() => {
-    if (!active || !settings.enabled || !settings.hasApiKey) return
+    if (!instructions) return
     const controller = new AbortController()
     setStates(
       Object.fromEntries(
@@ -88,7 +94,10 @@ export function useSuggestionPredictions(
         publish(task.key, { status: 'loading', text: 'AI: prediction pending' })
         let state: PredictionState
         try {
-          const result = await gradeSuggestion(task.input, controller.signal)
+          const result = await gradeSuggestion(task.input, controller.signal, {
+            settings,
+            instructions: instructions!,
+          })
           state = {
             status: 'ready',
             accepted: result.accepted,
@@ -124,17 +133,19 @@ export function useSuggestionPredictions(
         !settings.enabled
           ? {
               status: 'none' as const,
-              text: 'AI: no prediction — enable a model in AI grader settings',
+              text: 'AI: no prediction — configure the AI grader',
             }
           : !settings.hasApiKey
             ? {
                 status: 'none' as const,
-                text: 'AI: no prediction — configure an API key in AI grader settings',
+                text: 'AI: no prediction — unlock Key Vault and select an API key in AI grader settings',
               }
-            : (states[taskKeys.get(id) ?? ''] ?? {
-                status: 'none' as const,
-                text: 'AI: no prediction yet',
-              }),
+            : rubric?.error
+              ? { status: 'error' as const, text: rubric.error }
+              : (states[taskKeys.get(id) ?? ''] ?? {
+                  status: 'none' as const,
+                  text: 'AI: no prediction yet',
+                }),
       ] as const
     })
   )

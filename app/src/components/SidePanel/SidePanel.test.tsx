@@ -670,7 +670,8 @@ describe('SidePanelContent', () => {
     activePanelState = 'grader'
     render(<SidePanelContent />)
     expect(screen.getByRole('heading', { name: 'AI grader' })).toBeTruthy()
-    expect(screen.getByLabelText('Model ID')).toBeTruthy()
+    expect(screen.getByLabelText('OpenAI key in Key Vault')).toBeTruthy()
+    expect(screen.getByLabelText('Instructions notebook')).toBeTruthy()
   })
 
   it('renders the Open Documents panel and routes document actions through shared context state', () => {

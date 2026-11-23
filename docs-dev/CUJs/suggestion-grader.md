@@ -4,22 +4,23 @@
 
 - A .runme notebook has at least two content revisions and a comparison tab.
 - AI grader settings are initially disabled. Automated tests mock fetch; live
-  checks require a user-provided OpenAI key/model and explicit opt-in.
+  checks require a named OpenAI key in an unlocked Key Vault and explicit opt-in.
 
 ## Journey
 
-1. Open AI grader from the left-hand sparkle icon. Set model, organization,
-   project and optional key. No request occurs before enabling and saving.
+1. Open AI grader from the left-hand sparkle icon. Select the vault key and a mounted instructions notebook by path. No request occurs before enabling and saving.
 2. Open Compare changes. Baseline context plus a single cell's content operations
-   go to Responses with the identical training prompt and store:false.
+   go to Decisions with Markdown instructions read from the local OPFS snapshot.
 3. A true prediction highlights accept green; false highlights undo red. Hover
    and accessibility descriptions explain the prediction without changing actions.
 4. Change revisions/scope or hide the tab while a request is pending. Old results
    cannot decorate new comparisons. Hidden tabs send no requests.
-5. Disable predictions or change credentials/model. Old results are invalidated.
-6. Simulate refusal, incomplete output, invalid boolean and HTTP/network errors.
+5. Disable predictions or lock the vault, rotate the key or change the rubric. Old results are invalidated.
+6. Simulate refusal, incomplete output, invalid choice and HTTP/network errors.
    Controls remain usable and neutral with a textual diagnostic; no automatic retry.
 7. Accept/undo manually and verify the existing review semantics are unchanged.
+
+Save an edit to the instructions and grade the same change again. Verify the new request contains the edited rubric. Unmount the notebook and verify grading reports a local configuration error.
 
 ## Training example predictions
 
@@ -38,6 +39,12 @@
 4. Disable/reconfigure the grader or remove its key. Invalidate old results and
    show configuration guidance. Errors display no prediction, not rejection,
    and do not trigger automatic retries.
+
+![Configured AI grader](assets/decisions-grader.png)
+
+## Grade candidate edits before applying them
+
+Run `app/test/browser/decisions-grader.ts` with Node 24 and a running frontend at `CUJ_FRONTEND_URL`. The scenario creates a local rubric, configures a synthetic vault key, intercepts Decisions, and checks that a saved rule edit changes the next request. Through WebMCP it grades two proposed replacements against one baseline, verifies that both grades leave the target revision intact, then applies the accepted replacement with a revision precondition.
 
 ## Agent update with grading
 

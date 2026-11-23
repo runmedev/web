@@ -1,103 +1,122 @@
-import { getOpenAIAuthStatus, request } from './openaiTraining'
-import { classifierPrompt } from './trainingExamples/encoding'
-import type { PreparedExample } from './trainingExamples/payloads'
+import { LOCAL_FOLDER_URI } from '../storage/local'
+import { keyVault } from './keyvault/store'
+import { request } from './openaiTraining'
+import { appState } from './runtime/AppState'
+import {
+  type PreparedExample,
+  normalizePreparedExample,
+} from './trainingExamples/payloads'
+import { prepareRecordExample } from './trainingExamples/recordInput'
 
 const storageKey = 'runme.suggestion-grader.v1'
 const changedEvent = 'runme-suggestion-grader-changed'
+const model = 'gpt-6-luna'
 export interface GraderSettings {
   enabled: boolean
-  model: string
+  instructionsUri: string
+  keyName: string
   organization: string
   project: string
 }
 const defaults: GraderSettings = {
   enabled: false,
-  model: '',
+  instructionsUri: '',
+  keyName: '',
   organization: '',
   project: '',
 }
 
-/** Settings and the optional dedicated key stay on this origin, never in a notebook. */
-function readSettings(): GraderSettings & { apiKey?: string } {
+/** Read only named preferences. Legacy settings require explicit selection and opt-in. */
+function readSettings(): GraderSettings {
   try {
-    const saved = JSON.parse(localStorage.getItem(storageKey) || 'null')
-    if (
-      !saved ||
-      typeof saved.enabled !== 'boolean' ||
-      !['model', 'organization', 'project'].every(
-        (k) => typeof saved[k] === 'string'
-      ) ||
-      (saved.apiKey !== undefined && typeof saved.apiKey !== 'string')
-    )
-      return defaults
+    const saved = JSON.parse(localStorage.getItem(storageKey) || '{}')
+    const text = (key: string) =>
+      typeof saved?.[key] === 'string' ? saved[key] : ''
     return {
-      enabled: saved.enabled,
-      model: saved.model,
-      organization: saved.organization,
-      project: saved.project,
-      apiKey: saved.apiKey,
+      enabled:
+        saved?.enabled === true &&
+        !!text('instructionsUri') &&
+        !!text('keyName'),
+      instructionsUri: text('instructionsUri'),
+      keyName: text('keyName'),
+      organization: text('organization'),
+      project: text('project'),
     }
   } catch {
     return defaults
   }
 }
 
-/** Return configuration and key presence only, safe for UI and agent inspection. */
 export function getGraderSettings() {
-  const { apiKey, ...settings } = readSettings()
-  const auth = getOpenAIAuthStatus()
+  const settings = readSettings()
   return {
     ...settings,
-    hasDedicatedKey: Boolean(apiKey),
-    hasApiKey:
-      Boolean(apiKey) ||
-      (auth.configured && auth.baseUrl === 'https://api.openai.com/v1'),
+    hasApiKey: keyVault.getSnapshot().names.includes(settings.keyName),
   }
 }
 
-/** An omitted key preserves it; an empty key clears it and uses Authentication Settings. */
-export function saveGraderSettings(
-  input: GraderSettings & { apiKey?: string }
-) {
-  if (!input || typeof input.enabled !== 'boolean')
+/** Whitelist fields so neither old plaintext keys nor extra caller fields get persisted. */
+export function saveGraderSettings(input: GraderSettings) {
+  if (typeof input?.enabled !== 'boolean')
     throw new Error('Choose whether to enable predictions')
-  for (const field of ['model', 'organization', 'project'] as const) {
+  const settings = { ...defaults, enabled: input.enabled }
+  for (const field of [
+    'instructionsUri',
+    'keyName',
+    'organization',
+    'project',
+  ] as const) {
     if (typeof input[field] !== 'string' || /[\r\n]/.test(input[field]))
       throw new Error('Invalid grader settings')
+    settings[field] = input[field].trim()
   }
-  if (input.enabled && !input.model.trim()) throw new Error('Enter a model ID')
-  const apiKey =
-    input.apiKey === undefined ? readSettings().apiKey : input.apiKey.trim()
-  if (apiKey && /\s/.test(apiKey)) throw new Error('Invalid API key')
-  const settings = {
-    enabled: input.enabled,
-    model: input.model.trim(),
-    organization: input.organization.trim(),
-    project: input.project.trim(),
-    apiKey,
-  }
+  if (settings.enabled && !settings.instructionsUri.startsWith('local://file/'))
+    throw new Error('Select a mounted instructions notebook.')
+  if (settings.enabled && !settings.keyName)
+    throw new Error('Select a key from Key Vault.')
   localStorage.setItem(storageKey, JSON.stringify(settings))
   window.dispatchEvent(new Event(changedEvent))
   return getGraderSettings()
 }
 
-/** React and other clients invalidate predictions on settings/key changes in any tab. */
+/** Vault lock, rotation, deletion and cross-tab settings edits invalidate visible results. */
 export function subscribeGraderSettings(listener: () => void) {
   const storage = (event: StorageEvent) => {
-    if (
-      !event.key ||
-      [storageKey, 'runme.openai.credentials.v1'].includes(event.key)
-    )
-      listener()
+    if (!event.key || event.key === storageKey) listener()
   }
+  const unsubscribe = keyVault.subscribe(listener)
   window.addEventListener(changedEvent, listener)
-  window.addEventListener('runme-openai-auth-changed', listener)
   window.addEventListener('storage', storage)
   return () => {
+    unsubscribe()
     window.removeEventListener(changedEvent, listener)
-    window.removeEventListener('runme-openai-auth-changed', listener)
     window.removeEventListener('storage', storage)
   }
+}
+
+/** Explorer always includes Local Notebooks, even before any folder is mounted. */
+function rubricRoots() {
+  return [...new Set([LOCAL_FOLDER_URI, ...appState.getWorkspaceItems()])]
+}
+
+export async function* listRubrics(signal: AbortSignal) {
+  const store = appState.localNotebooks
+  if (!store) throw new Error('Local notebook storage is unavailable.')
+  const roots = rubricRoots()
+  let after: string | undefined
+  do {
+    const page = await store.listMountedRubrics(roots, after)
+    if (signal.aborted) return
+    yield page.rows
+    after = page.nextAfter
+  } while (after && !signal.aborted)
+}
+
+export async function readRubric(uri: string, flushEditor = true) {
+  const store = appState.localNotebooks
+  if (!store) throw new Error('Local notebook storage is unavailable.')
+  if (flushEditor) await appState.flushOpenNotebook?.(uri)
+  return store.readGradingInstructions(uri, rubricRoots())
 }
 
 export interface GraderPrediction {
@@ -106,84 +125,160 @@ export interface GraderPrediction {
   requestId: string | null
 }
 
-/** Strict binary output, not a confidence score. Refusals/incomplete/malformed results abstain. */
+/** Only a named binary choice is a prediction. Refusals and malformed answers abstain. */
 export function parseGraderResponse(value: any): boolean {
+  const answer = value?.answers?.[0]
   if (
-    value?.status !== 'completed' ||
-    value.error ||
-    !Array.isArray(value.output)
+    !Array.isArray(value?.answers) ||
+    value.answers.length !== 1 ||
+    answer?.type !== 'choice' ||
+    answer.name !== 'review' ||
+    !['accept', 'reject'].includes(answer.choice)
   )
-    throw new Error('No prediction: the model did not complete a text response')
-  const parts = value.output
-    .filter((item: any) => item.type === 'message')
-    .flatMap((item: any) => item.content || [])
-  if (parts.some((part: any) => part.type === 'refusal'))
-    throw new Error('No prediction: model refusal')
-  const text = parts
-    .filter((part: any) => part.type === 'output_text')
-    .map((part: any) => part.text)
-    .join('')
-    .trim()
-  if (text !== 'true' && text !== 'false')
-    throw new Error('No prediction: expected exactly true or false')
-  return text === 'true'
+    throw new Error('No prediction: expected an accept or reject choice.')
+  return answer.choice === 'accept'
 }
 
-/** Sends content-only input using the training encoder. No labels, decisions, authors,
- * comments, outputs or credentials are included in the prompt. Never retries a POST.
- */
-export async function gradeSuggestion(
-  input: PreparedExample,
-  signal?: AbortSignal
-): Promise<GraderPrediction> {
+/** Capture one rubric per grading action, including a multi-cell agent update. */
+export async function prepareGrader() {
   const settings = readSettings()
-  if (!settings.enabled || !settings.model)
-    throw new Error('AI predictions are not configured')
-  if (!input.operations.length)
-    throw new Error('No prediction: no content changes')
+  if (!settings.enabled) throw new Error('AI predictions are not configured')
+  const instructions = await readRubric(settings.instructionsUri)
+  return { settings, instructions }
+}
+type Grader = Awaited<ReturnType<typeof prepareGrader>>
+
+async function requestDecision(
+  candidate: string,
+  { settings, instructions }: Grader,
+  signal?: AbortSignal
+) {
   const headers: Record<string, string> = { 'Content-Type': 'application/json' }
   if (settings.organization)
     headers['OpenAI-Organization'] = settings.organization
   if (settings.project) headers['OpenAI-Project'] = settings.project
-  const controller = new AbortController()
-  const abort = () => controller.abort()
-  if (signal?.aborted) abort()
-  signal?.addEventListener('abort', abort, { once: true })
-  const timeout = setTimeout(abort, 120000)
-  try {
-    const response = await request(
-      '/responses',
-      {
-        method: 'POST',
-        headers,
-        body: JSON.stringify({
-          model: settings.model,
-          input: classifierPrompt(input),
-          reasoning: { effort: 'medium' },
-          max_output_tokens: 16384,
-          store: false,
-        }),
-      },
-      {
-        // A cleared dedicated key must use the endpoint-bound shared credential.
-        apiKey: settings.apiKey || undefined,
-        baseUrl: 'https://api.openai.com/v1',
-        signal: controller.signal,
-      }
-    )
-    let result
-    try {
-      result = await response.json()
-    } catch {
-      throw new Error('No prediction: invalid response JSON')
+  const timeout = AbortSignal.timeout(120000)
+  const response = await request(
+    '/decisions',
+    {
+      method: 'POST',
+      headers,
+      body: JSON.stringify({
+        model,
+        input: candidate,
+        questions: [
+          {
+            type: 'choice',
+            name: 'review',
+            instructions,
+            choices: [{ value: 'accept' }, { value: 'reject' }],
+          },
+        ],
+      }),
+    },
+    {
+      baseUrl: 'https://api.openai.com/v1',
+      apiKey: keyVault.requireValue(settings.keyName),
+      signal: signal ? AbortSignal.any([signal, timeout]) : timeout,
     }
-    return {
-      accepted: parseGraderResponse(result),
-      model: settings.model,
-      requestId: response.headers.get('x-request-id'),
-    }
-  } finally {
-    clearTimeout(timeout)
-    signal?.removeEventListener('abort', abort)
+  )
+  const result = await response.json()
+  return {
+    result,
+    accepted: parseGraderResponse(result),
+    model: result.model ?? model,
+    requestId: response.headers.get('x-request-id'),
   }
+}
+
+async function decide(
+  candidate: string,
+  signal?: AbortSignal,
+  snapshot?: Grader
+): Promise<GraderPrediction> {
+  const { accepted, model, requestId } = await requestDecision(
+    candidate,
+    snapshot ?? (await prepareGrader()),
+    signal
+  )
+  return { accepted, model, requestId }
+}
+
+export async function gradeExample(
+  args: Parameters<typeof prepareRecordExample>[0] & {
+    rubric: { version: string; instructions: string }
+  },
+  signal?: AbortSignal
+) {
+  const settings = readSettings()
+  if (!settings.enabled)
+    throw new Error(
+      'Enable the grader and select its Key Vault entry in AI grader settings.'
+    )
+  const { version, instructions } = args?.rubric ?? {}
+  if (
+    typeof version !== 'string' ||
+    !version.trim() ||
+    typeof instructions !== 'string' ||
+    !instructions.trim()
+  )
+    throw new Error('Provide a rubric version and its frozen instructions.')
+  const input = prepareRecordExample(args)
+  if (!input.operations.length)
+    throw new Error('No prediction: no content changes')
+  const { result, accepted, model, requestId } = await requestDecision(
+    JSON.stringify(input),
+    { settings, instructions },
+    signal
+  )
+  const distribution = result.answers[0].probabilities
+  const entries = Array.isArray(distribution)
+    ? distribution.filter((entry) => entry?.value === 'accept')
+    : []
+  const probability = entries[0]?.probability
+  if (
+    entries.length !== 1 ||
+    typeof probability !== 'number' ||
+    !Number.isFinite(probability) ||
+    probability < 0 ||
+    probability > 1
+  )
+    throw new Error('No accept probability in the Decisions answer.')
+  return {
+    accepted,
+    acceptProbability: probability,
+    model,
+    requestId,
+    rubricVersion: version,
+  }
+}
+
+export async function gradeSuggestion(
+  input: PreparedExample,
+  signal?: AbortSignal,
+  snapshot?: Grader
+) {
+  if (!input.operations.length)
+    throw new Error('No prediction: no content changes')
+  return decide(
+    JSON.stringify(normalizePreparedExample(input)),
+    signal,
+    snapshot
+  )
+}
+
+export async function gradePhrase(
+  input: { text: string; context?: string },
+  signal?: AbortSignal
+) {
+  if (
+    typeof input?.text !== 'string' ||
+    !input.text.trim() ||
+    (input.context !== undefined && typeof input.context !== 'string')
+  )
+    throw new Error('Provide a phrase and optional text context.')
+  return decide(
+    JSON.stringify({ text: input.text, context: input.context }),
+    signal
+  )
 }

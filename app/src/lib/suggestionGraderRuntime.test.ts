@@ -7,6 +7,7 @@ import type LocalNotebooks from '../storage/local'
 import { computeNotebookDiff } from './notebookDiff/diff'
 import { saveGraderSettings } from './suggestionGrader'
 import { createSuggestionGraderApi } from './suggestionGraderRuntime'
+import { mockGraderSources } from './suggestionGraderTestFixture'
 
 beforeEach(() => {
   localStorage.clear()
@@ -30,28 +31,21 @@ it('grades the requested immutable comparison using the same client as the UI, w
     diff: computeNotebookDiff(before, after),
   }))
   const store = { previewNotebookComparison } as unknown as LocalNotebooks
+  mockGraderSources()
   saveGraderSettings({
     enabled: true,
-    model: 'ft:test',
+    instructionsUri: 'local://file/rules',
+    keyName: 'review',
     organization: '',
     project: '',
-    apiKey: 'secret-key',
   })
-  const fetcher = vi
-    .spyOn(globalThis, 'fetch')
-    .mockResolvedValue(
-      new Response(
-        JSON.stringify({
-          status: 'completed',
-          output: [
-            {
-              type: 'message',
-              content: [{ type: 'output_text', text: 'false' }],
-            },
-          ],
-        })
-      )
+  const fetcher = vi.spyOn(globalThis, 'fetch').mockResolvedValue(
+    new Response(
+      JSON.stringify({
+        answers: [{ type: 'choice', name: 'review', choice: 'reject' }],
+      })
     )
+  )
   const api = createSuggestionGraderApi({ localStore: () => store })
   const comparison = { startRevisionId: 'empty', endRevisionId: 'r1' }
   const result = await api.grade({

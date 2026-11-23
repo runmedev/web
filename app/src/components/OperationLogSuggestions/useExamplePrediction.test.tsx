@@ -1,3 +1,4 @@
+import { mockGraderSources } from '../../lib/suggestionGraderTestFixture'
 import { act, renderHook, waitFor } from '@testing-library/react'
 import { afterEach, beforeEach, expect, it, vi } from 'vitest'
 import { gradeSuggestion, saveGraderSettings } from '../../lib/suggestionGrader'
@@ -10,10 +11,10 @@ vi.mock('../../lib/suggestionGrader', async (original) => ({
 }))
 const settings = {
   enabled: true,
-  model: 'ft:test',
+  instructionsUri: 'local://file/rules',
+  keyName: 'review',
   organization: '',
   project: '',
-  apiKey: 'test-key',
 }
 /** Include two changed cells to ensure inference grades the whole example. */
 function input(value: string) {
@@ -30,6 +31,7 @@ function input(value: string) {
 beforeEach(() => {
   localStorage.clear()
   vi.mocked(gradeSuggestion).mockReset()
+  mockGraderSources()
   saveGraderSettings(settings)
 })
 afterEach(() => localStorage.clear())
@@ -69,6 +71,7 @@ it('cancels obsolete results on navigation/hiding and clears results when config
     ({ example, active }) => useExamplePrediction(example, active),
     { initialProps: { example: input('first'), active: true } }
   )
+  await waitFor(() => expect(gradeSuggestion).toHaveBeenCalled())
   const signal = vi.mocked(gradeSuggestion).mock.calls[0][1]
   const second = input('second')
   rerender({ example: second, active: true })
@@ -91,7 +94,7 @@ it('cancels obsolete results on navigation/hiding and clears results when config
   })
   expect(result.current.status).toBe('none')
   act(() => {
-    saveGraderSettings({ ...settings, apiKey: 'new-key', model: 'ft:new' })
+    saveGraderSettings({ ...settings, project: 'new-project' })
   })
   await waitFor(() => expect(gradeSuggestion).toHaveBeenCalledTimes(3))
   rerender({ example: second, active: false })
@@ -119,7 +122,7 @@ it('keeps errors distinct from rejected labels and does not retry on navigation'
 })
 
 it('does not request inference without a key or for empty operations', async () => {
-  saveGraderSettings({ ...settings, apiKey: '' })
+  saveGraderSettings({ ...settings, keyName: 'missing' })
   const { result, rerender } = renderHook(
     ({ example }) => useExamplePrediction(example, true),
     { initialProps: { example: input('hello') } }

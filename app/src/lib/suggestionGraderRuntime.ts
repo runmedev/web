@@ -2,6 +2,8 @@ import type LocalNotebooks from '../storage/local'
 import type { ComparisonSelection } from './operationLog/comparisons'
 import {
   getGraderSettings,
+  gradeExample,
+  gradePhrase,
   gradeSuggestion,
   saveGraderSettings,
 } from './suggestionGrader'
@@ -13,8 +15,18 @@ export function createSuggestionGraderApi(deps: {
   signal?: AbortSignal
 }) {
   return {
+    gradeExample: (input: Parameters<typeof gradeExample>[0]) =>
+      gradeExample(input, deps.signal),
+    gradePhrase: (input: Parameters<typeof gradePhrase>[0]) =>
+      gradePhrase(input, deps.signal),
     getSettings: getGraderSettings,
-    setSettings: saveGraderSettings,
+    // A sandbox caller may update preferences but cannot authorize a different vault secret.
+    setSettings(input: Parameters<typeof saveGraderSettings>[0]) {
+      const selected = getGraderSettings().keyName
+      if (input.keyName !== undefined && input.keyName !== selected)
+        throw new Error('Select the key in AI grader settings.')
+      return saveGraderSettings({ ...input, keyName: selected })
+    },
     async grade(args: {
       target: { uri: string }
       comparison: ComparisonSelection
@@ -40,9 +52,10 @@ export function createSuggestionGraderApi(deps: {
     help: () =>
       [
         'suggestionGrader.getSettings() // no secrets returned',
-        'suggestionGrader.setSettings({enabled, model, organization, project, apiKey?}) // local only; prefer entering secrets in UI',
+        'suggestionGrader.setSettings({enabled, instructionsUri, organization, project}) // select the Key Vault entry in AI grader settings',
         'await suggestionGrader.grade({target:{uri}, comparison:{startRevisionId,endRevisionId}, cellId}) // sends content to OpenAI; advisory only',
-        'Uses the same content-only prompt as trainingExamples.encodeSftExample; never records a decision.',
+        'await suggestionGrader.gradeExample({base, diff, rubric: {version, instructions}}) // frozen records and rubric; returns acceptProbability, accepted, model, requestId, rubricVersion',
+        'await suggestionGrader.gradePhrase({text, context?}) // advisory Decisions classification',
       ].join('\n'),
   }
 }

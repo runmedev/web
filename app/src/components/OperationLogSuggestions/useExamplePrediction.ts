@@ -6,8 +6,8 @@ import {
   gradeSuggestion,
   subscribeGraderSettings,
 } from '../../lib/suggestionGrader'
-import { classifierPrompt } from '../../lib/trainingExamples/encoding'
 import type { PreparedExample } from '../../lib/trainingExamples/payloads'
+import { useGraderRubric } from './useGraderRubric'
 
 type State =
   | { status: 'none' | 'loading' | 'error'; text: string }
@@ -33,9 +33,15 @@ export function useExamplePrediction(
     []
   )
   const settings = getGraderSettings()
+  const rubric = useGraderRubric(
+    settings.instructionsUri,
+    input,
+    active && settings.enabled && settings.hasApiKey
+  )
+  const instructions = rubric?.text
   const key =
-    active && settings.enabled && settings.hasApiKey && input?.operations.length
-      ? `${generation}:${classifierPrompt(input)}`
+    instructions && input?.operations.length
+      ? `${generation}:${rubric?.digest}:${JSON.stringify(input)}`
       : ''
   useEffect(() => {
     if (!key || !input) return
@@ -52,7 +58,10 @@ export function useExamplePrediction(
       cache.current.set(key, state)
       setResult({ key, state })
     }
-    void gradeSuggestion(input, controller.signal).then(
+    void gradeSuggestion(input, controller.signal, {
+      settings,
+      instructions: instructions!,
+    }).then(
       (prediction) => publish({ status: 'ready', prediction }),
       (error) =>
         publish({
@@ -75,8 +84,9 @@ export function useExamplePrediction(
   if (!settings.hasApiKey)
     return {
       status: 'none',
-      text: 'Configure an API key in AI grader settings.',
+      text: 'Unlock Key Vault and select an API key in AI grader settings.',
     }
+  if (rubric?.error) return { status: 'error', text: rubric.error }
   if (!input) return { status: 'none', text: 'Waiting for example input…' }
   if (!input.operations.length)
     return { status: 'none', text: 'No prediction: no content changes.' }

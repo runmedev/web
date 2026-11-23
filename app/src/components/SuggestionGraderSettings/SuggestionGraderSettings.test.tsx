@@ -1,51 +1,33 @@
 // @vitest-environment jsdom
-import { fireEvent, render, screen } from '@testing-library/react'
-import { beforeEach, expect, it } from 'vitest'
-import {
-  getGraderSettings,
-  saveGraderSettings,
-} from '../../lib/suggestionGrader'
+import { fireEvent, render, screen, waitFor } from '@testing-library/react'
+import { it, expect } from 'vitest'
+import { getGraderSettings } from '../../lib/suggestionGrader'
+import { mockGraderSources } from '../../lib/suggestionGraderTestFixture'
 import { SuggestionGraderSettings } from './SuggestionGraderSettings'
-beforeEach(() => localStorage.clear())
-it('requires an explicit save and enable; masks and clears the key draft', () => {
+it('saves a vault name and mounted notebook after explicit opt-in', async () => {
+  localStorage.clear()
+  mockGraderSources()
   render(<SuggestionGraderSettings />)
-  fireEvent.change(screen.getByLabelText('Model ID'), {
-    target: { value: 'ft:test' },
+  await screen.findByRole('option', { name: 'Editorial/rules.runme' })
+  fireEvent.change(screen.getByLabelText('OpenAI key in Key Vault'), {
+    target: { value: 'review' },
   })
-  const key = screen.getByLabelText(
-    'Grader API key (optional)'
-  ) as HTMLInputElement
-  fireEvent.change(key, { target: { value: 'test-secret' } })
-  expect(key.type).toBe('password')
-  expect(getGraderSettings().enabled).toBe(false)
+  fireEvent.change(screen.getByLabelText('Instructions notebook'), {
+    target: { value: 'local://file/rules' },
+  })
   fireEvent.click(
     screen.getByLabelText('Enable automatic predictions when reviewing')
   )
+  expect(getGraderSettings().enabled).toBe(false)
   fireEvent.click(screen.getByRole('button', { name: 'Save grader settings' }))
-  expect(getGraderSettings()).toMatchObject({
-    enabled: true,
-    model: 'ft:test',
-    hasDedicatedKey: true,
-  })
-  expect(key.value).toBe('')
-  expect(screen.getByRole('status').textContent).toBe(
-    'AI grader settings saved.'
+  await waitFor(() =>
+    expect(getGraderSettings()).toMatchObject({
+      enabled: true,
+      keyName: 'review',
+      instructionsUri: 'local://file/rules',
+    })
   )
-})
-it('does not reveal existing credentials and can clear a dedicated key', () => {
-  saveGraderSettings({
-    enabled: false,
-    model: 'ft:test',
-    organization: '',
-    project: '',
-    apiKey: 'test-secret',
-  })
-  render(<SuggestionGraderSettings />)
-  expect(
-    (screen.getByLabelText('Grader API key (optional)') as HTMLInputElement)
-      .value
-  ).toBe('')
-  fireEvent.click(screen.getByLabelText('Clear dedicated key on save'))
-  fireEvent.click(screen.getByRole('button', { name: 'Save grader settings' }))
-  expect(getGraderSettings().hasDedicatedKey).toBe(false)
+  expect(localStorage.getItem('runme.suggestion-grader.v1')).not.toContain(
+    'test-key'
+  )
 })

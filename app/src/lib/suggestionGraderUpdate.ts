@@ -3,7 +3,7 @@ import type {
   NotebookCellGrade,
   NotebookDocument,
 } from './runtime/runmeConsole'
-import { gradeSuggestion } from './suggestionGrader'
+import { gradeSuggestion, prepareGrader } from './suggestionGrader'
 import { prepareSuggestionInput } from './suggestionGraderInput'
 
 /** Grade the net content changes of one update, using immutable captured copies.
@@ -29,6 +29,14 @@ export async function gradeNotebookUpdate(
     })
     .filter((task) => task.input.operations.length > 0)
   const results: NotebookCellGrade[] = new Array(tasks.length)
+  if (!tasks.length) return []
+  if (signal?.aborted)
+    return tasks.map(({ cellId }) => ({
+      cellId,
+      status: 'error',
+      error: 'Grading cancelled; changes were already applied.',
+    }))
+  const snapshot = prepareGrader()
   let cursor = 0
   const worker = async () => {
     while (cursor < tasks.length) {
@@ -43,7 +51,7 @@ export async function gradeNotebookUpdate(
         continue
       }
       try {
-        const prediction = await gradeSuggestion(input, signal)
+        const prediction = await gradeSuggestion(input, signal, await snapshot)
         results[index] = { cellId, status: 'graded', ...prediction }
       } catch (error) {
         results[index] = {

@@ -44,6 +44,8 @@ export const STORAGE_METHODS = [
   'loadContent',
   'getFileRecord',
   'loadOperationLogSnapshot',
+  'listMountedRubrics',
+  'readGradingInstructions',
   'trainingExampleJob',
   'saveContent',
   'resolveConflictWithLocal',
