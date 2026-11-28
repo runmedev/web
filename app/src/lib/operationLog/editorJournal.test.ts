@@ -21,6 +21,7 @@ import {
   pagePositionKey,
   resolvePage,
 } from '../notebookPages'
+import { advanceEditorFrontier, editorFrontier } from './editorFrontier'
 
 function notebook(
   cells: Array<{ id: string; value: string }>
@@ -44,14 +45,31 @@ async function apply(
   actorId: string,
   firstActorSequence = 1
 ): Promise<RunmeOperation[]> {
-  return buildOperationLogDiff({
+  const input = {
     previous,
     next,
     observedOperations,
     actorId,
     firstActorSequence,
     createdAt: () => '2026-09-03T00:00:00Z',
+  }
+  const original = await buildOperationLogDiff(input)
+  const frontier = editorFrontier(
+    observedOperations,
+    materializeOperationLog(observedOperations)
+  )!
+  const compact = await buildOperationLogDiff({
+    ...input,
+    observedOperations: [],
+    frontier,
   })
+  expect(compact).toEqual(original)
+  advanceEditorFrontier(frontier, compact)
+  const merged = [...observedOperations, ...original]
+  expect(frontier).toEqual(
+    editorFrontier(merged, materializeOperationLog(merged))
+  )
+  return original
 }
 
 describe('editor operation-log journal', () => {

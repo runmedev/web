@@ -73,6 +73,37 @@ export function createRunmeOperation<Payload = JsonValue>({
       : Math.max(
           ...dependencyOperations.map((operation) => operation.lamport)
         ) + 1
+  return operationAtFrontier(
+    {
+      actorId,
+      actorSequence,
+      dependencies,
+      kind,
+      payload,
+      transactionId,
+      suggestionId,
+      reverts,
+      createdAt,
+    },
+    lamport
+  )
+}
+
+/** Build an operation after the caller has established the observed clocks. */
+export function operationAtFrontier<Payload>(
+  {
+    actorId,
+    actorSequence,
+    dependencies,
+    kind,
+    payload,
+    transactionId,
+    suggestionId,
+    reverts,
+    createdAt = new Date().toISOString(),
+  }: Omit<CreateOperationInput<Payload>, 'knownOperations'>,
+  lamport: number
+): RunmeOperation<string, Payload> {
   const operation: RunmeOperation<string, Payload> = {
     record_type: 'runme.operation',
     format_version: 1,

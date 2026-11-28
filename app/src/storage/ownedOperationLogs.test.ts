@@ -3,6 +3,7 @@ import type { Table } from 'dexie'
 import md5 from 'md5'
 import { describe, expect, it, vi } from 'vitest'
 
+import { createInitialNotebookFile } from '../lib/notebookFormat'
 import type { LocalFileRecord } from './local'
 import { MemoryOperationLogStorage, operationLogPath } from './operationLogs'
 import {
@@ -161,4 +162,25 @@ describe('owned OPFS commits and sync acknowledgements', () => {
     )
     expect(file().operationLogRef?.path).toBe(operationLogPath(uri))
   })
+})
+
+it('reopens a current view across owner restarts and invalidates it before replacement', async () => {
+  const { owner, storage, uri, files, table } = setup()
+  const ref = (
+    await owner.initialize(uri, createInitialNotebookFile('a.runme'))
+  ).ref
+  const read = vi.spyOn(storage, 'read')
+  const cold = await owner.readView(ref)
+  await owner.readParsed(ref)
+  expect(read).toHaveBeenCalledTimes(1)
+  const restarted = new OwnedOperationLogs(storage, files, table)
+  expect(await restarted.readView(ref)).toEqual(cold)
+  expect(read).toHaveBeenCalledTimes(1)
+  await Promise.all([restarted.readParsed(ref), restarted.readParsed(ref)])
+  expect(read).toHaveBeenCalledTimes(2)
+  await restarted.replace(ref, createInitialNotebookFile('b.runme'))
+  expect((await restarted.readView(ref)).header.notebook_id).not.toBe(
+    cold.header.notebook_id
+  )
+  expect(read).toHaveBeenCalledTimes(3)
 })

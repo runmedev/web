@@ -23,6 +23,7 @@ export interface OperationLogAppendOptions {
 }
 
 export interface OperationLogStorage {
+  fileStamp?(ref: OperationLogRef): Promise<string>
   supportsConcurrentWriters(): boolean
   initialize(
     canonicalUri: string,
@@ -185,6 +186,12 @@ export class OpfsOperationLogStorage implements OperationLogStorage {
 
   supportsConcurrentWriters(): boolean {
     return hasWebLocks()
+  }
+
+  /** Detect a missing or externally replaced file without loading its bytes. */
+  async fileStamp(ref: OperationLogRef): Promise<string> {
+    const file = await (await getHandle(ref)).getFile()
+    return file.size + '@' + file.lastModified
   }
 
   async initialize(

@@ -618,6 +618,7 @@ export class StorageOwnerHost {
             value = {
               version: STORAGE_OWNER_VERSION,
               editorCommitVersion: 1,
+              journalViewVersion: 1,
               instanceId: this.instanceId,
               release: this.release,
             }

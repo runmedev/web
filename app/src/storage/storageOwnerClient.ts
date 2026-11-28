@@ -13,6 +13,7 @@ import { registerUpgradeBlocker } from '../releases/runtime'
 import { DriveCreateNotCommittedError, type DriveNotebookStore } from './drive'
 import { EditorSaveSession } from './editorSaveSession'
 import { FilesystemEntryAlreadyExistsError } from './fs'
+import type { JournalView } from './journalView'
 import { readLegacyCreationJournal } from './legacyCreationJournal'
 import LocalNotebooks, {
   NotebookConflictChangedError,
@@ -500,6 +501,7 @@ export function createSharedNotebookStore(
         },
       ])
       const handshake = hello as {
+        journalViewVersion?: number
         editorCommitVersion?: number
         version: number
         instanceId?: string
@@ -882,10 +884,17 @@ export function createSharedNotebookStore(
             const checkpoint = readTabCheckpoints(uri).find(
               (entry) => entry.uri === uri
             )
-            const document =
-              checkpoint?.document ??
-              options.initialDocument ??
-              ((await call('loadContent', [uri])) as string)
+            let document: string | JournalView | undefined =
+              checkpoint?.document ?? options.initialDocument
+            if (!checkpoint && document === undefined) {
+              if (handshake.journalViewVersion === 1) {
+                const view = (await call('getJournalView', [
+                  uri,
+                ])) as JournalView
+                if (view.frontier) document = view
+              }
+              document ??= (await call('loadContent', [uri])) as string
+            }
             const session = new EditorSaveSession(
               uri,
               document,

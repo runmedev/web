@@ -24,6 +24,7 @@ export const STORAGE_METHODS = [
   'getMetadata',
   'save',
   'commitEditorOperations',
+  'getJournalView',
   'isOperationLogNotebook',
   'listOperationLogComments',
   'addOperationLogComment',
