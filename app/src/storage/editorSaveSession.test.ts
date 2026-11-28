@@ -13,6 +13,7 @@ import {
 } from '../lib/operationLog'
 import { parser_pb } from '../runme/client'
 import { EditorSaveSession } from './editorSaveSession'
+import { buildJournalView } from './journalView'
 
 it('captures the submitted snapshot while typing continues and retries identical operations after failure', async () => {
   let acknowledge!: () => void
@@ -61,76 +62,89 @@ it('captures the submitted snapshot while typing continues and retries identical
   expect(session.hasPending).toBe(false)
 })
 
-it('restores a lost-ack batch and later typing without overwriting another tab’s edits', async () => {
-  const uri = 'local://file/recovery'
-  const initial = createInitialNotebookFile('recovery.runme')
-  let durable = initial
-  const commit = vi.fn(
-    async (_uri: string, _id: string, operations: RunmeOperation[]) => {
-      const parsed = parseOperationLog(durable)
-      durable = serializeOperationLog(
-        parsed.header,
-        mergeOperationSets(parsed.operations, operations)
-      )
-    }
-  )
-  const first = new EditorSaveSession(uri, initial, async (...args) => {
-    await commit(...args)
-    throw new Error('Lost reply after durable commit')
-  })
-  const editor = first.initialNotebook
-  editor.cells.push(
-    create(parser_pb.CellSchema, {
-      refId: 'mine',
-      kind: parser_pb.CellKind.MARKUP,
-      value: 'submitted',
-    })
-  )
-  await expect(first.save(uri, editor)).rejects.toThrow('Lost reply')
-  const originalBatch = structuredClone(commit.mock.calls[0][2])
-  const other = new EditorSaveSession(uri, initial, commit)
-  other.initialNotebook.cells.push(
-    create(parser_pb.CellSchema, {
-      refId: 'theirs',
-      kind: parser_pb.CellKind.MARKUP,
-      value: 'other tab',
-    })
-  )
-  await other.save(uri, other.initialNotebook)
-  editor.cells[0].value = 'typed after submission'
-  const checkpoint = JSON.parse(JSON.stringify(await first.checkpoint(editor)))
-  const recovered = vi.fn()
-  const restored = new EditorSaveSession(
-    uri,
-    checkpoint.document,
-    vi
-      .fn()
-      .mockRejectedValueOnce(new Error('Worker unavailable during replay'))
-      .mockImplementation(commit),
-    checkpoint.actorId,
-    checkpoint,
-    recovered
-  )
-  expect(restored.initialNotebook.cells[0].value).toBe('typed after submission')
-  await expect(restored.save(uri, restored.initialNotebook)).rejects.toThrow(
-    'Worker unavailable during replay'
-  )
-  expect(recovered).not.toHaveBeenCalled()
-  // No new keystroke/save callback is required to persist the restored snapshot.
-  await restored.resume()
-  expect(recovered).toHaveBeenCalledOnce()
-  expect(restored.hasPending).toBe(false)
-  expect(commit.mock.calls[2][2]).toEqual(originalBatch)
-  const parsed = parseOperationLog(durable)
-  expect(new Set(parsed.operations.map((op) => op.op_id)).size).toBe(
-    parsed.operations.length
-  )
-  expect(
-    materializedLogToNotebook(materializeOperationLog(parsed.operations))
-      .cells.map((cell) => cell.value)
-      .sort()
-  ).toEqual(['other tab', 'typed after submission'])
-})
+it.each(['document', 'snapshot'])(
+  'restores a lost-ack %s batch and later typing without overwriting another tab’s edits',
+  async (mode) => {
+    const uri = 'local://file/recovery'
+    const initial = createInitialNotebookFile('recovery.runme')
+    let durable = initial
+    const commit = vi.fn(
+      async (_uri: string, _id: string, operations: RunmeOperation[]) => {
+        const parsed = parseOperationLog(durable)
+        durable = serializeOperationLog(
+          parsed.header,
+          mergeOperationSets(parsed.operations, operations)
+        )
+      }
+    )
+    const first = new EditorSaveSession(
+      uri,
+      mode === 'snapshot'
+        ? buildJournalView(parseOperationLog(initial))
+        : initial,
+      async (...args) => {
+        await commit(...args)
+        throw new Error('Lost reply after durable commit')
+      }
+    )
+    const editor = first.initialNotebook
+    editor.cells.push(
+      create(parser_pb.CellSchema, {
+        refId: 'mine',
+        kind: parser_pb.CellKind.MARKUP,
+        value: 'submitted',
+      })
+    )
+    await expect(first.save(uri, editor)).rejects.toThrow('Lost reply')
+    const originalBatch = structuredClone(commit.mock.calls[0][2])
+    const other = new EditorSaveSession(uri, initial, commit)
+    other.initialNotebook.cells.push(
+      create(parser_pb.CellSchema, {
+        refId: 'theirs',
+        kind: parser_pb.CellKind.MARKUP,
+        value: 'other tab',
+      })
+    )
+    await other.save(uri, other.initialNotebook)
+    editor.cells[0].value = 'typed after submission'
+    const checkpoint = JSON.parse(
+      JSON.stringify(await first.checkpoint(editor))
+    )
+    const recovered = vi.fn()
+    const restored = new EditorSaveSession(
+      uri,
+      checkpoint.document,
+      vi
+        .fn()
+        .mockRejectedValueOnce(new Error('Worker unavailable during replay'))
+        .mockImplementation(commit),
+      checkpoint.actorId,
+      checkpoint,
+      recovered
+    )
+    expect(restored.initialNotebook.cells[0].value).toBe(
+      'typed after submission'
+    )
+    await expect(restored.save(uri, restored.initialNotebook)).rejects.toThrow(
+      'Worker unavailable during replay'
+    )
+    expect(recovered).not.toHaveBeenCalled()
+    // No new keystroke/save callback is required to persist the restored snapshot.
+    await restored.resume()
+    expect(recovered).toHaveBeenCalledOnce()
+    expect(restored.hasPending).toBe(false)
+    expect(commit.mock.calls[2][2]).toEqual(originalBatch)
+    const parsed = parseOperationLog(durable)
+    expect(new Set(parsed.operations.map((op) => op.op_id)).size).toBe(
+      parsed.operations.length
+    )
+    expect(
+      materializedLogToNotebook(materializeOperationLog(parsed.operations))
+        .cells.map((cell) => cell.value)
+        .sort()
+    ).toEqual(['other tab', 'typed after submission'])
+  }
+)
 
 it('resumes the original editor after checkpoint persistence fails', async () => {
   const commit = vi.fn(async () => {})

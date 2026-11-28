@@ -128,17 +128,18 @@ import {
   filePayloadChecksum,
 } from './filePayloads'
 import {
+  FilesystemEntryAlreadyExistsError,
+  type FilesystemNotebookStore,
   buildFsUri,
   buildWorkspaceRootUri,
-  FilesystemEntryAlreadyExistsError,
   parseFsUri,
-  type FilesystemNotebookStore,
 } from './fs'
 import {
   type IpynbPreservationState,
   type IpynbShadowStorage,
   createDefaultIpynbShadowStorage,
 } from './ipynbShadows'
+import { buildJournalView, projectComments } from './journalView'
 import { NotebookStoreItem, NotebookStoreItemType } from './notebook'
 import {
   type OperationLogRef,
@@ -2523,73 +2524,10 @@ export class LocalNotebooks extends Dexie {
   }
 
   async listOperationLogComments(uri: string): Promise<DriveComment[]> {
+    if (this.ownedLogs) return (await this.getJournalView(uri)).comments
     const { parsed, materialized } =
       await this.readMaterializedOperationLog(uri)
-    const operations = new Map(
-      parsed.operations.map((operation) => [operation.op_id, operation])
-    )
-    const repliesByThread = new Map<string, DriveComment['replies']>()
-    for (const comment of materialized.comments) {
-      if (!comment.parent_comment_id) continue
-      const replies = repliesByThread.get(comment.thread_id) ?? []
-      const operation = operations.get(comment.operation_id)
-      const replyTarget = comment.payload.annotation.targets[0]
-      replies.push({
-        id: comment.comment_id,
-        anchor:
-          replyTarget &&
-          typeof replyTarget === 'object' &&
-          !Array.isArray(replyTarget) &&
-          typeof replyTarget.anchor === 'string'
-            ? replyTarget.anchor
-            : undefined,
-        content: comment.payload.body.value,
-        createdTime: operation?.created_at,
-        modifiedTime: operation?.created_at,
-        author: {
-          displayName: comment.payload.author.display_name,
-          runmeAuthorKind: comment.payload.author.kind,
-          runmeAuthorSource: comment.payload.author.source,
-          runmeAuthenticatedPrincipal:
-            comment.payload.author.authenticated_principal,
-          runmeActorId: operation?.actor_id,
-        },
-        runmeOperationId: comment.operation_id,
-      })
-      repliesByThread.set(comment.thread_id, replies)
-    }
-    return materialized.comments.flatMap((comment) => {
-      if (comment.parent_comment_id) return []
-      const operation = operations.get(comment.operation_id)
-      const target = comment.payload.annotation.targets[0]
-      const anchor =
-        target &&
-        typeof target === 'object' &&
-        !Array.isArray(target) &&
-        typeof target.anchor === 'string'
-          ? target.anchor
-          : undefined
-      return [
-        {
-          id: comment.comment_id,
-          content: comment.payload.body.value,
-          createdTime: operation?.created_at,
-          modifiedTime: operation?.created_at,
-          resolved: materialized.threadStatus[comment.thread_id] === 'resolved',
-          anchor,
-          author: {
-            displayName: comment.payload.author.display_name,
-            runmeAuthorKind: comment.payload.author.kind,
-            runmeAuthorSource: comment.payload.author.source,
-            runmeAuthenticatedPrincipal:
-              comment.payload.author.authenticated_principal,
-            runmeActorId: operation?.actor_id,
-          },
-          replies: repliesByThread.get(comment.thread_id) ?? [],
-          runmeOperationId: comment.operation_id,
-        },
-      ]
-    })
+    return projectComments(parsed, materialized)
   }
 
   async addOperationLogComment(
@@ -3392,7 +3330,13 @@ export class LocalNotebooks extends Dexie {
   async resolveOutputReference(uri: string, source: string) {
     if (!(await this.isOperationLogNotebook(uri)))
       throw new Error('Output references require a .runme notebook.')
-    const parsed = parseOperationLog(await this.loadContent(uri))
+    const ref = (await this.files.get(uri))?.operationLogRef
+    const parsed =
+      this.ownedLogs && ref
+        ? await this.withMissingOpfsRecovery(uri, () =>
+            this.ownedLogs!.readParsed(ref)
+          )
+        : parseOperationLog(await this.loadContent(uri))
     return resolveOutputReference(
       parsed.operations,
       parseOutputReference(source)
@@ -3620,6 +3564,22 @@ export class LocalNotebooks extends Dexie {
     )
   }
 
+  /** Capture the editor baseline, comments and causal clocks at one generation. */
+  async getJournalView(uri: string) {
+    return this.withMissingOpfsRecovery(uri, async () => {
+      await this.recoverLocalInitialization(uri)
+      const ref = (await this.files.get(uri))?.operationLogRef
+      if (!ref) throw new Error(`Operation-log reference missing for ${uri}`)
+      return this.ownedLogs
+        ? this.ownedLogs.readView(ref)
+        : buildJournalView(
+            parseOperationLog(
+              (await this.operationLogStorage.read(ref)).document
+            )
+          )
+    })
+  }
+
   private async loadOperationLogSnapshotInner(
     uri: string
   ): Promise<parser_pb.Notebook> {
@@ -3639,6 +3599,8 @@ export class LocalNotebooks extends Dexie {
     if (!record.operationLogRef) {
       throw new Error(`Operation-log reference missing for ${uri}`)
     }
+    if (this.ownedLogs)
+      return (await this.ownedLogs.readView(record.operationLogRef)).notebook
     const content = (
       await this.operationLogStorage.read(record.operationLogRef)
     ).document

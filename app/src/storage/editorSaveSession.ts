@@ -11,22 +11,38 @@ import {
   serializeOperationLog,
   upgradeOperationLogToV2,
 } from '../lib/operationLog'
+import { validateHeader, validateOperation } from '../lib/operationLog/codec'
+import {
+  type EditorFrontier,
+  type PackedFrontier,
+  advanceEditorFrontier,
+  packFrontier,
+  unpackFrontier,
+} from '../lib/operationLog/editorFrontier'
+import type { NotebookLogHeader } from '../lib/operationLog/types'
 import {
   captureCommittedRevision,
   snapshotHeads,
 } from '../lib/operationLog/versions'
 import { parser_pb } from '../runme/client'
+import type { JournalView } from './journalView'
 
 /** Versioned, tab-local recovery contract. Operations retain their original IDs. */
 export type EditorSaveCheckpoint = {
-  format: 1
   uri: string
   actorId: string
-  document: string
   baseline: string
   latest: string
   pending?: { operations: RunmeOperation[]; snapshot: string }
-}
+} & (
+  | { format: 1; document: string }
+  | {
+      format: 2
+      document?: never
+      header: NotebookLogHeader
+      frontier: PackedFrontier
+    }
+)
 
 /** Page-owned save state survives replacing the storage connection. The worker
  * only commits immutable batches; it never owns this editor's save baseline.
@@ -34,7 +50,8 @@ export type EditorSaveCheckpoint = {
 export class EditorSaveSession {
   readonly initialNotebook: parser_pb.Notebook
   private readonly notebookId: string
-  private observed: RunmeOperation[]
+  private frontier?: EditorFrontier
+  private observed: RunmeOperation[] = []
   private baseline: parser_pb.Notebook
   private pending?: {
     operations: RunmeOperation[]
@@ -53,7 +70,7 @@ export class EditorSaveSession {
 
   constructor(
     private readonly uri: string,
-    document: string,
+    document: string | JournalView | undefined,
     private readonly commit: (
       uri: string,
       notebookId: string,
@@ -63,24 +80,40 @@ export class EditorSaveSession {
     checkpoint?: EditorSaveCheckpoint,
     private onRecovered?: () => void
   ) {
-    const parsed = parseOperationLog(upgradeOperationLogToV2(document))
-    this.header = parsed.header
-    this.notebookId = parsed.header.notebook_id
-    this.observed = parsed.operations
-    this.baseline = materializedLogToNotebook(
-      materializeOperationLog(this.observed)
-    )
-    if (checkpoint) {
-      if (
-        checkpoint.format !== 1 ||
-        checkpoint.uri !== uri ||
-        checkpoint.actorId !== actorId
-      )
-        throw new Error('Unsupported or mismatched editor recovery checkpoint')
+    if (checkpoint?.format === 2) {
+      this.header = validateHeader(checkpoint.header)
+      this.frontier = unpackFrontier(checkpoint.frontier)
       this.baseline = fromJsonString(
         parser_pb.NotebookSchema,
         checkpoint.baseline
       )
+    } else if (typeof document === 'object' && document.frontier) {
+      this.header = { ...validateHeader(document.header), format_version: 2 }
+      this.frontier = unpackFrontier(document.frontier)
+      this.baseline = cloneNotebook(document.notebook)
+    } else {
+      if (typeof document !== 'string')
+        throw new Error('Missing editor recovery document')
+      const parsed = parseOperationLog(upgradeOperationLogToV2(document))
+      this.header = parsed.header
+      this.observed = parsed.operations
+      this.baseline = materializedLogToNotebook(
+        materializeOperationLog(this.observed)
+      )
+    }
+    this.notebookId = this.header.notebook_id
+    if (checkpoint) {
+      if (
+        (checkpoint.format !== 1 && checkpoint.format !== 2) ||
+        checkpoint.uri !== uri ||
+        checkpoint.actorId !== actorId
+      )
+        throw new Error('Unsupported or mismatched editor recovery checkpoint')
+      if (checkpoint.format === 1)
+        this.baseline = fromJsonString(
+          parser_pb.NotebookSchema,
+          checkpoint.baseline
+        )
       this.pending = checkpoint.pending && {
         operations: structuredClone(checkpoint.pending.operations),
         snapshot: fromJsonString(
@@ -90,12 +123,29 @@ export class EditorSaveSession {
       }
       // Parse the combined history before replaying anything. Corrupt checkpoints
       // remain in session storage; never turn them into an empty editor.
-      parseOperationLog(
-        serializeOperationLog(this.header, [
-          ...this.observed,
-          ...(this.pending?.operations ?? []),
-        ])
-      )
+      if (this.frontier) {
+        let clock = this.frontier.lamport
+        let seq = this.frontier.sequences.get(actorId) ?? 0
+        let deps = this.frontier.heads
+        for (const op of this.pending?.operations ?? []) {
+          validateOperation(op)
+          if (
+            op.actor_id !== actorId ||
+            op.actor_seq !== ++seq ||
+            op.op_id !== actorId + ':' + seq ||
+            op.lamport !== ++clock ||
+            JSON.stringify(op.deps) !== JSON.stringify(deps)
+          )
+            throw new Error('Invalid recovery operation frontier')
+          deps = [op.op_id]
+        }
+      } else
+        parseOperationLog(
+          serializeOperationLog(this.header, [
+            ...this.observed,
+            ...(this.pending?.operations ?? []),
+          ])
+        )
     }
     this.latest = checkpoint
       ? fromJsonString(parser_pb.NotebookSchema, checkpoint.latest)
@@ -105,6 +155,7 @@ export class EditorSaveSession {
 
   /** Only acknowledged history participates in release handoff verification. */
   getObservedOperationHeads(): string[] {
+    if (this.frontier) return [...this.frontier.heads].sort()
     return snapshotHeads(this.observed, captureCommittedRevision(this.observed))
   }
 
@@ -115,7 +166,8 @@ export class EditorSaveSession {
     const pending = this.pending
     if (!pending) return
     await this.commit(this.uri, this.notebookId, pending.operations)
-    this.observed = [...this.observed, ...pending.operations]
+    if (this.frontier) advanceEditorFrontier(this.frontier, pending.operations)
+    else this.observed = [...this.observed, ...pending.operations]
     this.baseline = pending.snapshot
     this.pending = undefined
   }
@@ -127,10 +179,18 @@ export class EditorSaveSession {
     this.suspended = true
     await this.queue
     return {
-      format: 1,
+      ...(this.frontier
+        ? {
+            format: 2 as const,
+            header: this.header,
+            frontier: packFrontier(this.frontier),
+          }
+        : {
+            format: 1 as const,
+            document: serializeOperationLog(this.header, this.observed),
+          }),
       uri: this.uri,
       actorId: this.actorId,
-      document: serializeOperationLog(this.header, this.observed),
       baseline: toJsonString(parser_pb.NotebookSchema, this.baseline),
       latest: toJsonString(parser_pb.NotebookSchema, latest ?? this.latest),
       pending: this.pending && {
@@ -176,9 +236,11 @@ export class EditorSaveSession {
           previous: this.baseline,
           next,
           observedOperations: this.observed,
+          frontier: this.frontier,
           actorId: this.actorId,
           firstActorSequence:
-            highestActorSequence(this.observed, this.actorId) + 1,
+            (this.frontier?.sequences.get(this.actorId) ??
+              highestActorSequence(this.observed, this.actorId)) + 1,
         })
         if (!operations.length) {
           this.baseline = next

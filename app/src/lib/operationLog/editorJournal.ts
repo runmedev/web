@@ -7,8 +7,13 @@ import {
 } from '../../runme/client'
 import { CELL_PAGE, PAGE_PREFIX } from '../notebookPages'
 import { isRecoveredOutput } from '../recoveredOutputs'
+import type { EditorFrontier } from './editorFrontier'
 import { materializeOperationLog } from './materialize'
-import { causalHeads, createRunmeOperation } from './mutations'
+import {
+  causalHeads,
+  createRunmeOperation,
+  operationAtFrontier,
+} from './mutations'
 import { allocatePositionBetween } from './positions'
 import type {
   JsonValue,
@@ -26,6 +31,7 @@ export interface OperationLogDiffInput {
   previous: parser_pb.Notebook
   next: parser_pb.Notebook
   observedOperations: RunmeOperation[]
+  frontier?: EditorFrontier
   actorId: string
   firstActorSequence: number
   createdAt?: () => string
@@ -125,6 +131,7 @@ export async function buildOperationLogDiff({
   previous,
   next,
   observedOperations,
+  frontier,
   actorId,
   firstActorSequence,
   createdAt = () => new Date().toISOString(),
@@ -132,20 +139,29 @@ export async function buildOperationLogDiff({
   const operations = [...observedOperations]
   const created: RunmeOperation[] = []
   let actorSequence = firstActorSequence
-  let dependencies = causalHeads(observedOperations)
+  let dependencies = frontier?.heads ?? causalHeads(observedOperations)
+  let clock = frontier?.lamport ?? 0
+  const sourceWrites = new Map<string, string>()
   const suggestionId = `${actorId}:suggestion:${firstActorSequence}`
 
   const append = (kind: string, payload: JsonValue) => {
-    const operation = createRunmeOperation({
+    const fields = {
       actorId,
       actorSequence,
       dependencies,
-      knownOperations: operations,
       kind,
       payload,
       suggestionId,
       createdAt: createdAt(),
-    })
+    }
+    const operation = frontier
+      ? operationAtFrontier(fields, ++clock)
+      : createRunmeOperation({ ...fields, knownOperations: operations })
+    if (kind === 'cell.create' || kind === 'cell.update')
+      sourceWrites.set(
+        (payload as { cell_id: string }).cell_id,
+        operation.op_id
+      )
     actorSequence += 1
     dependencies = [operation.op_id]
     operations.push(operation)
@@ -175,16 +191,24 @@ export async function buildOperationLogDiff({
     append('notebook.update', nextNotebookUpdate as unknown as JsonValue)
   }
 
-  const materialized = materializeOperationLog(observedOperations)
+  const materialized = frontier
+    ? undefined
+    : materializeOperationLog(observedOperations)
   const positions = new Map<string, PositionId>(
-    materialized.notebook.cells.map((cell) => [cell.cell_id, cell.position])
+    frontier
+      ? [...frontier.cells].map(([id, c]) => [id, c.position] as const)
+      : materialized!.notebook.cells.map((cell) => [
+          cell.cell_id,
+          cell.position,
+        ])
   )
   const createdCellIds = new Set(
-    observedOperations.flatMap((operation) => {
-      if (operation.kind !== 'cell.create') return []
-      const payload = operation.payload as unknown as { cell_id?: unknown }
-      return typeof payload.cell_id === 'string' ? [payload.cell_id] : []
-    })
+    frontier?.createdIds ??
+      observedOperations.flatMap((operation) => {
+        if (operation.kind !== 'cell.create') return []
+        const payload = operation.payload as unknown as { cell_id?: unknown }
+        return typeof payload.cell_id === 'string' ? [payload.cell_id] : []
+      })
   )
   const previousCells = new Map(
     previous.cells.map((cell) => [cell.refId, cell] as const)
@@ -263,9 +287,9 @@ export async function buildOperationLogDiff({
     leftPosition = position
   }
 
-  const currentOrder = materialized.notebook.cells
-    .map((cell) => cell.cell_id)
-    .filter((cellId) => nextCells.has(cellId))
+  const currentOrder = [...positions.keys()].filter((cellId) =>
+    nextCells.has(cellId)
+  )
   for (const cell of next.cells) {
     if (!currentOrder.includes(cell.refId)) currentOrder.push(cell.refId)
   }
@@ -335,20 +359,25 @@ export async function buildOperationLogDiff({
     // Metadata can return to a historical run after a stale snapshot, restore,
     // or refresh. That is not a second execution start. Use effective history so
     // a rejected start does not prevent a subsequent accepted execution.
-    const knownStart = materialized.executions.some(
-      (execution) =>
-        execution.execution_id === nextRunId &&
-        execution.start.cell_id === cell.refId
-    )
+    const knownStart = frontier
+      ? Boolean(nextRunId && frontier.starts.get(nextRunId) === cell.refId)
+      : materialized!.executions.some(
+          (execution) =>
+            execution.execution_id === nextRunId &&
+            execution.start.cell_id === cell.refId
+        )
     if (runChanged && !knownStart) {
-      const source = materializeOperationLog(operations).notebook.cells.find(
-        (candidate) => candidate.cell_id === cell.refId
-      )
+      const sourceId = frontier
+        ? (sourceWrites.get(cell.refId) ??
+          frontier.cells.get(cell.refId)?.source)
+        : materializeOperationLog(operations).notebook.cells.find(
+            (candidate) => candidate.cell_id === cell.refId
+          )?.source_operation_id
       const startedAt = createdAt()
       append('execution.start', {
         execution_id: nextRunId!,
         cell_id: cell.refId,
-        source_op_id: source?.source_operation_id ?? dependencies[0] ?? '',
+        source_op_id: sourceId ?? dependencies[0] ?? '',
         input: {
           language_id: cell.languageId,
           value: cell.value,

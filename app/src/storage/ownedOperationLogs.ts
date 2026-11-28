@@ -1,5 +1,11 @@
+import { fromJson, toJson } from '@bufbuild/protobuf'
 import type { Table } from 'dexie'
 
+import { parseOperationLog, validateHeader } from '../lib/operationLog/codec'
+import { unpackFrontier } from '../lib/operationLog/editorFrontier'
+import type { ParsedOperationLog } from '../lib/operationLog/types'
+import { parser_pb } from '../runme/client'
+import { type JournalView, buildJournalView } from './journalView'
 import type { LocalFileRecord } from './local'
 import {
   type OperationLogAppendOptions,
@@ -13,6 +19,7 @@ import { OwnerCommitQueue } from './ownerCommitQueue'
 export interface ContentGeneration {
   path: string
   generation: number
+  view?: { format: 1; stamp: string; data: Blob }
 }
 
 /**
@@ -22,6 +29,85 @@ export interface ContentGeneration {
  */
 export class OwnedOperationLogs implements OperationLogStorage {
   readonly commits = new OwnerCommitQueue()
+  // Keep at most one history resident. Requests for other notebooks can
+  // evict it without affecting the durable current view or a pinned result.
+  private history?: {
+    path: string
+    generation: number
+    stamp: string
+    parsed: ParsedOperationLog
+  }
+
+  private async parseCurrent(
+    ref: OperationLogRef,
+    generation: number,
+    stamp: string
+  ) {
+    const cached = this.history
+    if (
+      cached?.path === ref.path &&
+      cached.generation === generation &&
+      cached.stamp === stamp
+    )
+      return cached.parsed
+    const parsed = parseOperationLog((await this.storage.read(ref)).document)
+    this.history = { path: ref.path, generation, stamp, parsed }
+    return parsed
+  }
+
+  /** The read, generation check and publication share the OPFS writer queue. */
+  readParsed(ref: OperationLogRef) {
+    return this.commits.run(ref.path, async () =>
+      this.parseCurrent(
+        ref,
+        await this.current(ref.path),
+        (await this.storage.fileStamp?.(ref)) ?? ''
+      )
+    )
+  }
+
+  readView(ref: OperationLogRef): Promise<JournalView> {
+    return this.commits.run(ref.path, async () => {
+      const record = await this.generations.get(ref.path)
+      const generation = record?.generation ?? 0
+      const stamp = (await this.storage.fileStamp?.(ref)) ?? ''
+      if (record?.view?.format === 1 && record.view.stamp === stamp) {
+        try {
+          const view = JSON.parse(await record.view.data.text())
+          validateHeader(view.header)
+          if (!Array.isArray(view.comments))
+            throw new Error('Invalid cached comments')
+          if (view.frontier) unpackFrontier(view.frontier)
+          return {
+            ...view,
+            notebook: fromJson(parser_pb.NotebookSchema, view.notebook),
+          }
+        } catch {
+          /* A damaged projection can always be rebuilt. */
+        }
+      }
+      const view = buildJournalView(
+        await this.parseCurrent(ref, generation, stamp)
+      )
+      try {
+        const data = new Blob([
+          JSON.stringify({
+            ...view,
+            notebook: toJson(parser_pb.NotebookSchema, view.notebook),
+          }),
+        ])
+        await this.generations.put({
+          path: ref.path,
+          generation,
+          view: { format: 1, stamp, data },
+        })
+      } catch {
+        /* Quota or disabled Blob storage must not prevent an open. */
+      }
+      return view
+    })
+  }
+
   constructor(
     private readonly storage: OperationLogStorage,
     private readonly files: Table<LocalFileRecord, string>,
@@ -46,6 +132,7 @@ export class OwnedOperationLogs implements OperationLogStorage {
     initializingDocument?: string
   ) {
     return this.commits.run(path, async () => {
+      if (this.history?.path === path) this.history = undefined
       let generation = 0
       await this.files.db.transaction(
         'rw',
